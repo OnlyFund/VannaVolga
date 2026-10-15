@@ -159,14 +159,22 @@ class MarketContext:
         self.market_service = market_service or MarketService(diagnostics)
 
     @classmethod
-    def from_payload(cls, payload, settings=None, market_service=None, diagnostics=None):
-        """Build from a saved market dict (see ``app.market_store``)."""
+    def from_payload(cls, payload, settings=None, market_service=None, diagnostics=None,
+                     valuation_date=None):
+        """Build from a saved market dict (see ``app.market_store``).
+
+        ``valuation_date`` values the saved quotes as of another date than
+        the one they were saved for, as the app does for its active market
+        when the valuation date changes.
+        """
         try:
             loaded = validate_market(payload)
         except (KeyError, TypeError, ValueError) as exc:
             raise MarketContextError(f"Invalid market: {exc}") from exc
+        if valuation_date is None:
+            valuation_date = loaded["valuation_date"]
         return cls(
-            loaded["currency_pair"], loaded["valuation_date"], loaded["spot"],
+            loaded["currency_pair"], valuation_date, loaded["spot"],
             loaded["forward_divisor"], loaded["broker_strangle"], loaded["vol_rows"],
             loaded["forward_rows"], loaded["event_rows"], settings=settings,
             market_service=market_service, diagnostics=diagnostics,
@@ -232,6 +240,31 @@ class MarketContext:
         if len(matches) == 1:
             return pd.Timestamp(matches.iloc[0]["expiry"]).date()
         return resolve_expiry(value, self.valuation_date, rows["tenor"])
+
+    # -- calibration -----------------------------------------------------
+
+    def pillar_expiries(self):
+        """Quoted pillar expiries after the valuation date, ascending."""
+        expiries = pd.to_datetime(
+            self.vol_rows["expiry"], errors="coerce", utc=True
+        ).dt.tz_localize(None)
+        valuation = naive_date(self.valuation_date)
+        return sorted({naive_date(e) for e in expiries.dropna() if naive_date(e) > valuation})
+
+    def calibrate_pillar(self, expiry):
+        """Build and calibrate the pricing smile at ``expiry``.
+
+        The calibrated surface lands in the shared cache, so pricing at
+        this pillar afterwards reuses it instead of calibrating again.
+        """
+        from helper_functions.vanna_volga_helpers import get_model_map
+        market = self.market_for_expiry(expiry)
+        forward = market.s + market.fwd_pts / market.forward_divisor
+        get_model_map(market)[self.settings.pricing_model](
+            market=market, K=forward, expiry_date=naive_date(expiry).date().isoformat(),
+            valuation_date=naive_date(self.valuation_date).date().isoformat(),
+            CallPut="CALL", atm_conv=market.atm_conv, deltaBase=market.deltaBase,
+        ).get_vol_for_strike()
 
     # -- per-expiry market -----------------------------------------------
 

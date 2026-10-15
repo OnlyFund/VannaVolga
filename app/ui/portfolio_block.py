@@ -107,14 +107,34 @@ def _apply_editor_state(rows, editor_state):
     return updated
 
 
-def render_portfolio_block(portfolio_tab, ladder_tab, market_pair, quote_label="quote"):
-    """Render pricer lines, hedge choice, and spot ladder inputs."""
+def _is_pair_code(pair):
+    return len(pair) == 6 and pair.isascii() and pair.isalpha()
+
+
+def premium_currency_options(market_pair, pairs=()):
+    """Premium currencies offered in the grid: every loaded pair's two.
+
+    The active pair's currencies come first and its term currency is the
+    default for new lines.
+    """
+    codes = [str(pair).upper() for pair in (market_pair, *pairs)]
+    options = list(dict.fromkeys(
+        currency for pair in codes if _is_pair_code(pair) for currency in (pair[:3], pair[3:])
+    ))
+    active = codes[0]
+    default = active[3:] if _is_pair_code(active) else None
+    return (options, default) if options else (["BASE", "TERM"], "TERM")
+
+
+def render_portfolio_block(portfolio_tab, ladder_tab, market_pair, quote_label="quote",
+                           pairs=()):
+    """Render pricer lines, hedge choice, and spot ladder inputs.
+
+    ``pairs`` are the loaded markets: the grid offers their currencies and
+    the spot ladder chooses among them.
+    """
     market_pair = str(market_pair).upper()
-    premium_currencies = (
-        [market_pair[:3], market_pair[3:]]
-        if len(market_pair) == 6 and market_pair.isascii() and market_pair.isalpha()
-        else ["BASE", "TERM"]
-    )
+    premium_currencies, premium_default = premium_currency_options(market_pair, pairs)
 
     def resolve_strikes_after_edit():
         """Request strike alias resolution only after a strike-cell edit."""
@@ -217,7 +237,7 @@ def render_portfolio_block(portfolio_tab, ladder_tab, market_pair, quote_label="
                     "Premium currency",
                     help="Currency in which the premium is paid or received.",
                     options=premium_currencies,
-                    default=premium_currencies[-1],
+                    default=premium_default,
                     width="small",
                 ),
                 REMOVE_COLUMN: st.column_config.CheckboxColumn(
@@ -292,7 +312,18 @@ def render_portfolio_block(portfolio_tab, ladder_tab, market_pair, quote_label="
         )
     with ladder_tab:
         st.subheader("Spot ladder")
-        ladder_col1, ladder_col2 = st.columns(2)
+        ladder_pairs = list(dict.fromkeys(
+            [pair for pair in (market_pair, *pairs) if _is_pair_code(str(pair))]
+        )) or [market_pair]
+        if st.session_state.get("ladder_pair") not in ladder_pairs:
+            st.session_state["ladder_pair"] = ladder_pairs[0]
+        ladder_col0, ladder_col1, ladder_col2 = st.columns(3)
+        with ladder_col0:
+            ladder_pair = st.selectbox(
+                "Currency pair", ladder_pairs, key="ladder_pair",
+                help="Shocks this pair's spot and revalues its lines (and its "
+                     "forward hedges). Lines on other pairs are not included.",
+            )
         with ladder_col1:
             ladder_steps = st.number_input(
                 "Steps on each side of spot",
@@ -315,4 +346,5 @@ def render_portfolio_block(portfolio_tab, ladder_tab, market_pair, quote_label="
             "Calculate spot ladder", type="primary", key="calculate_spot_ladder"
         )
     
-    return edited_rows, ladder_steps, ladder_increment, ladder_calculate, delta_hedge
+    return (edited_rows, ladder_steps, ladder_increment, ladder_calculate, delta_hedge,
+            ladder_pair)

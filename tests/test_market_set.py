@@ -75,13 +75,32 @@ def test_broken_pair_fails_only_its_own_lines(payloads):
     assert errors[1].startswith("Line 3: USDMXN Invalid market")
 
 
-def test_market_saved_for_another_day_is_not_used(payloads):
+def test_market_saved_for_another_day_is_valued_as_of_the_set_date(payloads):
     stored = deepcopy(payloads)
     stored["USDJPY"]["valuation_date"] = "2026-10-14"
     markets = MarketSet.from_payloads(stored, VALUATION)
-    assert isinstance(markets.market("USDJPY"), UnavailableMarket)
-    _, errors = pricer.price_lines(markets, [trade("USDJPY")], MODS)
-    assert "valued on 2026-10-14, not on the pricing date 2026-10-15" in errors[0]
+    assert sorted(markets.available()) == ["EURUSD", "USDJPY", "USDMXN"]
+    assert markets.notes() == {"USDJPY": "USDJPY quotes were saved for 2026-10-14 "
+                                         "and are valued as of 2026-10-15"}
+    results, errors = pricer.price_lines(markets, [trade("USDJPY")], MODS)
+    assert errors == []
+    # Same quotes as the correctly dated market, so the same price.
+    expected, _ = pricer.price_lines(MarketSet.from_payloads(payloads, VALUATION),
+                                     [trade("USDJPY")], MODS)
+    assert results == expected
+
+
+def test_context_added_for_another_date_is_not_silently_redated(payloads):
+    context = MarketContext.from_payload(payloads["EURUSD"], valuation_date="2026-10-14")
+    markets = MarketSet(VALUATION, [context])
+    assert "valued on 2026-10-14, not on the pricing date 2026-10-15" in markets.problems()["EURUSD"]
+
+
+def test_half_typed_live_pair_is_not_added(payloads):
+    from app.market_context import build_context
+    live = build_context("EUR", VALUATION, 1.1, 1e4, True, None, None)
+    markets = MarketSet.from_payloads(payloads, VALUATION, live=live)
+    assert sorted(markets.pairs) == ["EURUSD", "USDJPY", "USDMXN"]
 
 
 def test_market_stored_under_the_wrong_pair_is_rejected(payloads):
@@ -121,3 +140,22 @@ def test_strike_aliases_resolve_on_each_rows_own_pair(markets):
     resolved, changed, failures = pricer.resolve_strike_aliases(markets, rows)
     assert changed and failures == []
     assert float(resolved.at[0, "strike"]) > 100 > 2 > float(resolved.at[1, "strike"])
+
+
+def test_grid_offers_every_loaded_pairs_premium_currencies():
+    from app.ui.portfolio_block import premium_currency_options
+    options, default = premium_currency_options("EURUSD", ["USDJPY", "EURUSD", "USDMXN"])
+    assert options == ["EUR", "USD", "JPY", "MXN"]
+    assert default == "USD"
+    assert premium_currency_options("EUR", []) == (["BASE", "TERM"], "TERM")
+    assert premium_currency_options("EUR", ["USDJPY"]) == (["USD", "JPY"], None)
+
+
+def test_switching_pairs_keeps_the_valuation_date(payloads, monkeypatch):
+    import app.ui.market_block as block
+    queued = []
+    block._activate_market(payloads["USDJPY"], queued.append, date(2026, 10, 16))
+    assert queued[0]["valuation_date"] == "2026-10-16"
+    assert payloads["USDJPY"]["valuation_date"].startswith("2026-10-15")   # stored copy untouched
+    block._activate_market(payloads["USDJPY"], queued.append)
+    assert queued[1]["valuation_date"].startswith("2026-10-15")

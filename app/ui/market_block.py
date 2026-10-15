@@ -34,8 +34,15 @@ def _store_active_market(library, currency_pair, payload):
     st.session_state._active_market_pair = currency_pair
 
 
-def _activate_market(payload, apply_loaded_market):
-    """Queue ``payload`` as the active market; report failure without raising."""
+def _activate_market(payload, apply_loaded_market, valuation_date=None):
+    """Queue ``payload`` as the active market; report failure without raising.
+
+    With ``valuation_date`` the market keeps that date instead of the one it
+    was saved for: switching pairs must not move the date every pair is
+    valued at.
+    """
+    if valuation_date is not None:
+        payload = dict(payload, valuation_date=pd.Timestamp(valuation_date).date().isoformat())
     try:
         apply_loaded_market(payload)
     except Exception as exc:
@@ -126,7 +133,7 @@ def render_market_block(markets_tab, valuation_date, apply_loaded_market):
         if active_pair and currency_pair != active_pair and currency_pair in library:
             # Typing a stored pair switches to its market; the previous pair's
             # edits were stored at the end of the last run.
-            if _activate_market(library[currency_pair], apply_loaded_market):
+            if _activate_market(library[currency_pair], apply_loaded_market, valuation_date):
                 st.experimental_rerun()
         for level, message in st.session_state.pop("_market_load_messages", []):
             getattr(st, level)(message)
@@ -313,7 +320,7 @@ def render_market_block(markets_tab, valuation_date, apply_loaded_market):
                          "pair copies the current tables to it.",
                 ) if current is not None else None
                 if chosen is not None and chosen != currency_pair:
-                    if _activate_market(library[chosen], apply_loaded_market):
+                    if _activate_market(library[chosen], apply_loaded_market, valuation_date):
                         st.experimental_rerun()
             with remove_col:
                 removable = [pair for pair in pairs if pair != currency_pair]

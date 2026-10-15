@@ -1,5 +1,6 @@
 """Streamlit user interface for the VannaVolga portfolio pricer."""
 
+import json
 from datetime import date, timedelta
 import pandas as pd
 import streamlit as st
@@ -7,15 +8,15 @@ import streamlit as st
 from market_data import Modifications
 from app import pricer
 from app.market_context import (
-    PricingSettings, build_context, interpolate_delivery_curve, naive_date,
+    MarketContextError, PricingSettings, build_context, interpolate_delivery_curve, naive_date,
 )
+from app.market_set import MarketSet
 from app.market_service import MarketService
 from app.market_store import validate_market
 from app.curve_roll import next_business_day
 from app.smile_service import (
     SURFACE_CACHE_VERSION, DiagnosticsCollector, SurfaceCache, bind_cache,
 )
-from helper_functions.vanna_volga_helpers import get_model_map
 from helper_functions.premium_quotes import PREMIUM_QUOTES, premium_quote_label
 from app.reports.spot_ladder import calculate_spot_ladder, render_spot_ladder
 from app.ui.market_block import render_market_block
@@ -260,67 +261,90 @@ def render_app():
     if getattr(market_context, "reason", None):
         with markets_tab:
             st.warning("Market unavailable for pricing: " + market_context.reason)
-    market_for_expiry = market_context.market_for_expiry
-    resolve_market_expiry = market_context.resolve_market_expiry
+    # Every loaded pair, valued as of the sidebar date. The pair being edited
+    # comes from the live tables; the others from the session's market set.
+    market_library = st.session_state.get("market_library", {})
+    market_set = MarketSet.from_payloads(
+        market_library, valuation_date, settings, market_service=market_service,
+        diagnostics=diagnostics, live=market_context,
+    )
 
 
-    def prepare_market_surface():
-        """Calibrate every quoted pillar once per market state, with progress."""
-        rows = st.session_state.vol_rows
-        fingerprint = repr((
-            pricing_model, broker_strangle, str(valuation_date), spot, currency_pair,
-            forward_divisor, rows.to_json(date_format="iso"),
-            st.session_state.forward_rows.to_json(date_format="iso"),
-            st.session_state.event_rows.to_json(date_format="iso"),
-        ))
-        if st.session_state.get("_surface_fingerprint") == fingerprint:
+    def prepare_market_surfaces():
+        """Calibrate every loaded pair's pillars once per market state, with progress.
+
+        Each pair has its own fingerprint, so editing one pair recalibrates
+        only that pair. A pair that fails is skipped here; pricing reports
+        its errors per line.
+        """
+        common = (repr(settings), str(valuation_date))
+        fingerprints = {}
+        for pair in market_set.available():
+            if pair == market_context.currency_pair:
+                state = (spot, forward_divisor, broker_strangle,
+                         vol_rows.to_json(date_format="iso"),
+                         forward_rows.to_json(date_format="iso"),
+                         event_rows.to_json(date_format="iso"))
+            else:
+                state = json.dumps(market_library.get(pair), sort_keys=True, default=str)
+            fingerprints[pair] = repr((common, state))
+        done = st.session_state.setdefault("_surface_fingerprints", {})
+        todo = []
+        for pair, fingerprint in fingerprints.items():
+            if done.get(pair) == fingerprint:
+                continue
+            try:
+                expiries = market_set.market(pair).pillar_expiries()
+            except Exception:
+                expiries = []
+            todo.append((pair, fingerprint, expiries))
+        total = sum(len(expiries) for _, _, expiries in todo)
+        if not total:
+            for pair, fingerprint, _ in todo:
+                done[pair] = fingerprint
             return
-        expiries = pd.to_datetime(rows["expiry"], errors="coerce", utc=True).dt.tz_localize(None)
-        expiries = sorted({naive_date(e) for e in expiries.dropna()
-                           if naive_date(e) > naive_date(valuation_date)})
-        if not expiries:
-            return
-        total = 2 * len(expiries)
-        bar = surface_progress.progress(0.0, text="Preparing volatility surface...")
-
-        def report(index, count, label):
-            bar.progress(index / total,
-                         text=f"Converting quotes and calibrating {label} ({index + 1}/{count})")
-
-        market_service.progress = report
+        bar = surface_progress.progress(0.0, text="Preparing volatility surfaces...")
+        completed = 0
         try:
-            for index, expiry in enumerate(expiries):
-                market = market_for_expiry(expiry)
-                market_service.progress = None
-                bar.progress((len(expiries) + index) / total,
-                             text=f"Building {pricing_model} smile for {expiry:%d-%b-%Y} "
-                                  f"({index + 1}/{len(expiries)})")
-                forward = market.s + market.fwd_pts / market.forward_divisor
-                get_model_map(market)[pricing_model](
-                    market=market, K=forward, expiry_date=expiry.date().isoformat(),
-                    valuation_date=naive_date(valuation_date).date().isoformat(),
-                    CallPut="CALL", atm_conv=market.atm_conv, deltaBase=market.deltaBase,
-                ).get_vol_for_strike()
-        except Exception:
-            # Incomplete or invalid market inputs: pricing reports the error.
-            surface_progress.empty()
-            return
+            for pair, fingerprint, expiries in todo:
+                context = market_set.market(pair)
+                first = completed
+
+                def report(index, count, label, pair=pair, first=first):
+                    bar.progress(min(first / total, 1.0),
+                                 text=f"{pair}: converting quotes {label} ({index + 1}/{count})")
+                market_service.progress = report
+                try:
+                    for expiry in expiries:
+                        bar.progress(min(completed / total, 1.0),
+                                     text=f"{pair}: building {pricing_model} smile for "
+                                          f"{expiry:%d-%b-%Y} ({completed + 1}/{total})")
+                        context.calibrate_pillar(expiry)
+                        market_service.progress = None
+                        completed += 1
+                except Exception:
+                    # Invalid inputs for this pair: pricing reports the error.
+                    completed = first + len(expiries)
+                finally:
+                    market_service.progress = None
+                done[pair] = fingerprint
         finally:
             market_service.progress = None
-        st.session_state["_surface_fingerprint"] = fingerprint
-        surface_progress.empty()
+            surface_progress.empty()
 
-    prepare_market_surface()
+    prepare_market_surfaces()
 
 
-    edited_rows, ladder_steps, ladder_increment, ladder_calculate, delta_hedge = render_portfolio_block(
+    (edited_rows, ladder_steps, ladder_increment, ladder_calculate, delta_hedge,
+     ladder_pair) = render_portfolio_block(
         portfolio_tab, ladder_tab,
         market_pair=str(st.session_state.currency_pair).strip().upper(),
         quote_label=premium_quote_label(premium_quote, _base_ccy, _term_ccy),
+        pairs=sorted(market_set.pairs),
     )
     if st.session_state.pop("_portfolio_strike_resolution_requested", False):
         resolved_rows, strikes_changed, strike_failures = (
-            pricer.resolve_strike_aliases(market_context, edited_rows)
+            pricer.resolve_strike_aliases(market_set, edited_rows)
         )
         if strike_failures:
             st.session_state._portfolio_strike_failures = strike_failures
@@ -334,6 +358,13 @@ def render_app():
 
 
     with portfolio_tab:
+        if market_set.available():
+            st.caption("Markets: {} (valued as of {:%d-%b-%Y})".format(
+                ", ".join(sorted(market_set.available())), naive_date(valuation_date)))
+        for pair, reason in market_set.problems().items():
+            st.warning(f"{pair} cannot price: {reason}")
+        for note in market_set.notes().values():
+            st.info(note)
         for message in st.session_state.get("_portfolio_strike_failures", []):
             st.warning(message)
 
@@ -348,10 +379,10 @@ def render_app():
         mods = Modifications(beta_atm=beta_atm, beta_rr=beta_rr, beta_bf=beta_bf)
         # Pricing reads no session state, but stays on the script thread so
         # progress and diagnostics belong to this run.
-        results, errors = pricer.price_lines(market_context, edited_rows, mods, premium_quote)
+        results, errors = pricer.price_lines(market_set, edited_rows, mods, premium_quote)
         hedge_trades = []
         if delta_hedge:
-            hedge_trades, hedge_errors = pricer.hedge_trades_for(market_context, results)
+            hedge_trades, hedge_errors = pricer.hedge_trades_for(market_set, results)
             errors = errors + hedge_errors
 
         st.session_state._portfolio_result_cache = {
@@ -475,34 +506,53 @@ def render_app():
         )
 
     if ladder_calculate:
+        ladder_spot, ladder_results, ladder_errors, skipped = spot, [], [], 0
         with st.spinner("Calculating spot ladder..."):
             mods = Modifications(beta_atm=beta_atm, beta_rr=beta_rr, beta_bf=beta_bf)
-            ladder_spots = [
-                spot * (1.0 + step * float(ladder_increment) / 100.0)
-                for step in range(-int(ladder_steps), int(ladder_steps) + 1)
-            ]
-            forward_positions = []
-            hedge_errors = []
-            if delta_hedge:
-                forward_positions, hedge_errors = pricer.build_delta_hedges(
-                    market_context, edited_rows, mods
-                )
-            if hedge_errors:
-                ladder_results, ladder_errors = [], hedge_errors
+            # The ladder shocks one pair's spot and revalues that pair's lines;
+            # lines on other pairs belong to other spots and are left out.
+            line_pairs = edited_rows["currency_pair"].astype(str).str.strip().str.upper()
+            ladder_rows = edited_rows[line_pairs == ladder_pair]
+            skipped = len(edited_rows) - len(ladder_rows)
+            try:
+                ladder_market = market_set.market(ladder_pair)
+                if getattr(ladder_market, "reason", None):
+                    raise MarketContextError(f"{ladder_pair} cannot price: {ladder_market.reason}")
+                if ladder_rows.empty:
+                    raise MarketContextError(f"No {ladder_pair} lines in the portfolio")
+            except MarketContextError as exc:
+                ladder_errors = [str(exc)]
             else:
-                ladder_results, ladder_errors = calculate_spot_ladder(
-                    list(edited_rows.iterrows()),
-                    ladder_spots,
-                    valuation_date,
-                    market_for_expiry,
-                    resolve_market_expiry,
-                    pricing_model,
-                    atm_type,
-                    delta_base,
-                    mods,
-                    mode=spot_ladder_mode,
-                    forward_positions=forward_positions,
-                )
-        render_spot_ladder(ladder_tab, ladder_results, ladder_errors, spot)
+                ladder_spot = float(ladder_market.spot)
+                ladder_spots = [
+                    ladder_spot * (1.0 + step * float(ladder_increment) / 100.0)
+                    for step in range(-int(ladder_steps), int(ladder_steps) + 1)
+                ]
+                forward_positions = []
+                hedge_errors = []
+                if delta_hedge:
+                    forward_positions, hedge_errors = pricer.build_delta_hedges(
+                        ladder_market, ladder_rows, mods
+                    )
+                if hedge_errors:
+                    ladder_errors = hedge_errors
+                else:
+                    ladder_results, ladder_errors = calculate_spot_ladder(
+                        list(ladder_rows.iterrows()),
+                        ladder_spots,
+                        valuation_date,
+                        ladder_market.market_for_expiry,
+                        ladder_market.resolve_market_expiry,
+                        pricing_model,
+                        atm_type,
+                        delta_base,
+                        mods,
+                        mode=spot_ladder_mode,
+                        forward_positions=forward_positions,
+                    )
+        render_spot_ladder(ladder_tab, ladder_results, ladder_errors, ladder_spot)
+        if skipped:
+            with ladder_tab:
+                st.caption(f"{skipped} line(s) on other pairs are not in the {ladder_pair} ladder.")
     if diagnostics.records():
         st.warning("Some calculations used legacy fallback. The selected pricing model was retained.")

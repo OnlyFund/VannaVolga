@@ -10,12 +10,17 @@ Fallbacks and failsafes, so one pair never takes down another:
 
 * A pair whose market cannot be built becomes an ``UnavailableMarket``
   carrying the reason; only lines on that pair report it.
-* A stored market valued on a different date than the set is not used: its
-  quotes belong to another day. It becomes unavailable with both dates.
+* Every pair is valued as of the set's date. A market saved for another
+  day is valued as of the set's date too (as the app does for the market
+  being edited when the valuation date changes), and ``notes()`` says so,
+  since its quotes are not that day's.
+* A context added directly for another date is not silently re-dated: it
+  becomes unavailable with both dates.
 * A market stored under a pair key it does not contain is rejected.
 * A pair with no market at all gets a clear "no market loaded" error, with
   a hint when the inverse pair is loaded (USDEUR vs EURUSD).
 """
+import re
 from collections import OrderedDict
 
 from app.market_context import (
@@ -30,13 +35,15 @@ class MarketSet:
     def __init__(self, valuation_date, contexts=()):
         self.valuation_date = valuation_date
         self._markets = OrderedDict()
+        self._notes = OrderedDict()
         for context in contexts:
             self.add(context)
 
     @classmethod
     def from_payloads(cls, payloads, valuation_date, settings=None, market_service=None,
                       diagnostics=None, live=None):
-        """Build from saved market dicts ``{pair: payload}``.
+        """Build from saved market dicts ``{pair: payload}``, all valued as of
+        ``valuation_date``.
 
         ``live`` is a context for the pair being edited; it replaces that
         pair's stored payload, so pricing uses the tables as currently edited.
@@ -47,19 +54,22 @@ class MarketSet:
             if live is not None and pair == live.currency_pair:
                 continue
             try:
+                saved = payload.get("valuation_date") if isinstance(payload, dict) else None
                 context = MarketContext.from_payload(
                     payload, settings, market_service=market_service, diagnostics=diagnostics,
+                    valuation_date=valuation_date,
                 )
                 if context.currency_pair != pair:
                     raise MarketContextError(
                         f"market stored under {pair} contains {context.currency_pair}"
                     )
+                markets._note_saved_date(pair, saved)
             except MarketContextError as exc:
                 # Name the pair: in a mixed book the line alone may not say.
                 reason = str(exc) if pair in str(exc) else f"{pair} {exc}"
                 context = UnavailableMarket(pair, reason, valuation_date)
             markets.add(context)
-        if live is not None:
+        if live is not None and re.fullmatch(r"[A-Z]{6}", live.currency_pair):
             markets.add(live)
         return markets
 
@@ -77,6 +87,23 @@ class MarketSet:
                 )
         self._markets[pair] = context
         return context
+
+    def _note_saved_date(self, pair, saved):
+        try:
+            saved_date = naive_date(saved)
+        except (TypeError, ValueError):
+            return
+        if saved_date != naive_date(self.valuation_date):
+            self._notes[pair] = (
+                f"{pair} quotes were saved for {saved_date:%Y-%m-%d} and are valued as of "
+                f"{naive_date(self.valuation_date):%Y-%m-%d}"
+            )
+
+    def notes(self):
+        """``{pair: note}`` for pairs that price, but on another day's quotes."""
+        return {pair: note for pair, note in self._notes.items()
+                if pair in self._markets
+                and not isinstance(self._markets[pair], UnavailableMarket)}
 
     @property
     def pairs(self):
