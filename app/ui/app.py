@@ -12,7 +12,9 @@ from app.market_context import (
 from app.market_service import MarketService
 from app.market_store import validate_market
 from app.curve_roll import next_business_day
-from app.smile_service import DiagnosticsCollector, SurfaceCache, bind_cache
+from app.smile_service import (
+    SURFACE_CACHE_VERSION, DiagnosticsCollector, SurfaceCache, bind_cache,
+)
 from helper_functions.vanna_volga_helpers import get_model_map
 from helper_functions.premium_quotes import PREMIUM_QUOTES, premium_quote_label
 from app.reports.spot_ladder import calculate_spot_ladder, render_spot_ladder
@@ -228,11 +230,18 @@ def render_app():
     diagnostics = DiagnosticsCollector()
     # Calibrated surfaces live for the whole session, so reruns and pricing
     # reuse them instead of recalibrating per option or per strike.
-    if "_surface_cache_v1" not in st.session_state:
-        st.session_state["_surface_cache_v1"] = SurfaceCache()
-        st.session_state["_market_service_v1"] = MarketService(diagnostics)
-    bind_cache(diagnostics.token, st.session_state["_surface_cache_v1"])
-    market_service = st.session_state["_market_service_v1"]
+    # The key carries the cache version: after a code change, surfaces built
+    # by the old code are dropped instead of reused.
+    cache_key = f"_surface_cache_v{SURFACE_CACHE_VERSION}"
+    service_key = f"_market_service_v{SURFACE_CACHE_VERSION}"
+    if cache_key not in st.session_state:
+        for stale in [key for key in st.session_state
+                      if key.startswith(("_surface_cache_v", "_market_service_v"))]:
+            st.session_state.pop(stale, None)
+        st.session_state[cache_key] = SurfaceCache()
+        st.session_state[service_key] = MarketService(diagnostics)
+    bind_cache(diagnostics.token, st.session_state[cache_key])
+    market_service = st.session_state[service_key]
     market_service.collector = diagnostics
     market_service.progress = None
     settings = PricingSettings(

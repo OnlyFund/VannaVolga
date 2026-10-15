@@ -112,13 +112,29 @@ def _cache_for(market):
     return cache
 
 
+#: Bump when cached smile objects change shape. The app keeps its surface
+#: cache in the session, and Streamlit does not reload root modules such as
+#: ``wrapped_vol_resolver``, so objects built by an older build can outlive a
+#: code change; a new version starts a fresh cache instead of reusing them.
+SURFACE_CACHE_VERSION = 2
+
+
+def is_fallback(diagnostics):
+    """True for a documented substitute smile.
+
+    Reads ``status`` rather than the ``fallback`` property, which smile
+    diagnostics built by an older loaded class do not have.
+    """
+    return getattr(diagnostics, "status", None) == "fallback"
+
+
 def prepared_smile(market, expiry, valuation, model, broker=None, beta=.5):
     broker = market.broker_strangle if broker is None else broker
     key = cache_key(market, expiry, valuation, model, broker, beta)
     prepared = _cache_for(market).get("prepared", key, lambda: prepare_smile(
         market, str(expiry)[:10], str(valuation)[:10],
         model=model, broker_strangle=broker, beta=beta))
-    if prepared.diagnostics.degraded or prepared.diagnostics.fallback:
+    if prepared.diagnostics.degraded or is_fallback(prepared.diagnostics):
         record(market, model, expiry, prepared.diagnostics.reason, prepared.diagnostics.status)
     return prepared
 

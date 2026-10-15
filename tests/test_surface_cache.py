@@ -95,3 +95,41 @@ def test_session_cache_routes_by_token_and_rebinds():
     prepared_smile(m, "2026-12-02", "2026-10-02", "vv")
     assert cache.size("prepared") == 1
     assert _cache_for(market(diagnostics_token=first.token)) is not cache
+
+
+def test_diagnostics_from_an_older_loaded_class_are_still_classified():
+    """Streamlit can keep a SmileDiagnostics class built before ``fallback`` existed."""
+    from types import SimpleNamespace
+    from app.smile_service import is_fallback
+
+    class OldDiagnostics:
+        def __init__(self, status):
+            self.status = status
+    assert is_fallback(OldDiagnostics("fallback"))
+    assert not is_fallback(OldDiagnostics("resolved"))
+    assert not is_fallback(SimpleNamespace())
+
+
+def test_convert_curve_survives_prepared_smiles_from_an_older_class(monkeypatch):
+    import app.market_service as service_module
+
+    real = service_module.prepared_smile
+
+    def stale(*args, **kwargs):
+        from dataclasses import replace
+        prepared = real(*args, **kwargs)
+        current = prepared.diagnostics
+        old = type("SmileDiagnostics", (), {})()      # no ``fallback`` property
+        for name in ("status", "degraded", "reason", "stage"):
+            setattr(old, name, getattr(current, name))
+        return replace(prepared, diagnostics=old)
+    monkeypatch.setattr(service_module, "prepared_smile", stale)
+    rows = pd.DataFrame(dict(
+        tenor=["1M", "2M"], expiry=pd.to_datetime(["2026-11-02", "2026-12-02"]),
+        atm=[10., 10.], rr_25=[-.5, -.5], rr_10=[-1., -1.],
+        bf_25=[.2, .2], bf_10=[.6, .6]))
+    service = MarketService(DiagnosticsCollector())
+    converted, reasons, prepared = service.convert_curve(
+        rows, "2026-10-02", 1.1, "EURUSD", 10000., "vv", True,
+        lambda expiry: 30., lambda expiry: .05)
+    assert not reasons and len(prepared) == 2

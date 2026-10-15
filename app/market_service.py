@@ -8,7 +8,7 @@ from pandas.tseries.offsets import BDay
 
 from market_data import MarketData
 from helper_functions.fx_discounting import delivery_date
-from app.smile_service import FALLBACK_PREFIX, prepared_smile, cache_key
+from app.smile_service import FALLBACK_PREFIX, cache_key, is_fallback, prepared_smile
 from wrapped_vol_resolver import DegradedSmileWarning
 
 
@@ -118,7 +118,7 @@ def convert_pillars(rows, prepared):
     if failed:
         notes.append(FALLBACK_PREFIX + "broker strangle conversion failed at {}; strangle "
                      "adjustment interpolated from converted pillars".format(", ".join(failed)))
-    substituted = [label for label, p in zip(labels, prepared) if p.diagnostics.fallback]
+    substituted = [label for label, p in zip(labels, prepared) if is_fallback(p.diagnostics)]
     if substituted:
         notes.append(FALLBACK_PREFIX + "conversion fallback at {} (see pillar diagnostics)"
                      .format(", ".join(substituted)))
