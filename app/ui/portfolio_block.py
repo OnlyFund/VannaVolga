@@ -15,6 +15,9 @@ LINE_RESULT_COLUMNS = (
     *(column for greek in GREEK_NAMES for column in (f"fixed_{greek}", greek)),
 )
 
+#: Input cells whose edits can change a resolved pair, expiry or strike.
+RESOLVED_INPUT_COLUMNS = ("currency_pair", "expiry", "call_put", "strike")
+
 #: Columns the pricer supplies already formatted for display.
 PREFORMATTED_RESULT_COLUMNS = ("mtm_quote", "pnl_quote")
 
@@ -137,7 +140,12 @@ def render_portfolio_block(portfolio_tab, ladder_tab, market_pair, quote_label="
     premium_currencies, premium_default = premium_currency_options(market_pair, pairs)
 
     def resolve_strikes_after_edit():
-        """Request strike alias resolution only after a strike-cell edit."""
+        """Request input resolution after an edit to a resolvable cell.
+
+        Pair, expiry, call/put and strike all feed the resolved strike, so a
+        delta strike typed before its expiry still resolves once the expiry
+        arrives.
+        """
         editor_state = st.session_state.get("portfolio_editor_v3", {})
         editor_state = dict(editor_state)
         editor_state["deleted_rows"] = [
@@ -149,14 +157,16 @@ def render_portfolio_block(portfolio_tab, ladder_tab, market_pair, quote_label="
         )
         st.session_state.pop("_portfolio_line_results", None)
         edited_rows = editor_state.get("edited_rows", {})
-        strike_was_edited = any(
-            "strike" in changes for changes in edited_rows.values()
+        input_was_edited = any(
+            column in RESOLVED_INPUT_COLUMNS
+            for changes in edited_rows.values() for column in changes
         )
         added_rows = editor_state.get("added_rows", [])
-        strike_was_added = any(
-            str(row.get("strike", "")).strip() for row in added_rows
+        input_was_added = any(
+            str(row.get(column) or "").strip()
+            for row in added_rows for column in RESOLVED_INPUT_COLUMNS
         )
-        if strike_was_edited or strike_was_added:
+        if input_was_edited or input_was_added:
             st.session_state._portfolio_strike_resolution_requested = True
 
     with portfolio_tab:

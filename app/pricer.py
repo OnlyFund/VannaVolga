@@ -279,45 +279,107 @@ def hedge_trades_for(markets, results):
     return trades, errors
 
 
-def resolve_strike_aliases(markets, rows):
-    """Convert resolvable delta and ATM aliases to numeric input strikes.
+#: How resolved expiries are written back to the grid: unambiguous, and
+#: accepted by every expiry parser.
+EXPIRY_FORMAT = "%Y-%m-%d"
 
-    Returns ``(resolved_rows, changed, failures)``. Half-typed aliases stay
-    silent; a complete alias that fails is reported.
+
+def _blank(value):
+    return value is None or (not isinstance(value, str) and pd.isna(value)) or not str(value).strip()
+
+
+def _numeric_strike(value):
+    try:
+        number = float(str(value).strip().replace(",", ""))
+    except (TypeError, ValueError):
+        return False
+    return bool(np.isfinite(number) and number > 0)
+
+
+def _is_booked_expiry(value):
+    """Already written as a resolved date, so it needs no work."""
+    text = str(value).strip()
+    try:
+        return pd.Timestamp(text).strftime(EXPIRY_FORMAT) == text
+    except (TypeError, ValueError):
+        return False
+
+
+def resolve_line_inputs(markets, rows, default_pair=None):
+    """Resolve each line's inputs to the values a booked trade carries.
+
+    * a blank currency pair on a line with other inputs takes
+      ``default_pair`` (the pair being edited);
+    * a tenor or any accepted date format (``1m``, ``ON``, ``18sep25``)
+      becomes a date in ``EXPIRY_FORMAT``;
+    * a delta or ATM strike alias (``25d``, ``atmf``) becomes a numeric
+      strike, solved on the line's own market at the resolved expiry.
+
+    Each step stands alone: an expiry still resolves when the strike cannot
+    yet (for example before Call/Put is chosen). Half-typed cells stay
+    silent; a complete strike alias that fails is reported, as are
+    unresolvable expiries on otherwise complete lines. Returns
+    ``(resolved_rows, changed, failures)``.
     """
     resolved_rows = rows.copy()
     changed = False
     failures = []
+
+    def put(index, column, value):
+        nonlocal changed
+        resolved_rows.at[index, column] = value
+        changed = True
+
     for index, source_row in rows.iterrows():
-        value = source_row.get("strike")
-        if pd.isna(value) or not str(value).strip():
+        row = source_row.copy()
+        has_inputs = any(not _blank(row.get(column)) for column in ("strike", "expiry", "notional"))
+        if not has_inputs:
             continue
-        try:
-            numeric_strike = float(str(value).strip().replace(",", ""))
-            if np.isfinite(numeric_strike) and numeric_strike > 0:
-                continue
-        except (TypeError, ValueError):
-            pass
+        if _blank(row.get("currency_pair")) and default_pair:
+            row["currency_pair"] = default_pair
+            put(index, "currency_pair", default_pair)
         try:
             # A single market resolves every row on itself, as the one-pair
             # Pricer always has; a set uses each row's own pair.
-            context = (markets.market(_line_pair(source_row))
+            context = (markets.market(_line_pair(row))
                        if isinstance(markets, MarketSet) else markets)
+        except Exception as exc:
+            if is_complete_strike_alias(row):
+                failures.append("Line {}: {}".format(index + 1, exc))
+            continue
+
+        expiry = None
+        if not _blank(row.get("expiry")):
+            try:
+                expiry = context.resolve_market_expiry(row["expiry"])
+                booked = pd.Timestamp(expiry).strftime(EXPIRY_FORMAT)
+                if not _is_booked_expiry(row["expiry"]):
+                    put(index, "expiry", booked)
+            except Exception as exc:
+                expiry = None
+                if is_complete_strike_alias(row) or _numeric_strike(row.get("strike")):
+                    failures.append("Line {}: {}".format(index + 1, exc))
+
+        strike = row.get("strike")
+        if expiry is None or _blank(strike) or _numeric_strike(strike):
+            continue
+        try:
             settings = context.settings
-            row = source_row.copy()
             row["valuation"] = markets.valuation_date
-            row["expiry"] = context.resolve_market_expiry(row["expiry"])
-            market = context.market_for_expiry(row["expiry"])
-            strike = resolve_strike(market, row, settings.atm_type, settings.delta_base)
+            row["expiry"] = expiry
+            market = context.market_for_expiry(expiry)
+            value = resolve_strike(market, row, settings.atm_type, settings.delta_base)
         except Exception as exc:
             # A well-formed alias that still fails is a real problem, not a
             # half-typed cell. Staying silent makes it indistinguishable
             # from "nothing happened" and hides the cause.
-            if is_complete_strike_alias(source_row):
+            if is_complete_strike_alias(row):
                 failures.append("Line {}: {}".format(index + 1, exc))
             continue
-        resolved_rows.at[index, "strike"] = format_strike_for_pair(
-            source_row.get("currency_pair", ""), strike
-        )
-        changed = True
+        put(index, "strike", format_strike_for_pair(row.get("currency_pair", ""), value))
     return resolved_rows, changed, failures
+
+
+def resolve_strike_aliases(markets, rows, default_pair=None):
+    """Former name of ``resolve_line_inputs``, which also resolves tenors."""
+    return resolve_line_inputs(markets, rows, default_pair)

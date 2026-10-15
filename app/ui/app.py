@@ -344,7 +344,7 @@ def render_app():
     )
     if st.session_state.pop("_portfolio_strike_resolution_requested", False):
         resolved_rows, strikes_changed, strike_failures = (
-            pricer.resolve_strike_aliases(market_set, edited_rows)
+            pricer.resolve_line_inputs(market_set, edited_rows, market_context.currency_pair)
         )
         if strike_failures:
             st.session_state._portfolio_strike_failures = strike_failures
@@ -377,6 +377,13 @@ def render_app():
 
     if calculate:
         mods = Modifications(beta_atm=beta_atm, beta_rr=beta_rr, beta_bf=beta_bf)
+        # Book what is priced: tenors, delta strikes and blank pairs are
+        # resolved first and written back, so the grid shows the expiry and
+        # strike each line was priced at. A line that cannot resolve keeps
+        # its input and pricing reports why.
+        edited_rows, _, _ = pricer.resolve_line_inputs(
+            market_set, edited_rows, market_context.currency_pair
+        )
         # Pricing reads no session state, but stays on the script thread so
         # progress and diagnostics belong to this run.
         results, errors = pricer.price_lines(market_set, edited_rows, mods, premium_quote)

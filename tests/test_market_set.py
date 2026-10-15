@@ -1,4 +1,5 @@
 """Several pairs priced together: routing, isolation and stale-market guards."""
+import re
 from copy import deepcopy
 from datetime import date
 
@@ -159,3 +160,47 @@ def test_switching_pairs_keeps_the_valuation_date(payloads, monkeypatch):
     assert payloads["USDJPY"]["valuation_date"].startswith("2026-10-15")   # stored copy untouched
     block._activate_market(payloads["USDJPY"], queued.append)
     assert queued[1]["valuation_date"].startswith("2026-10-15")
+
+
+def test_new_line_resolves_pair_tenor_and_delta_strike(markets):
+    rows = pd.DataFrame([dict(currency_pair=None, strike="25d", expiry="1M", call_put="PUT",
+                              buy_sell="BUY", notional="1m", premium=0.0, premium_ccy="USD")])
+    resolved, changed, failures = pricer.resolve_line_inputs(markets, rows, "EURUSD")
+    assert changed and failures == []
+    line = resolved.iloc[0]
+    assert line["currency_pair"] == "EURUSD"
+    assert line["expiry"] == pd.Timestamp(markets.market("EURUSD").resolve_market_expiry("1M")).strftime("%Y-%m-%d")
+    assert re.fullmatch(r"1\.\d{4}", line["strike"])
+    # Priced as booked: the resolved line prices on the date it shows.
+    results, errors = pricer.price_lines(markets, resolved, MODS)
+    assert errors == [] and str(results[0]["expiry"])[:10] == line["expiry"]
+
+
+def test_expiry_resolves_before_the_strike_can(markets):
+    rows = pd.DataFrame([trade("USDJPY", strike="25d", expiry="ON", call_put=None),
+                         trade("USDJPY", strike="25d", expiry="18nov26", call_put="CALL")])
+    resolved, changed, failures = pricer.resolve_line_inputs(markets, rows)
+    assert changed and failures == []
+    assert resolved.at[0, "expiry"] == "2026-10-16" and resolved.at[0, "strike"] == "25d"
+    assert resolved.at[1, "expiry"] == "2026-11-18"
+    assert re.fullmatch(r"1\d\d\.\d{2}", resolved.at[1, "strike"])
+
+
+def test_booked_lines_are_left_alone(markets):
+    rows = pd.DataFrame([trade("EURUSD", strike="1.1200", expiry="2026-11-17")])
+    resolved, changed, failures = pricer.resolve_line_inputs(markets, rows, "EURUSD")
+    assert not changed and failures == []
+    pd.testing.assert_frame_equal(resolved, rows)
+    blank = pd.DataFrame([dict(currency_pair=None, strike=None, expiry=None, call_put=None)])
+    assert pricer.resolve_line_inputs(markets, blank, "EURUSD")[1] is False
+
+
+def test_complete_lines_that_cannot_resolve_are_reported(markets):
+    rows = pd.DataFrame([trade("GBPUSD", strike="25d"),
+                         trade("EURUSD", strike="1.12", expiry="2030-01-01x"),
+                         trade("EURUSD", strike="25", expiry="1M")])        # half-typed alias
+    resolved, changed, failures = pricer.resolve_line_inputs(markets, rows, "EURUSD")
+    assert failures[0] == "Line 1: No market loaded for GBPUSD"
+    assert failures[1].startswith("Line 2: ")
+    assert len(failures) == 2
+    assert resolved.at[2, "expiry"] != "1M" and resolved.at[2, "strike"] == "25"
