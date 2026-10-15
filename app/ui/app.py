@@ -21,51 +21,70 @@ from helper_functions.premium_quotes import PREMIUM_QUOTES, premium_quote_label
 from app.reports.spot_ladder import calculate_spot_ladder, render_spot_ladder
 from app.ui.market_block import render_market_block
 from app.ui.portfolio_block import (
-    GREEK_NAMES, render_portfolio_block,
+    BOOK_COLUMN, GREEK_NAMES, TRADE_ID_COLUMN, render_portfolio_block,
 )
+from app.ui.trades_block import render_blotter, render_portfolio, trade_store
+from app.trades import service as trade_service
 
 # Pricing helpers now live in the backend; kept here under their old names.
 format_strike_for_pair = pricer.format_strike_for_pair
 _is_complete_strike_alias = pricer.is_complete_strike_alias
 
 
-def aggregate_pricer_results_by_pair(results, hedge_trades=()):
-    """Aggregate base-currency line results and hedge risks by currency pair."""
-    columns = [
-        "currency_pair",
-        "mtm_base",
-        "pnl_base",
-        *(column for greek in GREEK_NAMES for column in (f"fixed_{greek}", greek)),
-    ]
-    if not results:
-        return pd.DataFrame(columns=columns)
-    result_df = pd.DataFrame(results)
-    aggregation = (
-        result_df[columns]
-        .groupby("currency_pair", as_index=False, sort=True)
-        .sum(min_count=1)
-    )
-    for trade in hedge_trades:
-        pair = str(trade["currency_pair"]).upper()
-        matches = aggregation["currency_pair"] == pair
-        if not matches.any():
-            aggregation = pd.concat(
-                [
-                    aggregation,
-                    pd.DataFrame(
-                        [{column: pair if column == "currency_pair" else 0.0
-                          for column in columns}]
-                    ),
-                ],
-                ignore_index=True,
-            )
-            matches = aggregation["currency_pair"] == pair
-        aggregation.loc[matches, "mtm_base"] += float(trade["mtm_base"])
-        aggregation.loc[matches, "pnl_base"] += float(trade["pnl_base"])
-        aggregation.loc[matches, "fixed_delta"] += float(trade["delta_offset"])
-        aggregation.loc[matches, "delta"] += float(trade["delta_offset"])
-        aggregation.loc[matches, "theta"] += float(trade.get("theta", 0.0))
-    return aggregation
+aggregate_pricer_results_by_pair = pricer.aggregate_by_pair
+
+
+def book_ticked_lines(store, markets, rows, ticked, mods, book, counterparty, with_hedges,
+                      default_pair):
+    """Book the ticked grid lines; returns ``[(level, message)]`` to show.
+
+    Lines already carrying a trade id are not booked again (add a new line
+    to book the same terms twice). On success the booked values and trade
+    ids are written back to the grid; on failure nothing is booked.
+    """
+    import getpass
+    messages = []
+    ids = rows[TRADE_ID_COLUMN] if TRADE_ID_COLUMN in rows else pd.Series([None] * len(rows))
+    booked_before = {p: ids.iloc[p] for p in ticked
+                     if isinstance(ids.iloc[p], str) and ids.iloc[p].strip()}
+    for position, trade_id in booked_before.items():
+        messages.append(("warning", f"Line {position + 1} is already booked as {trade_id}; "
+                                    "add a new line to book the same terms again."))
+    to_book = [p for p in ticked if p not in booked_before]
+    if not to_book:
+        return messages
+    try:
+        user = getpass.getuser()
+    except Exception:
+        user = ""
+    result = trade_service.book_lines(
+        store, markets, rows.iloc[to_book], mods, book=book, counterparty=counterparty,
+        with_hedges=with_hedges, user=user, default_pair=default_pair)
+    if not result.ok:
+        for error in result.errors:
+            head, _, rest = error.partition(": ")
+            if head.startswith("Line ") and head[5:].isdigit() and int(head[5:]) <= len(to_book):
+                error = f"Line {to_book[int(head[5:]) - 1] + 1}: {rest}"
+            messages.append(("error", "Nothing booked — " + error))
+        return messages
+    trades = {trade.trade_id: trade for trade in result.booked}
+    updated = rows.copy()
+    for number, trade_id in result.lines.items():
+        index = updated.index[to_book[number - 1]]
+        trade = trades[trade_id]
+        for column, value in (
+                ("currency_pair", trade.currency_pair),
+                ("strike", pricer.format_strike_for_pair(trade.currency_pair, trade.strike)),
+                ("expiry", trade.expiry.isoformat()), ("book", trade.book),
+                ("counterparty", trade.counterparty), (TRADE_ID_COLUMN, trade_id)):
+            if column in updated:
+                updated.at[index, column] = value
+    st.session_state._pending_resolved_portfolio_rows = updated
+    options = [t.trade_id for t in result.booked if t.is_option]
+    hedges = [t.trade_id for t in result.booked if t.is_forward]
+    messages.append(("success", "Booked {}{}.".format(
+        ", ".join(options), f"; hedges {', '.join(hedges)}" if hedges else "")))
+    return messages
 
 
 def format_pricer_aggregation(aggregation):
@@ -146,22 +165,28 @@ def render_app():
             pair[:3] if currency == "BASE" else pair[3:6] if currency == "TERM" else currency
             for pair, currency in zip(pair_values, old_premium_ccy)
         ]
-    if st.session_state.get("_portfolio_editor_schema") != 4:
+    if st.session_state.get("_portfolio_editor_schema") != 5:
         st.session_state.pop("portfolio_editor_v2", None)
         st.session_state.pop("portfolio_editor_v3", None)
-        st.session_state._portfolio_editor_schema = 4
+        st.session_state._portfolio_editor_schema = 5
 
     portfolio_columns = [
         "currency_pair", "strike", "expiry", "call_put", "buy_sell",
-        "notional", "premium", "premium_ccy",
+        "notional", "premium", "premium_ccy", "book", "counterparty", TRADE_ID_COLUMN,
     ]
     portfolio_columns += [
         column for column in st.session_state.option_rows.columns
         if column not in portfolio_columns
     ]
+    portfolio_columns = [c for c in portfolio_columns if c != BOOK_COLUMN] + [BOOK_COLUMN]
     st.session_state.option_rows = st.session_state.option_rows.reindex(
         columns=portfolio_columns
     )
+    # Text columns must hold text for the editor: empty cells are "".
+    for column in ("book", "counterparty", TRADE_ID_COLUMN):
+        st.session_state.option_rows[column] = st.session_state.option_rows[column].map(
+            lambda value: "" if value is None or (not isinstance(value, str) and pd.isna(value))
+            else str(value))
 
     # The strike editor accepts both numeric values and delta strings such as
     # ``25d``, so keep this column as text even when the initial value is numeric.
@@ -224,8 +249,8 @@ def render_app():
         )
 
     surface_progress = st.empty()
-    markets_tab, portfolio_tab, ladder_tab = st.tabs(
-        ["Markets", "Pricer", "Spot ladder"]
+    markets_tab, portfolio_tab, ladder_tab, blotter_tab, book_tab = st.tabs(
+        ["Markets", "Pricer", "Spot ladder", "Blotter", "Portfolio"]
     )
 
     spot, forward_divisor, currency_pair, vol_rows, forward_rows, event_rows = render_market_block(
@@ -338,8 +363,9 @@ def render_app():
     prepare_market_surfaces()
 
 
+    mods = Modifications(beta_atm=beta_atm, beta_rr=beta_rr, beta_bf=beta_bf)
     (edited_rows, ladder_steps, ladder_increment, ladder_calculate, delta_hedge,
-     ladder_pair) = render_portfolio_block(
+     ladder_pair, ticked_lines) = render_portfolio_block(
         portfolio_tab, ladder_tab,
         market_pair=str(st.session_state.currency_pair).strip().upper(),
         quote_label=premium_quote_label(premium_quote, _base_ccy, _term_ccy),
@@ -377,9 +403,38 @@ def render_app():
             "Price portfolio", type="primary", key="calculate_portfolio"
         )
 
+    store, store_problem = trade_store()
+    can_book = store is not None and not store.read_only
+    with portfolio_tab:
+        st.markdown("**Book**")
+        book_col, counterparty_col, hedge_col, button_col = st.columns(4)
+        with book_col:
+            default_book = st.text_input("Default book", key="booking_book")
+        with counterparty_col:
+            default_counterparty = st.text_input("Default counterparty",
+                                                 key="booking_counterparty")
+        with hedge_col:
+            book_hedges = st.checkbox(
+                "Book delta hedges", key="booking_hedges",
+                help="Also books one forward per pair and expiry that flattens the "
+                     "booked lines' delta, linked to each option it hedges.")
+        with button_col:
+            book_clicked = st.button(
+                f"Book ticked lines ({len(ticked_lines)})", key="book_lines",
+                disabled=not ticked_lines or not can_book)
+        if not can_book:
+            st.caption("Booking is unavailable: " + (store_problem or "trade store is read-only"))
+        for level, message in st.session_state.pop("_booking_messages", []):
+            getattr(st, level)(message)
+
+    if book_clicked:
+        st.session_state._booking_messages = book_ticked_lines(
+            store, market_set, edited_rows, ticked_lines, mods, default_book,
+            default_counterparty, book_hedges, market_context.currency_pair)
+        st.experimental_rerun()
+
 
     if calculate:
-        mods = Modifications(beta_atm=beta_atm, beta_rr=beta_rr, beta_bf=beta_bf)
         # Book what is priced: tenors, delta strikes and blank pairs are
         # resolved first and written back, so the grid shows the expiry and
         # strike each line was priced at. A line that cannot resolve keeps
@@ -564,5 +619,7 @@ def render_app():
         if skipped:
             with ladder_tab:
                 st.caption(f"{skipped} line(s) on other pairs are not in the {ladder_pair} ladder.")
+    render_blotter(blotter_tab)
+    render_portfolio(book_tab, market_set, mods, premium_quote)
     if diagnostics.records():
         st.warning("Some calculations used legacy fallback. The selected pricing model was retained.")

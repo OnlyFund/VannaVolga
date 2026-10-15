@@ -22,6 +22,10 @@ from pricing.fx_forward import FxForwardPosition
 from pricing.greeks import calculate_forward_theta, calculate_greeks, forward_delta_factor
 
 
+#: Greeks every priced line reports, fixed (``fixed_<name>``) and smile.
+GREEK_NAMES = ("delta", "gamma", "vega", "vanna", "volga", "theta", "rega", "sega")
+
+
 def format_notional(value):
     """Format a numeric notional with comma separators for display."""
     amount = parse_notional(value)
@@ -428,3 +432,42 @@ def resolve_line_inputs(markets, rows, default_pair=None):
 def resolve_strike_aliases(markets, rows, default_pair=None):
     """Former name of ``resolve_line_inputs``, which also resolves tenors."""
     return resolve_line_inputs(markets, rows, default_pair)
+
+
+def aggregate_by_pair(results, hedge_trades=()):
+    """Aggregate base-currency line results and hedge risks by currency pair."""
+    columns = [
+        "currency_pair",
+        "mtm_base",
+        "pnl_base",
+        *(column for greek in GREEK_NAMES for column in (f"fixed_{greek}", greek)),
+    ]
+    if not results:
+        return pd.DataFrame(columns=columns)
+    result_df = pd.DataFrame(results)
+    aggregation = (
+        result_df[columns]
+        .groupby("currency_pair", as_index=False, sort=True)
+        .sum(min_count=1)
+    )
+    for trade in hedge_trades:
+        pair = str(trade["currency_pair"]).upper()
+        matches = aggregation["currency_pair"] == pair
+        if not matches.any():
+            aggregation = pd.concat(
+                [
+                    aggregation,
+                    pd.DataFrame(
+                        [{column: pair if column == "currency_pair" else 0.0
+                          for column in columns}]
+                    ),
+                ],
+                ignore_index=True,
+            )
+            matches = aggregation["currency_pair"] == pair
+        aggregation.loc[matches, "mtm_base"] += float(trade["mtm_base"])
+        aggregation.loc[matches, "pnl_base"] += float(trade["pnl_base"])
+        aggregation.loc[matches, "fixed_delta"] += float(trade["delta_offset"])
+        aggregation.loc[matches, "delta"] += float(trade["delta_offset"])
+        aggregation.loc[matches, "theta"] += float(trade.get("theta", 0.0))
+    return aggregation

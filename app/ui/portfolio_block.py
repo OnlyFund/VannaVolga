@@ -3,9 +3,14 @@
 import pandas as pd
 import streamlit as st
 
+from app.pricer import GREEK_NAMES
+
 
 REMOVE_COLUMN = "_remove"
-GREEK_NAMES = ("delta", "gamma", "vega", "vanna", "volga", "theta", "rega", "sega")
+#: Tick box choosing the lines "Book ticked lines" books.
+BOOK_COLUMN = "_book"
+TRADE_ID_COLUMN = "trade_id"
+BOOKING_COLUMNS = ("book", "counterparty")
 LINE_RESULT_COLUMNS = (
     "vol_pct",
     "mtm_base",
@@ -78,6 +83,10 @@ def _only_placeholder_rows_added(editor_state):
     )
 
 
+def _without_ticks(rows):
+    return rows.drop(columns=[BOOK_COLUMN], errors="ignore")
+
+
 def _marked_row_indices(editor_state):
     """Return rows selected in the explicit transient removal column."""
     return [
@@ -120,6 +129,11 @@ def _apply_editor_state(rows, editor_state):
             for column, value in changes.items():
                 if column in updated.columns:
                     updated.iat[index, updated.columns.get_loc(column)] = value
+            # An edited booked line no longer matches its trade: it becomes a
+            # new, unbooked line (amend booked trades in the Blotter).
+            if (TRADE_ID_COLUMN in updated.columns
+                    and any(column in (*LINE_INPUT_COLUMNS, *BOOKING_COLUMNS) for column in changes)):
+                updated.iat[index, updated.columns.get_loc(TRADE_ID_COLUMN)] = ""
 
     deleted_indices = sorted(
         (int(index) for index in editor_state.get("deleted_rows", [])),
@@ -235,9 +249,11 @@ def render_portfolio_block(portfolio_tab, ladder_tab, market_pair, quote_label="
         if pending_line_results is not None:
             st.session_state._portfolio_line_results = pending_line_results
         line_results = st.session_state.get("_portfolio_line_results")
+        # Ticking lines to book does not change them, so results stay shown.
         if (
             line_results is not None
-            and st.session_state.option_rows.equals(line_results["rows"])
+            and _without_ticks(st.session_state.option_rows).equals(
+                _without_ticks(line_results["rows"]))
         ):
             editor_input = _with_line_results(
                 st.session_state.option_rows, line_results["results"]
@@ -249,6 +265,9 @@ def render_portfolio_block(portfolio_tab, ladder_tab, market_pair, quote_label="
             columns=[REMOVE_COLUMN], errors="ignore"
         )
         editor_input[REMOVE_COLUMN] = False
+        ticks = editor_input[BOOK_COLUMN] if BOOK_COLUMN in editor_input else False
+        editor_input[BOOK_COLUMN] = pd.Series(ticks, index=editor_input.index).map(
+            lambda value: value is True or value == 1)
         editor_column_config = {
                 "strike": st.column_config.TextColumn(
                     "Strike",
@@ -284,6 +303,23 @@ def render_portfolio_block(portfolio_tab, ladder_tab, market_pair, quote_label="
                     options=premium_currencies,
                     default=premium_default,
                     width="small",
+                ),
+                "book": st.column_config.TextColumn(
+                    "Book", help="Book to book the line into; empty uses the default below.",
+                    width="small",
+                ),
+                "counterparty": st.column_config.TextColumn(
+                    "Counterparty", help="Counterparty; empty uses the default below.",
+                    width="small",
+                ),
+                TRADE_ID_COLUMN: st.column_config.TextColumn(
+                    "Trade ID", help="Set when the line is booked. Editing the line "
+                                     "clears it: amend booked trades in the Blotter.",
+                    width="small",
+                ),
+                BOOK_COLUMN: st.column_config.CheckboxColumn(
+                    "Book?", help="Tick lines, then use Book ticked lines below.",
+                    default=False, width="small",
                 ),
                 REMOVE_COLUMN: st.column_config.CheckboxColumn(
                     "Remove",
@@ -343,12 +379,14 @@ def render_portfolio_block(portfolio_tab, ladder_tab, market_pair, quote_label="
             use_container_width=True,
             column_config=editor_column_config,
             hide_index=True,
-            disabled=LINE_RESULT_COLUMNS,
+            disabled=[*LINE_RESULT_COLUMNS, TRADE_ID_COLUMN],
             key="portfolio_editor_v3",
             on_change=resolve_strikes_after_edit,
         )
+        ticked = [position for position, value in enumerate(edited_rows[BOOK_COLUMN])
+                  if value is True or value == 1] if BOOK_COLUMN in edited_rows else []
         edited_rows = edited_rows.drop(
-            columns=[REMOVE_COLUMN, *LINE_RESULT_COLUMNS], errors="ignore"
+            columns=[REMOVE_COLUMN, BOOK_COLUMN, *LINE_RESULT_COLUMNS], errors="ignore"
         )
         delta_hedge = st.checkbox(
             "Add forward hedge",
@@ -392,4 +430,4 @@ def render_portfolio_block(portfolio_tab, ladder_tab, market_pair, quote_label="
         )
     
     return (edited_rows, ladder_steps, ladder_increment, ladder_calculate, delta_hedge,
-            ladder_pair)
+            ladder_pair, ticked)
