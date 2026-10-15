@@ -1,82 +1,29 @@
 """Streamlit user interface for the VannaVolga portfolio pricer."""
 
-import json
-import re
 from datetime import date, timedelta
-import numpy as np
 import pandas as pd
 import streamlit as st
 
-from market_data import MarketData, Modifications
-from app.market_service import MarketService, pair_delivery
+from market_data import Modifications
+from app import pricer
+from app.market_context import (
+    PricingSettings, build_context, interpolate_delivery_curve, naive_date,
+)
+from app.market_service import MarketService
 from app.market_store import validate_market
-from app.curve_roll import (
-    OVERNIGHT_TENORS, anchor_forward_rows, next_business_day, overnight_expiry,
-    roll_forward_rows, roll_vol_rows,
-)
-from app.smile_service import (
-    DiagnosticsCollector, SurfaceCache, bind_cache, reuse_prepared, market_diagnostics,
-)
+from app.curve_roll import next_business_day
+from app.smile_service import DiagnosticsCollector, SurfaceCache, bind_cache
 from helper_functions.vanna_volga_helpers import get_model_map
-from pricing import Pricable
-from pricing.fx_forward import FxForwardPosition
-from pricing.greeks import calculate_greeks, calculate_forward_theta, forward_delta_factor
-from helper_functions.input_resolvers import parse_notional, resolve_expiry, resolve_strike
-from helper_functions.premium_quotes import (
-    PREMIUM_QUOTES, format_premium_quote, premium_quote_label,
-)
+from helper_functions.premium_quotes import PREMIUM_QUOTES, premium_quote_label
 from app.reports.spot_ladder import calculate_spot_ladder, render_spot_ladder
 from app.ui.market_block import render_market_block
 from app.ui.portfolio_block import (
     GREEK_NAMES, render_portfolio_block,
 )
 
-
-def _is_complete_strike_alias(row):
-    """Report whether a row carries a fully specified strike alias.
-
-    Half-typed cells must stay silent while editing, but a complete alias that
-    fails to resolve is a genuine error worth showing.
-    """
-    value = str(row.get("strike", "")).strip().lower().replace(" ", "")
-    if value not in {"atm", "atmf", "atms"} and not re.fullmatch(
-        r"(\d+(?:\.\d+)?)d", value
-    ):
-        return False
-    expiry = row.get("expiry")
-    call_put = str(row.get("call_put", "")).strip().upper()
-    return (
-        not pd.isna(expiry)
-        and bool(str(expiry).strip())
-        and call_put in {"CALL", "PUT"}
-    )
-
-
-def format_strike_for_pair(currency_pair, strike):
-    """Format FX strikes using JPY and non-JPY market conventions."""
-    pair = str(currency_pair).strip().upper()
-    decimals = 2 if "JPY" in pair else 4
-    return f"{float(strike):.{decimals}f}"
-
-
-def interpolate_delivery_curve(rows, date_column, value_column, target_date, name):
-    """Linearly interpolate a curve only within its supplied delivery range."""
-    dates = pd.to_datetime(rows[date_column], errors="coerce")
-    values = pd.to_numeric(rows[value_column], errors="coerce")
-    valid = dates.notna() & values.notna() & np.isfinite(values)
-    curve = rows.loc[valid].copy()
-    if curve.empty:
-        raise ValueError(f"{name} rows must have valid delivery dates and finite values")
-    curve["_date"] = dates.loc[valid].map(pd.Timestamp.toordinal)
-    curve["_value"] = values.loc[valid]
-    curve.sort_values("_date", inplace=True)
-    if curve["_date"].duplicated().any():
-        raise ValueError("Forward delivery dates must be unique")
-    target = pd.Timestamp(target_date).toordinal()
-    first, last = curve["_date"].iloc[0], curve["_date"].iloc[-1]
-    if target < first or target > last:
-        raise ValueError(f"{name} delivery date is outside the quoted forward range")
-    return float(np.interp(target, curve["_date"], curve["_value"]))
+# Pricing helpers now live in the backend; kept here under their old names.
+format_strike_for_pair = pricer.format_strike_for_pair
+_is_complete_strike_alias = pricer.is_complete_strike_alias
 
 
 def aggregate_pricer_results_by_pair(results, hedge_trades=()):
@@ -161,14 +108,6 @@ def render_app():
             st.session_state.pop(key, None)
         for key, value in pending_market.items():
             st.session_state[key] = value
-
-
-    def format_notional(value):
-        """Format a numeric notional with comma separators for display."""
-        amount = parse_notional(value)
-        if not np.isfinite(amount):
-            raise ValueError("Notional must be finite")
-        return f"{amount:,.0f}"
 
 
     def default_rows():
@@ -296,247 +235,24 @@ def render_app():
     market_service = st.session_state["_market_service_v1"]
     market_service.collector = diagnostics
     market_service.progress = None
-    def tenor_days(tenor):
-        units = {"W": 7, "M": 30, "Y": 365}
-        text = str(tenor).strip().upper()
-        if len(text) < 2 or text[-1] not in units:
-            raise ValueError(f"Invalid tenor: {tenor}")
-        return float(text[:-1]) * units[text[-1]]
-
-
-    def naive_date(value):
-        timestamp = pd.Timestamp(value)
-        if timestamp.tzinfo is not None:
-            timestamp = timestamp.tz_localize(None)
-        return timestamp.normalize()
-
-
-    def variance_days_between(start, end):
-        start = naive_date(start)
-        end = naive_date(end)
-        if end < start:
-            raise ValueError("End date must not precede start date")
-        total = float((end - start).days)
-        events = st.session_state.event_rows
-        if not events.empty:
-            event_dates = pd.to_datetime(
-                events["event_date"], errors="coerce", utc=True
-            ).dt.tz_localize(None)
-            weights = pd.to_numeric(events["variance_days"], errors="coerce").fillna(0.0)
-            if not np.isfinite(weights.to_numpy(dtype=float)).all():
-                raise ValueError("Event variance days must be finite")
-            total += float(weights.loc[(event_dates > start) & (event_dates <= end)].sum())
-        return float(total)
-
-
-    def forward_curve(curve_date=None, rows=None):
-        """Forward rows for ``curve_date``, anchored at its spot date."""
-        rows = st.session_state.forward_rows if rows is None else rows
-        return anchor_forward_rows(
-            rows, currency_pair, valuation_date if curve_date is None else curve_date
-        )
-
-
-    def forward_points_for_expiry(expiry, curve_rows=None):
-        return interpolate_delivery_curve(
-            forward_curve() if curve_rows is None else curve_rows,
-            "delivery_date",
-            "fwd_pts",
-            pair_delivery(currency_pair, expiry, diagnostics),
-            "Forward points",
-        )
-
-
-    def term_discount_for_expiry(expiry, curve_rows=None):
-        """Interpolate decimal SIMPLE term deposit rates by delivery date."""
-        return interpolate_delivery_curve(
-            forward_curve() if curve_rows is None else curve_rows,
-            "delivery_date",
-            "term_discount",
-            pair_delivery(currency_pair, expiry, diagnostics),
-            "Term discount rate",
-        )
-
-
-    def market_for_expiry(
-        expiry, as_of=None, allow_short_end=False, spot_value=None
-    ):
-        """Build a MarketData object from the editable vol/forward/event tables.
-
-        With ``as_of`` after the valuation date the curves are rolled to it
-        (sticky tenor): pillar expiries and forward deliveries move with their
-        tenors while every tenor keeps its quotes, so a fixed expiry picks up
-        the vol and forward-point roll-down. Pillar total variance is fixed by
-        the quotes; events only distribute it between pillar dates, so a
-        passed event's share moves to the remaining days.
-
-        Expiries before the first pillar (O/N up to 1W) are priced from the
-        first pillar: total variance runs linearly in event-weighted variance
-        days from zero at the curve date, which is the same as deriving an
-        O/N node from the 1W quotes with the event weights and interpolating
-        between that node and 1W. Each of the five wing vols is scaled this
-        way, so RR and BF follow as a by-product.
-        """
-        curve_date = naive_date(valuation_date if as_of is None else as_of)
-        requested_date = naive_date(expiry)
-        if requested_date == curve_date and allow_short_end and as_of is not None:
-            return market_for_expiry(expiry, spot_value=spot_value)
-        rows = st.session_state.vol_rows.copy()
-        if rows.empty:
-            raise ValueError("Enter at least one volatility expiry")
-        rows["expiry"] = pd.to_datetime(
-            rows["expiry"], errors="coerce", utc=True
-        ).dt.tz_localize(None)
-        rows = rows.dropna(subset=["expiry"]).sort_values("expiry").reset_index(drop=True)
-        if rows.empty:
-            raise ValueError("Volatility expiries must be valid dates")
-        forward_rows = st.session_state.forward_rows
-        roll_days = (curve_date - naive_date(valuation_date)).days
-        if curve_date != naive_date(valuation_date):
-            forward_rows = forward_curve(valuation_date, forward_rows)
-            rows = roll_vol_rows(rows, currency_pair, valuation_date, curve_date)
-            forward_rows = roll_forward_rows(
-                forward_rows, rows, currency_pair, valuation_date, curve_date,
-                lambda pillar_expiry: pair_delivery(currency_pair, pillar_expiry, diagnostics),
-            )
-        curve_rows = forward_rows if roll_days else forward_curve(curve_date, forward_rows)
-        curve_forward_points = lambda value: forward_points_for_expiry(value, curve_rows)
-        curve_term_discount = lambda value: term_discount_for_expiry(value, curve_rows)
-        def pillar_delivery(value):
-            # Synthetic risk nodes retain their original settlement offsets.
-            original_expiry = naive_date(value) - pd.Timedelta(days=roll_days)
-            return pair_delivery(currency_pair, original_expiry, diagnostics) + pd.Timedelta(days=roll_days)
-
-        def pillar_forward_points(value):
-            return interpolate_delivery_curve(
-                curve_rows, "delivery_date", "fwd_pts", pillar_delivery(value),
-                "Forward points",
-            )
-
-        def pillar_term_discount(value):
-            return interpolate_delivery_curve(
-                curve_rows, "delivery_date", "term_discount", pillar_delivery(value),
-                "Term discount rate",
-            )
-        if requested_date < curve_date or (requested_date == curve_date and not allow_short_end):
-            raise ValueError("Expiry must be after the valuation date")
-        target_date = requested_date
-        # Before the first pillar the variance interpolation below runs from
-        # zero at the curve date, so the short end carries the first pillar's
-        # variance scaled by its own variance-day weights.
-        if target_date > rows["expiry"].iloc[-1]:
-            raise ValueError("Expiry is outside the quoted volatility range")
-        for column in ("atm", "rr_25", "bf_25", "rr_10", "bf_10"):
-            rows[column] = pd.to_numeric(rows[column], errors="coerce")
-        rows, curve_reasons, curve_prepared = market_service.convert_curve(
-            rows, curve_date.date(), spot,
-            currency_pair, forward_divisor, pricing_model, broker_strangle,
-            pillar_forward_points, pillar_term_discount,
-        )
-
-        quotes = pd.DataFrame({
-            "PUT_10": rows["atm"] + rows["bf_10"] - rows["rr_10"] / 2,
-            "PUT_25": rows["atm"] + rows["bf_25"] - rows["rr_25"] / 2,
-            "ATM": rows["atm"],
-            "CALL_25": rows["atm"] + rows["bf_25"] + rows["rr_25"] / 2,
-            "CALL_10": rows["atm"] + rows["bf_10"] + rows["rr_10"] / 2,
-        })
-        values = quotes.to_numpy(dtype=float)
-        if not np.isfinite(values).all() or (values <= 0).any():
-            raise ValueError("Vol quotes must reconstruct finite positive wing vols")
-        pillar_vdays = np.array([
-            variance_days_between(curve_date, pillar_date)
-            for pillar_date in rows["expiry"]
-        ], dtype=float)
-        if (pillar_vdays <= 0).any() or np.any(np.diff(pillar_vdays) <= 0):
-            raise ValueError("Volatility pillars must have increasing positive variance days")
-        pillar_calendar_days = np.array([
-            (pillar_date - curve_date).days for pillar_date in rows["expiry"]
-        ], dtype=float)
-        if (pillar_calendar_days <= 0).any():
-            raise ValueError("Volatility pillars must have positive calendar days")
-        target_vdays = variance_days_between(curve_date, target_date)
-        calendar_days = (target_date - curve_date).days
-        if target_vdays <= 0 or calendar_days <= 0:
-            raise ValueError("Expiry must have positive calendar and variance days")
-        x = np.concatenate(([0.0], pillar_vdays))
-        interpolated = {}
-        for name in quotes:
-            # Quotes are annualized over calendar time, so total variance must be
-            # accumulated in calendar-annualized units. Only the interpolation
-            # clock is the event-weighted variance-day measure; mixing the two
-            # measures here would rescale every quote by sqrt(vdays/caldays).
-            total_variance = quotes[name].to_numpy(dtype=float) ** 2 * pillar_calendar_days
-            y = np.concatenate(([0.0], total_variance))
-            interpolated[name] = float(np.sqrt(np.interp(target_vdays, x, y) / calendar_days))
-        atm = interpolated["ATM"]
-        rr25 = interpolated["CALL_25"] - interpolated["PUT_25"]
-        bf25 = (interpolated["CALL_25"] + interpolated["PUT_25"]) / 2.0 - atm
-        rr10 = interpolated["CALL_10"] - interpolated["PUT_10"]
-        bf10 = (interpolated["CALL_10"] + interpolated["PUT_10"]) / 2.0 - atm
-        market_args = dict(
-            s=spot if spot_value is None else spot_value,
-            fwd_pts=curve_forward_points(requested_date), v_atm=atm,
-            rr_25=rr25, rr_10=rr10, bf_25=bf25, bf_10=bf10,
-            forward_divisor=forward_divisor, atm_conv=atm_type, deltaBase=delta_base,
-        )
-        term_discount = curve_term_discount(requested_date)
-        try:
-            market = MarketData(**market_args, term_discount=term_discount)
-        except TypeError as exc:
-            # Streamlit can retain this imported class until its process
-            # restarts, even after the app module has reloaded.
-            if "term_discount" not in str(exc) or "unexpected keyword" not in str(exc):
-                raise
-            market = MarketData(**market_args)
-            market.term_discount = term_discount
-        market.smooth_pillar_interpolation = smooth_pillar_interpolation
-        market.delta_reporting = getattr(st.session_state, "delta_reporting", None)
-        # Lets the pricers discount to the option's delivery date on the pair's
-        # own day-count basis. Assigned after construction so a stale imported
-        # MarketData class retained across a Streamlit reload cannot raise; an
-        # unrecognised pair simply falls back to continuous discounting.
-        try:
-            _pair_code = currency_pair
-            market.currency_pair = _pair_code if re.fullmatch(r"[A-Z]{6}", _pair_code) else None
-        except Exception:
-            market.currency_pair = None
-        market.legacy_target_blend = not smooth_pillar_interpolation
-        market.compatibility_mode = "auto" if smooth_pillar_interpolation else "legacy"
-        market.wrapped_smile = True
-        market.broker_strangle = False
-        market.force_legacy_smile = bool(curve_reasons)
-        market.smile_reasons = curve_reasons
-        market.smile_model = pricing_model
-        market.diagnostics_token = diagnostics.token
-        if not curve_reasons and requested_date > curve_date:
-            from resolved_smile_inputs import resolve_conventions, MarketSnapshot
-            context = resolve_conventions(MarketSnapshot.capture(market),
-                                          requested_date.date(), curve_date.date())
-            market.deltaBase, market.atm_conv = context.premium_adjusted, context.atm_convention
-            for pillar_date, prepared in zip(rows.expiry, curve_prepared):
-                # A pillar whose conversion failed carries interpolated
-                # quotes; its smile is built from them, not reused.
-                if (naive_date(pillar_date) == requested_date and market.s == spot and
-                        curve_date == naive_date(valuation_date) and
-                        not prepared.diagnostics.degraded):
-                    reuse_prepared(market, prepared)
-                    break
-        return market
-
-
-    def resolve_market_expiry(value):
-        """Resolve pillar tenor strings to their configured expiry dates."""
-        token = str(value).strip().upper()
-        if token in OVERNIGHT_TENORS:
-            return overnight_expiry(currency_pair, valuation_date)
-        rows = st.session_state.vol_rows
-        matches = rows[rows["tenor"].astype(str).str.strip().str.upper() == token]
-        if len(matches) > 1:
-            raise ValueError(f"Tenor {token} appears more than once in Vol data")
-        if len(matches) == 1:
-            return pd.Timestamp(matches.iloc[0]["expiry"]).date()
-        return resolve_expiry(value, valuation_date, rows["tenor"])
+    settings = PricingSettings(
+        pricing_model=pricing_model, atm_type=atm_type, delta_base=delta_base,
+        smooth_pillar_interpolation=smooth_pillar_interpolation,
+        delta_reporting=delta_reporting,
+    )
+    # The active pair's market as one backend object. Inputs that cannot form
+    # a market at all (a half-typed pair, a zero spot) give a stand-in that
+    # reports the reason on every line instead of stopping the page.
+    market_context = build_context(
+        currency_pair, valuation_date, spot, forward_divisor, broker_strangle,
+        vol_rows, forward_rows, event_rows, settings=settings,
+        market_service=market_service, diagnostics=diagnostics,
+    )
+    if getattr(market_context, "reason", None):
+        with markets_tab:
+            st.warning("Market unavailable for pricing: " + market_context.reason)
+    market_for_expiry = market_context.market_for_expiry
+    resolve_market_expiry = market_context.resolve_market_expiry
 
 
     def prepare_market_surface():
@@ -588,91 +304,6 @@ def render_app():
     prepare_market_surface()
 
 
-    def auto_resolve_portfolio_strikes(rows):
-        """Convert resolvable delta and ATM aliases to numeric input strikes."""
-        resolved_rows = rows.copy()
-        changed = False
-        failures = []
-        for index, source_row in rows.iterrows():
-            value = source_row.get("strike")
-            if pd.isna(value) or not str(value).strip():
-                continue
-            try:
-                numeric_strike = float(str(value).strip().replace(",", ""))
-                if np.isfinite(numeric_strike) and numeric_strike > 0:
-                    continue
-            except (TypeError, ValueError):
-                pass
-            try:
-                row = source_row.copy()
-                row["valuation"] = valuation_date
-                row["expiry"] = resolve_market_expiry(row["expiry"])
-                market = market_for_expiry(row["expiry"])
-                strike = resolve_strike(market, row, atm_type, delta_base)
-            except Exception as exc:
-                # A well-formed alias that still fails is a real problem, not a
-                # half-typed cell. Staying silent makes it indistinguishable
-                # from "nothing happened" and hides the cause.
-                if _is_complete_strike_alias(source_row):
-                    failures.append("Line {}: {}".format(index + 1, exc))
-                continue
-            resolved_rows.at[index, "strike"] = format_strike_for_pair(
-                source_row.get("currency_pair", ""), strike
-            )
-            changed = True
-        return resolved_rows, changed, failures
-
-
-    def build_delta_hedges(rows, mods):
-        """Create fixed forward hedge positions from current option deltas."""
-        grouped = {}
-        errors = []
-        for line_number, (_, source_row) in enumerate(rows.iterrows(), start=1):
-            try:
-                row = source_row.copy()
-                row["valuation"] = valuation_date
-                pair = str(row.get("currency_pair", "")).strip().upper()
-                if not re.fullmatch(r"[A-Z]{6}", pair):
-                    raise ValueError("Currency pair must contain two 3-letter ISO codes")
-                if pair != str(st.session_state.currency_pair).strip().upper():
-                    raise ValueError("Market data does not match this currency pair")
-                row["currency_pair"] = pair
-                expiry = resolve_market_expiry(row["expiry"])
-                row["expiry"] = expiry
-                row["notional"] = parse_notional(row["notional"])
-                market = market_for_expiry(expiry)
-                row["strike"] = resolve_strike(market, row, atm_type, delta_base)
-                greeks = calculate_greeks(
-                    market, row, None, pricing_model, atm_type, delta_base, mods
-                )
-                smile_delta = float(greeks["delta"])
-                # Convert selected delta units back to forward hedge notional.
-                forward_rate = float(market.s) + float(market.fwd_pts) / float(market.forward_divisor)
-                if not np.isfinite(smile_delta):
-                    raise ValueError("Smile-adjusted delta is invalid")
-                key = (pair, expiry, forward_rate)
-                grouped[key] = grouped.get(key, 0.0) - smile_delta / forward_delta_factor(
-                    market, expiry, valuation_date
-                )
-            except Exception as exc:
-                errors.append("Line {} hedge: {}".format(line_number, exc))
-
-        positions = []
-        for (pair, expiry, rate), base_amount in grouped.items():
-            if not np.isfinite(base_amount):
-                errors.append("{} {} hedge amount is not finite".format(pair, expiry))
-                continue
-            if abs(base_amount) < 1e-12:
-                continue
-            positions.append({
-                "currency_pair": pair,
-                "expiry": expiry,
-                "base_amount": float(base_amount),
-                "contract_rate": float(rate),
-            })
-        return positions, errors
-
-
     edited_rows, ladder_steps, ladder_increment, ladder_calculate, delta_hedge = render_portfolio_block(
         portfolio_tab, ladder_tab,
         market_pair=str(st.session_state.currency_pair).strip().upper(),
@@ -680,7 +311,7 @@ def render_app():
     )
     if st.session_state.pop("_portfolio_strike_resolution_requested", False):
         resolved_rows, strikes_changed, strike_failures = (
-            auto_resolve_portfolio_strikes(edited_rows)
+            pricer.resolve_strike_aliases(market_context, edited_rows)
         )
         if strike_failures:
             st.session_state._portfolio_strike_failures = strike_failures
@@ -706,135 +337,13 @@ def render_app():
 
     if calculate:
         mods = Modifications(beta_atm=beta_atm, beta_rr=beta_rr, beta_bf=beta_bf)
-        def calculate_row(item):
-            line_number, source_row = item
-            resolved_strike = None
-            try:
-                row = source_row.copy()
-                row["valuation"] = valuation_date
-                currency_pair = str(row.get("currency_pair", "")).strip().upper()
-                if not re.fullmatch(r"[A-Z]{6}", currency_pair):
-                    raise ValueError("Currency pair must contain two 3-letter ISO codes")
-                if currency_pair != str(st.session_state.currency_pair).strip().upper():
-                    raise ValueError(
-                        f"Market data is configured for {st.session_state.currency_pair}, "
-                        f"not {currency_pair}"
-                    )
-                row["currency_pair"] = currency_pair
-                row["expiry"] = resolve_market_expiry(row["expiry"])
-                row["notional"] = parse_notional(row["notional"])
-                premium = pd.to_numeric(row.get("premium", 0.0), errors="coerce")
-                if pd.isna(premium) or not np.isfinite(float(premium)) or premium < 0:
-                    raise ValueError("Premium must be a finite non-negative amount")
-                premium_ccy = str(row.get("premium_ccy", currency_pair[3:])).strip().upper()
-                if premium_ccy not in {currency_pair[:3], currency_pair[3:]}:
-                    raise ValueError(
-                        f"Premium currency must be {currency_pair[:3]} or {currency_pair[3:]}"
-                    )
-                buy_sell = str(row["buy_sell"]).strip().upper()
-                if buy_sell not in {"BUY", "SELL"}:
-                    raise ValueError("Buy/Sell must be BUY or SELL")
-                market = market_for_expiry(row["expiry"])
-                resolved_strike = resolve_strike(market, row, atm_type, delta_base)
-                # Pass a numeric strike into every downstream calculator.
-                row["strike"] = resolved_strike
-                next_valuation = next_business_day(currency_pair, valuation_date)
-                next_market = market_for_expiry(
-                    row["expiry"], as_of=next_valuation, allow_short_end=True
-                )
-                pricing_result = Pricable(
-                    row=row,
-                    premium=float(premium),
-                    premium_ccy=premium_ccy,
-                ).price(
-                    market, pricing_model, atm_type, delta_base, mods,
-                    next_market=next_market,
-                    next_valuation=next_valuation,
-                )
-                forward_rate = market.s + market.fwd_pts / market.forward_divisor
-                # Map the chosen quote onto stable column names so the display
-                # layer never has to know which convention is active.  Missing
-                # conversions degrade to the term-cash figures.
-                quoted_mtm = pricing_result.get(
-                    "mtm_" + premium_quote, pricing_result.get("mtm_term")
-                )
-                quoted_pnl = pricing_result.get(
-                    "pnl_" + premium_quote, pricing_result.get("pnl_term")
-                )
-                return line_number, {
-                    "row": line_number,
-                    **pricing_result,
-                    "strike": resolved_strike,
-                    "call_put": row["call_put"],
-                    "buy_sell": row["buy_sell"],
-                    "notional": format_notional(row["notional"]),
-                    "mtm_quote": format_premium_quote(quoted_mtm, premium_quote),
-                    "pnl_quote": format_premium_quote(quoted_pnl, premium_quote),
-                    "_forward_rate": forward_rate,
-                    "smile_status": market_diagnostics(market, row["expiry"])[0],
-                    "smile_reason": market_diagnostics(market, row["expiry"])[1],
-                }, None, resolved_strike
-            except Exception as exc:
-                return line_number, None, "Line {}: {}".format(line_number, exc), resolved_strike
-
-        # Use visible row positions rather than the DataFrame index. Dynamic
-        # editor rows can have non-consecutive indices after lines are removed.
-        rows = [
-            (line_number, row)
-            for line_number, (_, row) in enumerate(edited_rows.iterrows(), start=1)
-        ]
-        # Market and pricing helpers read Streamlit session state. Keep them on
-        # the script thread; worker threads do not have the active session context.
-        calculated = [calculate_row(item) for item in rows]
-        calculated.sort(key=lambda item: item[0])
-        results = [item[1] for item in calculated if item[1] is not None]
-        errors = [item[2] for item in calculated if item[2] is not None]
-
+        # Pricing reads no session state, but stays on the script thread so
+        # progress and diagnostics belong to this run.
+        results, errors = pricer.price_lines(market_context, edited_rows, mods, premium_quote)
         hedge_trades = []
         if delta_hedge:
-            grouped_deltas = {}
-            for result in results:
-                key = (
-                    result["currency_pair"],
-                    result["expiry"],
-                    float(result["_forward_rate"]),
-                )
-                grouped_deltas[key] = grouped_deltas.get(key, 0.0) + float(result["delta"])
-            for (pair, expiry, forward_rate), net_smile_delta in grouped_deltas.items():
-                if not np.isfinite(net_smile_delta):
-                    raise ValueError("Smile-adjusted delta is invalid")
-                market = market_for_expiry(expiry)
-                hedge_delta_factor = forward_delta_factor(market, expiry, valuation_date)
-                base_amount = -net_smile_delta / hedge_delta_factor
-                if abs(base_amount) < 1e-12:
-                    continue
-                position = FxForwardPosition(
-                    currency_pair=pair,
-                    expiry=expiry,
-                    base_amount=base_amount,
-                    contract_rate=forward_rate,
-                )
-                value = position.value(market, valuation_date)
-                next_valuation = next_business_day(pair, valuation_date)
-                next_market = market_for_expiry(
-                    expiry, as_of=next_valuation, allow_short_end=True
-                )
-                hedge_theta = calculate_forward_theta(
-                    position, market, next_market, valuation_date, next_valuation
-                )
-                hedge_trades.append({
-                    "currency_pair": pair,
-                    "expiry": expiry,
-                    "direction": "BUY BASE" if base_amount > 0 else "SELL BASE",
-                    "base_amount": base_amount,
-                    "forward_rate": forward_rate,
-                    "delta_offset": base_amount * hedge_delta_factor,
-                    "mtm_term": value["mtm_term"],
-                    "mtm_base": value["mtm_base"],
-                    "pnl_term": value["mtm_term"],
-                    "pnl_base": value["mtm_base"],
-                    "theta": hedge_theta,
-                })
+            hedge_trades, hedge_errors = pricer.hedge_trades_for(market_context, results)
+            errors = errors + hedge_errors
 
         st.session_state._portfolio_result_cache = {
             "rows": edited_rows.copy(), "results": results, "errors": errors,
@@ -966,7 +475,9 @@ def render_app():
             forward_positions = []
             hedge_errors = []
             if delta_hedge:
-                forward_positions, hedge_errors = build_delta_hedges(edited_rows, mods)
+                forward_positions, hedge_errors = pricer.build_delta_hedges(
+                    market_context, edited_rows, mods
+                )
             if hedge_errors:
                 ladder_results, ladder_errors = [], hedge_errors
             else:

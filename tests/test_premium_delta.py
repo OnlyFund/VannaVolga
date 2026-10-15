@@ -1,8 +1,6 @@
 """Trade premium currency affects hedge delta, not smile construction."""
 
-import ast
 from datetime import date
-from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
@@ -160,30 +158,18 @@ def test_trade_adjustment_is_independent_of_unadjusted_pillar_convention():
 @pytest.mark.parametrize("premium_ccy", ["USD", "ZAR"])
 @pytest.mark.parametrize("reporting", [None, "forward", "spot"])
 def test_ui_hedge_builder_uses_the_same_adjusted_delta_as_pricer(premium_ccy, reporting):
-    import app.ui.app as ui
+    from app.market_context import PricingSettings
+    from app.pricer import build_delta_hedges
     from pricing.greeks import forward_delta_factor
 
     surface = market().copy_with(delta_reporting=reporting)
-    namespace = dict(
-        vars(ui), valuation_date=VALUATION, pricing_model="vv",
-        atm_type="dn", delta_base=True,
-        st=SimpleNamespace(session_state=SimpleNamespace(currency_pair="USDZAR")),
+    context = SimpleNamespace(
+        currency_pair="USDZAR", valuation_date=VALUATION, settings=PricingSettings(),
         resolve_market_expiry=lambda expiry: expiry,
         market_for_expiry=lambda expiry: surface,
     )
-    source = ast.parse(Path(ui.__file__).read_text(encoding="utf-8-sig"))
-    render = next(
-        node for node in source.body
-        if isinstance(node, ast.FunctionDef) and node.name == "render_app"
-    )
-    builder = next(
-        node for node in render.body
-        if isinstance(node, ast.FunctionDef) and node.name == "build_delta_hedges"
-    )
-    module = ast.Module(body=[builder], type_ignores=[])
-    exec(compile(module, ui.__file__, "exec"), namespace)
     trade = row(premium_ccy=premium_ccy)
-    positions, errors = namespace["build_delta_hedges"](pd.DataFrame([trade]), MODS)
+    positions, errors = build_delta_hedges(context, pd.DataFrame([trade]), MODS)
     result = Pricable(trade, premium=0.0, premium_ccy=premium_ccy).price(
         surface, "vv", "dn", True, MODS
     )

@@ -29,32 +29,23 @@ def market(**changes):
 
 
 def app_curve(model="vv", broker=True, pair="EURUSD"):
-    """Exercise the real nested UI market builder without a running browser."""
-    import app.ui.app as ui
+    """The app's market builder (``MarketContext``) on a two-pillar curve."""
+    from app.market_context import MarketContext, PricingSettings
     rows = pd.DataFrame(dict(
         tenor=["1M", "2M"], expiry=pd.to_datetime(["2026-11-02", "2026-12-02"]),
         atm=[10., 10.], rr_25=[-.5, -.5], rr_10=[-1., -1.],
         bf_25=[.2, .2], bf_10=[.6, .6]))
+    code = pair.replace("/", "").replace(" ", "").upper()
     forward = pd.DataFrame(dict(
-        delivery_date=[pair_delivery(pair, x) for x in rows.expiry],
+        delivery_date=[pair_delivery(code, x) for x in rows.expiry],
         fwd_pts=[30., 30.], term_discount=[.05, .05]))
     collector = DiagnosticsCollector()
-    namespace = dict(vars(ui), st=SimpleNamespace(session_state=SimpleNamespace(
-        vol_rows=rows, forward_rows=forward, event_rows=pd.DataFrame(
-            columns=["event_date", "variance_days"]), currency_pair=pair)),
-        valuation_date=date(2026, 10, 2), spot=150. if pair == "USDJPY" else 1.1,
-        currency_pair=pair, forward_divisor=pair_divisor(pair),
-        pricing_model=model, broker_strangle=broker, atm_type="dn", delta_base=True,
-        smooth_pillar_interpolation=True, diagnostics=collector,
-        market_service=MarketService(collector))
-    source = ast.parse(Path(ui.__file__).read_text(encoding="utf-8-sig"))
-    render = next(n for n in source.body if isinstance(n, ast.FunctionDef) and n.name == "render_app")
-    names = {"naive_date", "variance_days_between", "forward_curve", "forward_points_for_expiry",
-             "term_discount_for_expiry", "market_for_expiry"}
-    module = ast.Module(body=[n for n in render.body
-                             if isinstance(n, ast.FunctionDef) and n.name in names])
-    exec(compile(module, ui.__file__, "exec"), namespace)
-    return namespace["market_for_expiry"], collector
+    context = MarketContext(
+        pair, date(2026, 10, 2), 150. if code == "USDJPY" else 1.1, pair_divisor(code),
+        broker, rows, forward, settings=PricingSettings(pricing_model=model, delta_reporting=None),
+        market_service=MarketService(collector), diagnostics=collector,
+    )
+    return context.market_for_expiry, collector
 
 
 def test_conversion_precedes_variance_interpolation_and_reused_once(monkeypatch):
@@ -340,8 +331,7 @@ def test_expiry_theta_preserves_intrinsic_expiry_handling():
 
 
 def test_pair_normalized_ui_value_does_not_drop_market_conventions():
-    build, collector = app_curve()
-    build.__globals__["st"].session_state.currency_pair = "eur / usd"
+    build, collector = app_curve(pair="eur / usd")
     m = build("2026-11-17")
     assert m.currency_pair == "EURUSD"
     from helper_functions.fx_conventions import get_pair

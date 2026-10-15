@@ -1,8 +1,5 @@
 """Sticky-tenor curve roll used by the rolled smile theta."""
-import ast
 from datetime import date
-from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -12,8 +9,8 @@ from app.curve_roll import (
     anchor_forward_rows, next_business_day, roll_tenor_dates, roll_forward_rows,
     roll_vol_rows, spot_date,
 )
-from app.market_service import MarketService, pair_delivery, pair_divisor
-from app.smile_service import DiagnosticsCollector
+from app.market_context import MarketContext, PricingSettings
+from app.market_service import pair_delivery, pair_divisor
 from pricing.greeks import calculate_greeks
 
 pytestmark = pytest.mark.filterwarnings("ignore")
@@ -24,34 +21,29 @@ TENORS = ["1W", "1M", "2M"]
 EXPIRIES = pd.to_datetime(["2026-10-08", "2026-11-04", "2026-12-03"])  # tenor rules at T0
 
 
-def app_curve(events=None):
-    """Run the real nested UI market builder on a three-pillar curve."""
-    import app.ui.app as ui
-    vol_rows = pd.DataFrame(dict(
-        tenor=TENORS, expiry=EXPIRIES, atm=[8., 9., 11.], rr_25=[-.5] * 3,
-        rr_10=[-1.] * 3, bf_25=[.2] * 3, bf_10=[.6] * 3))
-    forward_rows = pd.DataFrame(dict(
-        tenor=TENORS, delivery_date=[pair_delivery(PAIR, x) for x in EXPIRIES],
-        fwd_pts=[3., 14., 29.], term_discount=[.04, .045, .05]))
+def app_curve(events=None, vol_rows=None, forward_rows=None, pair=PAIR, valuation_date=T0,
+              spot=1.1, broker_strangle=False, atm=None):
+    """The app's market builder (``MarketContext``) on a three-pillar curve."""
+    if vol_rows is None:
+        vol_rows = pd.DataFrame(dict(
+            tenor=TENORS, expiry=EXPIRIES, atm=[8., 9., 11.], rr_25=[-.5] * 3,
+            rr_10=[-1.] * 3, bf_25=[.2] * 3, bf_10=[.6] * 3))
+    if atm is not None:
+        vol_rows = vol_rows.assign(atm=atm)
+    if forward_rows is None:
+        forward_rows = pd.DataFrame(dict(
+            tenor=TENORS, delivery_date=[pair_delivery(PAIR, x) for x in EXPIRIES],
+            fwd_pts=[3., 14., 29.], term_discount=[.04, .045, .05]))
     event_rows = pd.DataFrame(events or [], columns=["event_date", "variance_days"])
-    collector = DiagnosticsCollector()
-    namespace = dict(vars(ui), st=SimpleNamespace(session_state=SimpleNamespace(
-        vol_rows=vol_rows, forward_rows=forward_rows, event_rows=event_rows,
-        currency_pair=PAIR)),
-        valuation_date=T0, spot=1.1, currency_pair=PAIR,
-        forward_divisor=pair_divisor(PAIR), pricing_model="vv", broker_strangle=False,
-        atm_type="dn", delta_base=True, smooth_pillar_interpolation=True,
-        diagnostics=collector, market_service=MarketService(collector))
-    source = ast.parse(Path(ui.__file__).read_text(encoding="utf-8-sig"))
-    render = next(n for n in source.body
-                  if isinstance(n, ast.FunctionDef) and n.name == "render_app")
-    names = {"naive_date", "variance_days_between", "forward_curve",
-             "forward_points_for_expiry", "term_discount_for_expiry", "market_for_expiry",
-             "resolve_market_expiry"}
-    module = ast.Module(body=[n for n in render.body
-                             if isinstance(n, ast.FunctionDef) and n.name in names])
-    exec(compile(module, ui.__file__, "exec"), namespace)
-    return namespace
+    context = MarketContext(
+        pair, valuation_date, spot, pair_divisor(PAIR), broker_strangle,
+        vol_rows, forward_rows, event_rows, settings=PricingSettings(delta_reporting=None),
+    )
+    return dict(
+        context=context, market_for_expiry=context.market_for_expiry,
+        variance_days_between=context.variance_days_between,
+        resolve_market_expiry=context.resolve_market_expiry,
+    )
 
 
 def rolled_expiry(tenor):
@@ -85,7 +77,6 @@ def test_usdzar_friday_rolls_curves_even_when_spot_settlement_is_unchanged():
     from pricing.greeks import calculate_forward_theta
     from pricing.pricing import Pricable, price_option
 
-    namespace = app_curve()
     t0, t1 = date(2026, 10, 9), date(2026, 10, 12)
     pair = "USDZAR"
     assert spot_date(pair, t0) == spot_date(pair, t1)
@@ -99,13 +90,8 @@ def test_usdzar_friday_rolls_curves_even_when_spot_settlement_is_unchanged():
         delivery_date=pd.to_datetime(["2027-07-06", "2027-09-30"]),
         fwd_pts=[3145., 4215.], term_discount=[.05, .05],
     ))
-    namespace.update(
-        valuation_date=t0, spot=16.59, currency_pair=pair, broker_strangle=True,
-    )
-    namespace["st"].session_state.vol_rows = vol_rows
-    namespace["st"].session_state.forward_rows = forward_rows
-    namespace["st"].session_state.currency_pair = pair
-    build = namespace["market_for_expiry"]
+    build = app_curve(vol_rows=vol_rows, forward_rows=forward_rows, pair=pair,
+                      valuation_date=t0, spot=16.59, broker_strangle=True)["market_for_expiry"]
     expiry = date(2027, 9, 28)
     today = build(expiry)
     tomorrow = build(expiry, as_of=t1, allow_short_end=True)
@@ -142,10 +128,7 @@ def test_usdzar_friday_rolls_curves_even_when_spot_settlement_is_unchanged():
 
 
 def test_flat_tenor_vols_stay_flat_across_weekend_and_between_pillars():
-    namespace = app_curve()
-    rows = namespace["st"].session_state.vol_rows
-    rows["atm"] = 10.0
-    build = namespace["market_for_expiry"]
+    build = app_curve(atm=10.0)["market_for_expiry"]
     for expiry in ("2026-10-08", "2026-10-23", "2026-11-17"):
         today = build(expiry)
         tomorrow = build(expiry, as_of=T1, allow_short_end=True)
@@ -262,10 +245,8 @@ def test_friday_theta_reprices_date_and_forward_on_the_rolled_skew():
     from pricing.greeks import _rolled_smile_theta
     from pricing.pricing import price_option, price_option_with_vol
 
-    namespace = app_curve()
-    build = namespace["market_for_expiry"]
     # Keep all tenor smile quotes flat to isolate time and forward/skew roll.
-    namespace["st"].session_state.vol_rows["atm"] = 10.0
+    build = app_curve(atm=10.0)["market_for_expiry"]
     expiry = date(2026, 11, 4)
     today = build(expiry)
     tomorrow = build(expiry, as_of=T1, allow_short_end=True)
