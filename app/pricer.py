@@ -1,9 +1,11 @@
-"""Price trade lines against a ``MarketContext``, independent of the UI.
+"""Price trade lines against their markets, independent of the UI.
 
-The Pricer page, the spot ladder and the golden tests all go through these
-functions. Every function isolates failures per line (or per hedge group):
-a line that cannot be priced is returned as an error message naming its
-line number, and the rest of the book still prices.
+``markets`` is either one pair's ``MarketContext`` (every line must be on
+that pair) or a ``MarketSet``, which sends each line to its own pair's
+market. The Pricer page, the spot ladder and the golden tests all go through
+these functions. Every function isolates failures per line (or per hedge
+group): a line that cannot be priced is returned as an error message naming
+its line number, and the rest of the book still prices.
 """
 import re
 
@@ -11,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from app.curve_roll import next_business_day
+from app.market_set import MarketSet
 from app.smile_service import market_diagnostics
 from helper_functions.input_resolvers import parse_notional, resolve_strike
 from helper_functions.premium_quotes import PREMIUM_QUOTES, format_premium_quote
@@ -54,18 +57,28 @@ def is_complete_strike_alias(row):
     )
 
 
-def _line_pair(row, context):
+def _line_pair(row):
     pair = str(row.get("currency_pair", "")).strip().upper()
     if not re.fullmatch(r"[A-Z]{6}", pair):
         raise ValueError("Currency pair must contain two 3-letter ISO codes")
-    if pair != context.currency_pair:
-        raise ValueError(
-            f"Market data is configured for {context.currency_pair}, not {pair}"
-        )
     return pair
 
 
-def price_line(context, line_number, source_row, mods, premium_quote="term_cash"):
+def market_for_pair(markets, pair, mismatch=None):
+    """The market a line on ``pair`` prices against.
+
+    A ``MarketSet`` looks the pair up; a single market must be on ``pair``.
+    """
+    if isinstance(markets, MarketSet):
+        return markets.market(pair)
+    if pair != markets.currency_pair:
+        raise ValueError(
+            mismatch or f"Market data is configured for {markets.currency_pair}, not {pair}"
+        )
+    return markets
+
+
+def price_line(markets, line_number, source_row, mods, premium_quote="term_cash"):
     """Price one trade line.
 
     Returns ``(line_number, result, error, resolved_strike)``: exactly one of
@@ -75,11 +88,12 @@ def price_line(context, line_number, source_row, mods, premium_quote="term_cash"
         premium_quote = "term_cash"
     resolved_strike = None
     try:
-        settings = context.settings
         row = source_row.copy()
-        valuation_date = context.valuation_date
+        valuation_date = markets.valuation_date
         row["valuation"] = valuation_date
-        currency_pair = _line_pair(row, context)
+        currency_pair = _line_pair(row)
+        context = market_for_pair(markets, currency_pair)
+        settings = context.settings
         row["currency_pair"] = currency_pair
         row["expiry"] = context.resolve_market_expiry(row["expiry"])
         row["notional"] = parse_notional(row["notional"])
@@ -144,10 +158,10 @@ def _numbered(rows):
             for number, row in enumerate(rows, start=1)]
 
 
-def price_lines(context, rows, mods, premium_quote="term_cash"):
+def price_lines(markets, rows, mods, premium_quote="term_cash"):
     """Price every line; returns ``(results, errors)`` in line order."""
     calculated = sorted(
-        (price_line(context, number, row, mods, premium_quote) for number, row in _numbered(rows)),
+        (price_line(markets, number, row, mods, premium_quote) for number, row in _numbered(rows)),
         key=lambda item: item[0],
     )
     results = [item[1] for item in calculated if item[1] is not None]
@@ -155,7 +169,7 @@ def price_lines(context, rows, mods, premium_quote="term_cash"):
     return results, errors
 
 
-def build_delta_hedges(context, rows, mods):
+def build_delta_hedges(markets, rows, mods):
     """Create fixed forward hedge positions from current option deltas.
 
     Returns ``(positions, errors)``; a line whose delta cannot be computed is
@@ -165,14 +179,13 @@ def build_delta_hedges(context, rows, mods):
     errors = []
     for line_number, source_row in _numbered(rows):
         try:
-            settings = context.settings
             row = source_row.copy()
-            row["valuation"] = context.valuation_date
-            pair = str(row.get("currency_pair", "")).strip().upper()
-            if not re.fullmatch(r"[A-Z]{6}", pair):
-                raise ValueError("Currency pair must contain two 3-letter ISO codes")
-            if pair != context.currency_pair:
-                raise ValueError("Market data does not match this currency pair")
+            row["valuation"] = markets.valuation_date
+            pair = _line_pair(row)
+            context = market_for_pair(
+                markets, pair, "Market data does not match this currency pair"
+            )
+            settings = context.settings
             row["currency_pair"] = pair
             expiry = context.resolve_market_expiry(row["expiry"])
             row["expiry"] = expiry
@@ -190,7 +203,7 @@ def build_delta_hedges(context, rows, mods):
                 raise ValueError("Smile-adjusted delta is invalid")
             key = (pair, expiry, forward_rate)
             grouped[key] = grouped.get(key, 0.0) - smile_delta / forward_delta_factor(
-                market, expiry, context.valuation_date
+                market, expiry, markets.valuation_date
             )
         except Exception as exc:
             errors.append("Line {} hedge: {}".format(line_number, exc))
@@ -211,13 +224,13 @@ def build_delta_hedges(context, rows, mods):
     return positions, errors
 
 
-def hedge_trades_for(context, results):
+def hedge_trades_for(markets, results):
     """Forward trades that flatten the priced lines' smile delta, per expiry.
 
     Returns ``(trades, errors)``. A hedge group that cannot be valued is
     reported and skipped; it never stops the other groups or the pricing.
     """
-    valuation_date = context.valuation_date
+    valuation_date = markets.valuation_date
     grouped = {}
     for result in results:
         key = (result["currency_pair"], result["expiry"], float(result["_forward_rate"]))
@@ -227,6 +240,7 @@ def hedge_trades_for(context, results):
         try:
             if not np.isfinite(net_smile_delta):
                 raise ValueError("Smile-adjusted delta is invalid")
+            context = market_for_pair(markets, pair)
             market = context.market_for_expiry(expiry)
             hedge_delta_factor = forward_delta_factor(market, expiry, valuation_date)
             base_amount = -net_smile_delta / hedge_delta_factor
@@ -265,7 +279,7 @@ def hedge_trades_for(context, results):
     return trades, errors
 
 
-def resolve_strike_aliases(context, rows):
+def resolve_strike_aliases(markets, rows):
     """Convert resolvable delta and ATM aliases to numeric input strikes.
 
     Returns ``(resolved_rows, changed, failures)``. Half-typed aliases stay
@@ -285,9 +299,13 @@ def resolve_strike_aliases(context, rows):
         except (TypeError, ValueError):
             pass
         try:
+            # A single market resolves every row on itself, as the one-pair
+            # Pricer always has; a set uses each row's own pair.
+            context = (markets.market(_line_pair(source_row))
+                       if isinstance(markets, MarketSet) else markets)
             settings = context.settings
             row = source_row.copy()
-            row["valuation"] = context.valuation_date
+            row["valuation"] = markets.valuation_date
             row["expiry"] = context.resolve_market_expiry(row["expiry"])
             market = context.market_for_expiry(row["expiry"])
             strike = resolve_strike(market, row, settings.atm_type, settings.delta_base)

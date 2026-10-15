@@ -198,6 +198,29 @@ def test_multi_pair_aggregation_matches_golden():
     _check("portfolio_all_pairs", run_portfolio())
 
 
+def test_market_set_prices_the_mixed_book_exactly_as_each_pair_alone():
+    """Routing through a MarketSet must not move a single golden number."""
+    from app import pricer
+    from app.market_set import MarketSet
+
+    payloads = load_markets(BUNDLE)
+    harnesses = {CASES[name][1]: AppHarness(payloads[CASES[name][1]]) for name in PORTFOLIO_CASES}
+    first = next(iter(harnesses.values()))
+    markets = MarketSet.from_payloads(payloads, first.valuation_date)
+    book = [line for pair, harness in harnesses.items()
+            for line in reference_portfolio(pair, harness.spot)]
+    results, errors = pricer.price_lines(markets, pd.DataFrame(book), first.mods)
+
+    alone = [dict(line, row=None) for name in PORTFOLIO_CASES for line in run_case(name)[0]]
+    assert _differences(_plain(alone), _plain([dict(line, row=None) for line in results])) == []
+    assert len(errors) == EXPECTED_REJECTED * len(PORTFOLIO_CASES)
+    assert sum("No market loaded for GBPUSD" in error for error in errors) == len(PORTFOLIO_CASES)
+    _check("portfolio_all_pairs", _plain({
+        "cases": list(PORTFOLIO_CASES),
+        "aggregation": ui.aggregate_pricer_results_by_pair(results).to_dict("records"),
+    }))
+
+
 def test_reference_portfolio_exercises_expected_paths():
     """Guard the fixture itself: priced lines price and rejected lines fail."""
     for name in PORTFOLIO_CASES:
