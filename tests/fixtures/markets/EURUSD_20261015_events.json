@@ -1,0 +1,148 @@
+{
+  "format": "market",
+  "currency_pair": "EURUSD",
+  "valuation_date": "2026-10-15",
+  "spot": 1.1213,
+  "forward_divisor": 10000.0,
+  "broker_strangle": true,
+  "rate_compounding": "simple",
+  "vol_data": [
+    {
+      "tenor": "1W",
+      "expiry": "2026-10-22T00:00:00.000Z",
+      "atm": 6.03,
+      "rr_25": -0.335,
+      "bf_25": 0.15,
+      "rr_10": -0.625,
+      "bf_10": 0.51
+    },
+    {
+      "tenor": "2W",
+      "expiry": "2026-10-29T00:00:00.000Z",
+      "atm": 6.44,
+      "rr_25": -0.393,
+      "bf_25": 0.152,
+      "rr_10": -0.735,
+      "bf_10": 0.53
+    },
+    {
+      "tenor": "1M",
+      "expiry": "2026-11-17T00:00:00.000Z",
+      "atm": 6.17,
+      "rr_25": -0.53,
+      "bf_25": 0.167,
+      "rr_10": -0.998,
+      "bf_10": 0.59
+    },
+    {
+      "tenor": "2M",
+      "expiry": "2026-12-17T00:00:00.000Z",
+      "atm": 6.257,
+      "rr_25": -0.57,
+      "bf_25": 0.19,
+      "rr_10": -1.057,
+      "bf_10": 0.678
+    },
+    {
+      "tenor": "3M",
+      "expiry": "2027-01-15T00:00:00.000Z",
+      "atm": 6.087,
+      "rr_25": -0.58,
+      "bf_25": 0.2,
+      "rr_10": -1.078,
+      "bf_10": 0.71
+    },
+    {
+      "tenor": "6M",
+      "expiry": "2027-04-15T00:00:00.000Z",
+      "atm": 6.338,
+      "rr_25": -0.593,
+      "bf_25": 0.248,
+      "rr_10": -1.113,
+      "bf_10": 0.877
+    },
+    {
+      "tenor": "9M",
+      "expiry": "2027-07-15T00:00:00.000Z",
+      "atm": 6.705,
+      "rr_25": -0.63,
+      "bf_25": 0.27,
+      "rr_10": -1.205,
+      "bf_10": 1.008
+    },
+    {
+      "tenor": "1Y",
+      "expiry": "2027-10-15T00:00:00.000Z",
+      "atm": 6.83,
+      "rr_25": -0.655,
+      "bf_25": 0.32,
+      "rr_10": -1.24,
+      "bf_10": 1.145
+    }
+  ],
+  "forward_points": [
+    {
+      "tenor": "1W",
+      "delivery_date": "2026-10-26T00:00:00.000Z",
+      "fwd_pts": 3.09,
+      "term_discount": 0.042926
+    },
+    {
+      "tenor": "2W",
+      "delivery_date": "2026-11-02T00:00:00.000Z",
+      "fwd_pts": 6.415,
+      "term_discount": 0.042926
+    },
+    {
+      "tenor": "1M",
+      "delivery_date": "2026-11-19T00:00:00.000Z",
+      "fwd_pts": 14.29,
+      "term_discount": 0.042987
+    },
+    {
+      "tenor": "2M",
+      "delivery_date": "2026-12-21T00:00:00.000Z",
+      "fwd_pts": 29.97,
+      "term_discount": 0.043069
+    },
+    {
+      "tenor": "3M",
+      "delivery_date": "2027-01-20T00:00:00.000Z",
+      "fwd_pts": 44.81,
+      "term_discount": 0.043144
+    },
+    {
+      "tenor": "6M",
+      "delivery_date": "2027-04-19T00:00:00.000Z",
+      "fwd_pts": 88.805,
+      "term_discount": 0.045242
+    },
+    {
+      "tenor": "9M",
+      "delivery_date": "2027-07-19T00:00:00.000Z",
+      "fwd_pts": 134.265,
+      "term_discount": 0.046806
+    },
+    {
+      "tenor": "1Y",
+      "delivery_date": "2027-10-19T00:00:00.000Z",
+      "fwd_pts": 180.41,
+      "term_discount": 0.047724
+    }
+  ],
+  "event_calendar": [
+    {
+      "event_date": "2026-10-20T00:00:00.000Z",
+      "variance_days": 1.0
+    },
+    {
+      "event_date": "2026-11-04T00:00:00.000Z",
+      "variance_days": 2.0
+    },
+    {
+      "event_date": "2026-12-09T00:00:00.000Z",
+      "variance_days": 1.5
+    }
+  ],
+  "note": "SYNTHETIC test fixture: EURUSD 2026-10-15 from MARKETS_20261015.json with made-up event weights, one before the 1W pillar, one between 2W and 1M, one between 1M and 2M. Not market data."
+}
