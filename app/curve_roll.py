@@ -55,6 +55,24 @@ def next_business_day(pair, valuation) -> date:
     return day.date()
 
 
+#: Expiry inputs that mean an overnight option.
+OVERNIGHT_TENORS = {"ON", "O/N", "1D"}
+
+
+def overnight_expiry(pair, valuation) -> date:
+    """Return the O/N option expiry: the pair's next good business day.
+
+    Falls back to the next FX trading day when the pair has no conventions.
+    """
+    try:
+        import QuantLib as ql
+        from helper_functions.fx_conventions import joint_calendar
+        return _from_ql(joint_calendar(pair).advance(
+            _ql_date(valuation), ql.Period(1, ql.Days), ql.Following))
+    except Exception:
+        return next_business_day(pair, valuation)
+
+
 def spot_date(pair, valuation) -> date:
     """Return the pair's spot date, falling back to two weekdays."""
     try:

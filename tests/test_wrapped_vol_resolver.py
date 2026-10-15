@@ -26,11 +26,23 @@ def test_public_default_and_benchmark():
                           [resolver.get_vol_for_strike(k) for k in strikes])
 
 
-def test_unmatched_sabr_conversion_degrades_to_unchanged_legacy_model():
+def test_unmatched_sabr_conversion_is_a_visible_fallback_not_legacy():
     m = market()
+    resolver = WrappedVolResolver(m, "2026-12-02", "2026-10-02", model="vv-sabr")
+    assert not resolver.diagnostics.degraded
+    assert resolver.diagnostics.fallback
+    assert resolver.diagnostics.stage == "conversion"
+    assert "VV two-vol butterflies" in resolver.diagnostics.reason
+    vv = WrappedVolResolver(m, "2026-12-02", "2026-10-02", model="vv")
+    assert resolver.prepared.resolved.bf_10 == vv.prepared.resolved.bf_10
+    assert resolver.get_vol_for_strike(1.1) != resolver.benchmark(1.1)
+
+
+def test_unconvertible_quotes_degrade_to_unchanged_legacy_model():
+    m = market()
+    m.v_atm, m.rr_25, m.rr_10, m.bf_25, m.bf_10 = 8.0, -4.0, -7.5, .4, 1.5
     with pytest.warns(DegradedSmileWarning, match="conversion"):
-        resolver = WrappedVolResolver(
-            m, "2026-12-02", "2026-10-02", model="vv-sabr")
+        resolver = WrappedVolResolver(m, "2026-12-02", "2026-10-02", model="vv")
     assert resolver.diagnostics.degraded
     assert resolver.diagnostics.stage == "conversion"
     assert resolver.get_vol_for_strike(1.1) == resolver.benchmark(1.1)

@@ -84,7 +84,53 @@ def test_conversion_precedes_variance_interpolation_and_reused_once(monkeypatch)
     assert collector.records() == ()
 
 
-def test_sabr_failure_retains_model_and_whole_original_curve():
+def fail_pillars(monkeypatch, dates=None):
+    """Make the curve's pillar conversion fail at ``dates`` (all if None)."""
+    from dataclasses import replace
+    from wrapped_vol_resolver import SmileDiagnostics
+    import app.market_service as service
+    original = service.prepared_smile
+
+    def failing(market, expiry, valuation, model, broker):
+        p = original(market, expiry, valuation, model, broker)
+        if dates is None or str(expiry)[:10] in dates:
+            return replace(p, diagnostics=SmileDiagnostics(
+                "degraded", "synthetic pillar failure", "conversion"),
+                resolved=None, pillars=None, _core=None)
+        return p
+    monkeypatch.setattr(service, "prepared_smile", failing)
+
+
+def test_sabr_curve_converts_with_vv_butterflies_as_visible_fallback():
+    vv_build, _ = app_curve(model="vv")
+    build, collector = app_curve(model="vv-sabr")
+    market = build("2026-11-17")
+    assert not market.force_legacy_smile and market.smile_model == "vv-sabr"
+    expected = vv_build("2026-11-17")
+    assert market.bf_25 == pytest.approx(expected.bf_25, abs=1e-12)
+    assert market.bf_10 == pytest.approx(expected.bf_10, abs=1e-12)
+    status, reason = market_diagnostics(market, "2026-11-17")
+    assert status == "fallback"
+    assert "conversion fallback at 1M, 2M" in reason
+
+
+def test_one_failed_pillar_borrows_the_neighbouring_strangle_adjustment(monkeypatch):
+    fail_pillars(monkeypatch, {"2026-12-02"})
+    build, collector = app_curve()
+    first, failed = build("2026-11-02"), build("2026-12-02")
+    assert not first.force_legacy_smile and not failed.force_legacy_smile
+    # Same broker quotes on both pillars, so the 2M pillar takes the 1M
+    # pillar's adjustment exactly (flat beyond the last converted pillar).
+    assert first.bf_25 != pytest.approx(.2, abs=1e-6)
+    assert failed.bf_25 == pytest.approx(first.bf_25, abs=1e-9)
+    assert failed.bf_10 == pytest.approx(first.bf_10, abs=1e-9)
+    status, reason = market_diagnostics(failed, "2026-12-02")
+    assert status == "fallback"
+    assert "conversion failed at 2M" in reason
+
+
+def test_failure_of_every_pillar_retains_model_and_whole_original_curve(monkeypatch):
+    fail_pillars(monkeypatch)
     build, collector = app_curve(model="vv-sabr")
     with pytest.warns(DegradedSmileWarning):
         broken = build("2026-11-17")
@@ -267,19 +313,9 @@ def test_simple_rate_conversion_is_percentage_adapted(monkeypatch):
     assert rates == pytest.approx([5.123, 5.123])
 
 
-def test_one_failed_pillar_never_mixes_converted_and_original_quotes(monkeypatch):
-    from dataclasses import replace
-    from wrapped_vol_resolver import SmileDiagnostics
-    import app.market_service as service
-    original = service.prepared_smile
-    def one_failure(market, expiry, valuation, model, broker):
-        p = original(market, expiry, valuation, model, broker)
-        if str(expiry)[:10] == "2026-12-02":
-            return replace(p, diagnostics=SmileDiagnostics(
-                "degraded", "synthetic pillar failure", "conversion"),
-                           resolved=None, pillars=None, _core=None)
-        return p
-    monkeypatch.setattr(service, "prepared_smile", one_failure)
+def test_failed_curve_never_mixes_converted_and_original_quotes(monkeypatch):
+    """A failed pillar never feeds raw broker BFs into a converted curve."""
+    fail_pillars(monkeypatch)
     build, collector = app_curve()
     with pytest.warns(DegradedSmileWarning):
         first = build("2026-11-02")

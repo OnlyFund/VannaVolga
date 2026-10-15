@@ -11,7 +11,8 @@ from market_data import MarketData, Modifications
 from app.market_service import MarketService, pair_delivery
 from app.market_store import validate_market
 from app.curve_roll import (
-    anchor_forward_rows, next_business_day, roll_forward_rows, roll_vol_rows,
+    OVERNIGHT_TENORS, anchor_forward_rows, next_business_day, overnight_expiry,
+    roll_forward_rows, roll_vol_rows,
 )
 from app.smile_service import (
     DiagnosticsCollector, SurfaceCache, bind_cache, reuse_prepared, market_diagnostics,
@@ -367,9 +368,14 @@ def render_app():
         tenors while every tenor keeps its quotes, so a fixed expiry picks up
         the vol and forward-point roll-down. Pillar total variance is fixed by
         the quotes; events only distribute it between pillar dates, so a
-        passed event's share moves to the remaining days. Expiries before the
-        first pillar take the first pillar's total variance, distributed by
-        the variance-day weights.
+        passed event's share moves to the remaining days.
+
+        Expiries before the first pillar (O/N up to 1W) are priced from the
+        first pillar: total variance runs linearly in event-weighted variance
+        days from zero at the curve date, which is the same as deriving an
+        O/N node from the 1W quotes with the event weights and interpolating
+        between that node and 1W. Each of the five wing vols is scaled this
+        way, so RR and BF follow as a by-product.
         """
         curve_date = naive_date(valuation_date if as_of is None else as_of)
         requested_date = naive_date(expiry)
@@ -418,8 +424,6 @@ def render_app():
         # Before the first pillar the variance interpolation below runs from
         # zero at the curve date, so the short end carries the first pillar's
         # variance scaled by its own variance-day weights.
-        if target_date < rows["expiry"].iloc[0] and not allow_short_end:
-            raise ValueError("Expiry is before the first volatility pillar")
         if target_date > rows["expiry"].iloc[-1]:
             raise ValueError("Expiry is outside the quoted volatility range")
         for column in ("atm", "rr_25", "bf_25", "rr_10", "bf_10"):
@@ -511,8 +515,11 @@ def render_app():
                                           requested_date.date(), curve_date.date())
             market.deltaBase, market.atm_conv = context.premium_adjusted, context.atm_convention
             for pillar_date, prepared in zip(rows.expiry, curve_prepared):
+                # A pillar whose conversion failed carries interpolated
+                # quotes; its smile is built from them, not reused.
                 if (naive_date(pillar_date) == requested_date and market.s == spot and
-                        curve_date == naive_date(valuation_date)):
+                        curve_date == naive_date(valuation_date) and
+                        not prepared.diagnostics.degraded):
                     reuse_prepared(market, prepared)
                     break
         return market
@@ -521,6 +528,8 @@ def render_app():
     def resolve_market_expiry(value):
         """Resolve pillar tenor strings to their configured expiry dates."""
         token = str(value).strip().upper()
+        if token in OVERNIGHT_TENORS:
+            return overnight_expiry(currency_pair, valuation_date)
         rows = st.session_state.vol_rows
         matches = rows[rows["tenor"].astype(str).str.strip().str.upper() == token]
         if len(matches) > 1:

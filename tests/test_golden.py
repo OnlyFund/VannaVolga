@@ -60,16 +60,21 @@ def reference_portfolio(pair, spot):
         line("25d", "1Y", "CALL", "BUY", "1m", 15_000.0, base),
         line(k(1.03), "21jan27", "CALL", "SELL", "4m"),
         line(k(0.95), "10/05/2027", "PUT", "BUY", "1,000,000"),
-        # Rejected today: before the first pillar, expiring today, beyond the
-        # last pillar, and a pair with no loaded market.
+        # Before the first (1W) pillar: priced from the O/N-to-1W short end.
         line(k(1.00), "2026-10-19", "CALL", "BUY", "1m"),
+        # Rejected: expiring today, beyond the last pillar, and a pair with
+        # no loaded market.
         line(k(1.00), "2026-10-15", "CALL", "BUY", "1m"),
         line(k(1.00), "2027-12-15", "CALL", "BUY", "1m"),
         line("1.10", "1M", "CALL", "BUY", "1m", currency_pair="GBPUSD"),
     ]
 
 
+#: Leading lines used for delta hedges and spot ladders (the short-end line
+#: is priced but left out, so those outputs stay comparable).
 PRICED_LINES = 9
+#: Lines of the reference portfolio that price and that must be rejected.
+EXPECTED_PRICED, EXPECTED_REJECTED = 10, 3
 
 #: name -> (market file, pair, model, run spot ladders). Ladders are the slow
 #: part (~10 s each under vv, ~6x that under vv-sabr), so they run on one
@@ -197,5 +202,5 @@ def test_reference_portfolio_exercises_expected_paths():
     """Guard the fixture itself: priced lines price and rejected lines fail."""
     for name in PORTFOLIO_CASES:
         output = run_case(name)[1]
-        assert len(output["lines"]) == PRICED_LINES, name
-        assert len(output["errors"]) == 4, name
+        assert len(output["lines"]) == EXPECTED_PRICED, name
+        assert len(output["errors"]) == EXPECTED_REJECTED, name

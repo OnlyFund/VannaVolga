@@ -26,7 +26,9 @@ def minimize_calls(monkeypatch):
     return calls
 
 
-def test_legacy_fallback_calibrates_once_and_matches_fresh_legacy(minimize_calls):
+def test_legacy_fallback_calibrates_once_and_matches_fresh_legacy(minimize_calls, monkeypatch):
+    from test_app_wrapped_smile import fail_pillars
+    fail_pillars(monkeypatch)
     build, collector = app_curve(model="vv-sabr")
     cache = SurfaceCache()
     bind_cache(collector.token, cache)

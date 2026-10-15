@@ -33,8 +33,15 @@ class DiagnosticsCollector:
             return tuple(self._records)
 
 
-def record(market, model, expiry, reason):
+#: Prefix marking a diagnostics record as a documented fallback rather than
+#: a degradation to the legacy model.
+FALLBACK_PREFIX = "fallback - "
+
+
+def record(market, model, expiry, reason, status="degraded"):
     reason = re.sub(r"^evaluation at strike [^:]+:", "evaluation:", str(reason))
+    if status == "fallback" and not reason.startswith(FALLBACK_PREFIX):
+        reason = FALLBACK_PREFIX + reason
     with _registry_lock:
         collector = _collectors.get(market.diagnostics_token)
     if collector is not None:
@@ -111,8 +118,8 @@ def prepared_smile(market, expiry, valuation, model, broker=None, beta=.5):
     prepared = _cache_for(market).get("prepared", key, lambda: prepare_smile(
         market, str(expiry)[:10], str(valuation)[:10],
         model=model, broker_strangle=broker, beta=beta))
-    if prepared.diagnostics.degraded:
-        record(market, model, expiry, prepared.diagnostics.reason)
+    if prepared.diagnostics.degraded or prepared.diagnostics.fallback:
+        record(market, model, expiry, prepared.diagnostics.reason, prepared.diagnostics.status)
     return prepared
 
 
@@ -196,7 +203,13 @@ def market_diagnostics(market, expiry=None):
     reasons = tuple(dict.fromkeys(
         r[2] for r in records
         if expiry is None or r[1] in ("curve", str(expiry)[:10])))
-    return ("degraded" if reasons else "resolved"), "; ".join(reasons)
+    if not reasons:
+        status = "resolved"
+    elif all(reason.startswith(FALLBACK_PREFIX) for reason in reasons):
+        status = "fallback"
+    else:
+        status = "degraded"
+    return status, "; ".join(reasons)
 
 
 class AppSabrResolver(AppVolResolver):

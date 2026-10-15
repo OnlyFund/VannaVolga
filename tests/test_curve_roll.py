@@ -46,7 +46,8 @@ def app_curve(events=None):
     render = next(n for n in source.body
                   if isinstance(n, ast.FunctionDef) and n.name == "render_app")
     names = {"naive_date", "variance_days_between", "forward_curve",
-             "forward_points_for_expiry", "term_discount_for_expiry", "market_for_expiry"}
+             "forward_points_for_expiry", "term_discount_for_expiry", "market_for_expiry",
+             "resolve_market_expiry"}
     module = ast.Module(body=[n for n in render.body
                              if isinstance(n, ast.FunctionDef) and n.name in names])
     exec(compile(module, ui.__file__, "exec"), namespace)
@@ -192,6 +193,45 @@ def test_short_end_takes_first_pillar_variance_by_event_weights():
     # The event inside the short window raises its share of the variance.
     plain = app_curve()["market_for_expiry"](expiry, as_of=T1, allow_short_end=True)
     assert short.v_atm > plain.v_atm
+
+
+def test_expiry_before_the_first_pillar_prices_today():
+    build = app_curve()["market_for_expiry"]
+    short = build("2026-10-06")                 # before the 1W pillar, at T0
+    assert 0.0 < short.v_atm < 8.0 * 1.5
+    with pytest.raises(ValueError, match="after the valuation date"):
+        build(T0)
+
+
+def test_overnight_input_resolves_to_the_next_good_business_day():
+    from app.curve_roll import overnight_expiry
+    resolve = app_curve()["resolve_market_expiry"]
+    assert overnight_expiry(PAIR, T0) == date(2026, 10, 5)      # Friday -> Monday
+    for token in ("ON", "o/n", "1D"):
+        assert resolve(token) == date(2026, 10, 5)
+
+
+def test_short_end_equals_an_overnight_node_interpolated_to_1w():
+    """O/N vol from 1W and the event weights, then interpolated O/N -> 1W."""
+    from app.curve_roll import overnight_expiry
+    namespace = app_curve(events=[(pd.Timestamp("2026-10-07"), 2.0)])
+    build, vdays = namespace["market_for_expiry"], namespace["variance_days_between"]
+    curve = pd.Timestamp(T0)
+    on, week = pd.Timestamp(overnight_expiry(PAIR, T0)), pd.Timestamp(EXPIRIES[0])
+    days = lambda d: (d - curve).days
+
+    # Explicit O/N node: 1W total variance scaled by its share of variance days.
+    week_variance = 8.0 ** 2 * days(week)
+    on_variance = week_variance * vdays(curve, on) / vdays(curve, week)
+    assert build(on).v_atm == pytest.approx(np.sqrt(on_variance / days(on)), rel=1e-9)
+
+    # Between the node and 1W: linear in variance days between the two nodes.
+    for expiry in (pd.Timestamp("2026-10-06"), pd.Timestamp("2026-10-07")):
+        weight = (vdays(curve, expiry) - vdays(curve, on)) / (vdays(curve, week) - vdays(curve, on))
+        variance = on_variance + weight * (week_variance - on_variance)
+        assert build(expiry).v_atm == pytest.approx(np.sqrt(variance / days(expiry)), rel=1e-9)
+    # The event on 10-07 carries extra variance into that expiry.
+    assert build("2026-10-07").v_atm > build("2026-10-06").v_atm
 
 
 def test_forward_curve_is_anchored_at_zero_points_on_spot_date():

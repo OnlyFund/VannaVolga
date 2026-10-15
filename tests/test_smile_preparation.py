@@ -18,7 +18,8 @@ from test_resolved_smile_inputs import market
 def test_joint_vv_conversion_matches_actual_broker_premiums(pair, expiry):
     raw = MarketSnapshot.capture(market(pair))
     ctx = resolve_conventions(raw, expiry, "2026-10-02")
-    quotes, pillars, core, matches = prepare_core(raw, ctx, "vv", True)
+    quotes, pillars, core, matches, note = prepare_core(raw, ctx, "vv", True)
+    assert note is None
     assert len(matches) == 2
     assert all(abs(match.residual) <= match.tolerance for match in matches)
     for match in matches:
@@ -51,11 +52,75 @@ def test_vv_joint_conversion_supports_delta_and_adjustment_conventions(delta, pa
                prepare_core(raw, ctx, "vv", True)[3])
 
 
-def test_sabr_without_a_premium_match_fails_explicitly():
+def test_sabr_without_a_premium_match_uses_the_vv_butterflies_visibly():
     raw = MarketSnapshot.capture(market())
     ctx = resolve_conventions(raw, "2026-12-02", "2026-10-02")
-    with pytest.raises(PreparationError, match="premium residual"):
-        prepare_core(raw, ctx, "vv-sabr", True)
+    vv_quotes = prepare_core(raw, ctx, "vv", True)[0]
+    quotes, pillars, core, matches, note = prepare_core(raw, ctx, "vv-sabr", True)
+    # SABR's three parameters cannot reprice both strangles here...
+    assert not all(abs(m.residual) <= m.tolerance for m in matches)
+    # ...so it is built on the exact VV conversion, and says so.
+    assert (quotes.bf_25, quotes.bf_10) == (vv_quotes.bf_25, vv_quotes.bf_10)
+    assert "cannot reprice both broker strangles" in note
+    assert "VV two-vol butterflies" in note
+    assert type(core).__name__ == "VannaVolgaSABRCore"
+
+
+def test_sabr_core_failure_falls_back_to_vv_on_the_same_pillars(monkeypatch):
+    import smile_preparation
+    original = smile_preparation.make_core
+
+    def no_sabr(model, *args, **kwargs):
+        if model == "vv-sabr":
+            raise PreparationError("legacy SABR calibration did not converge")
+        return original(model, *args, **kwargs)
+    monkeypatch.setattr(smile_preparation, "make_core", no_sabr)
+    raw = MarketSnapshot.capture(market())
+    ctx = resolve_conventions(raw, "2026-12-02", "2026-10-02")
+    for broker in (True, False):
+        quotes, pillars, core, _, note = prepare_core(raw, ctx, "vv-sabr", broker)
+        assert type(core).__name__ == "VannaVolgaCore"
+        assert "using the VV smile on the same pillars" in note
+
+
+def test_vv_conversion_failure_still_raises():
+    """VV has no further fallback inside one pillar; the curve layer handles it."""
+    m = market()
+    # Steep skew with small butterflies: no butterflies reprice both strangles.
+    m.v_atm, m.rr_25, m.rr_10, m.bf_25, m.bf_10 = 8.0, -4.0, -7.5, .4, 1.5
+    raw = MarketSnapshot.capture(m)
+    ctx = resolve_conventions(raw, "2026-12-02", "2026-10-02")
+    with pytest.raises(PreparationError, match="joint vv conversion"):
+        prepare_core(raw, ctx, "vv", True)
+
+
+def test_unsolvable_broker_strike_degrades_instead_of_crashing(monkeypatch):
+    import smile_preparation
+    from helper_functions.fx_strangle_converter import ConvergenceError
+
+    def no_strike(*args, **kwargs):
+        raise ConvergenceError("premium-adjusted call has no strike")
+    monkeypatch.setattr(smile_preparation, "_strike_from_delta", no_strike)
+    raw = MarketSnapshot.capture(market())
+    ctx = resolve_conventions(raw, "2026-12-02", "2026-10-02")
+    with pytest.raises(PreparationError, match="broker strangle strikes"):
+        prepare_core(raw, ctx, "vv", True)
+
+
+def test_arbitrage_failsafe_rejects_non_convex_pillars():
+    from smile_preparation import check_pillars_arbitrage_free
+    from resolved_smile_inputs import Pillars
+    raw = MarketSnapshot.capture(market())
+    ctx = resolve_conventions(raw, "2026-12-02", "2026-10-02")
+    good = prepare_core(raw, ctx, "vv", True)[1]
+    check_pillars_arbitrage_free(ctx, good)
+    # A modest ATM vol spike makes the ATM call too expensive between its
+    # wings (not convex); a large one even makes calls rise with strike.
+    for atm_vol, problem in ((good.vols[2] + 3.0, "convex"), (40.0, "decreasing")):
+        spiked = Pillars(good.strikes, (good.vols[0], good.vols[1], atm_vol,
+                                        good.vols[3], good.vols[4]))
+        with pytest.raises(PreparationError, match=problem):
+            check_pillars_arbitrage_free(ctx, spiked)
 
 
 def test_sabr_successful_conversion_matches_both_broker_premiums(monkeypatch):
@@ -64,7 +129,8 @@ def test_sabr_successful_conversion_matches_both_broker_premiums(monkeypatch):
     m.bf_25, m.bf_10 = .1, .3
     raw = MarketSnapshot.capture(m)
     ctx = resolve_conventions(raw, "2026-12-02", "2026-10-02")
-    _, _, core, matches = prepare_core(raw, ctx, "vv-sabr", True)
+    _, _, core, matches, note = prepare_core(raw, ctx, "vv-sabr", True)
+    assert note is None
     assert all(abs(match.residual) <= match.tolerance for match in matches)
     monkeypatch.setattr(core, "_new_legacy_model",
                         lambda *args: pytest.fail("strike queries must reuse calibration"))
@@ -84,10 +150,10 @@ def test_zero_rr_identity_and_no_conversion():
     m.rr_25 = m.rr_10 = 0
     raw = MarketSnapshot.capture(m)
     ctx = resolve_conventions(raw, "2026-12-02", "2026-10-02")
-    quotes, _, _, _ = prepare_core(raw, ctx, "vv", True)
+    quotes, _, _, _, _ = prepare_core(raw, ctx, "vv", True)
     assert quotes.bf_25 == pytest.approx(raw.bf_25, abs=1e-8)
     assert quotes.bf_10 == pytest.approx(raw.bf_10, abs=1e-8)
-    quotes, _, _, matches = prepare_core(raw, ctx, "vv-sabr", False)
+    quotes, _, _, matches, _ = prepare_core(raw, ctx, "vv-sabr", False)
     assert quotes.bf_25 == raw.bf_25
     assert quotes.bf_10 == raw.bf_10
     assert matches == ()

@@ -2,12 +2,13 @@
 from collections import OrderedDict
 import warnings
 
+import numpy as np
 import pandas as pd
 from pandas.tseries.offsets import BDay
 
 from market_data import MarketData
 from helper_functions.fx_discounting import delivery_date
-from app.smile_service import prepared_smile, cache_key
+from app.smile_service import FALLBACK_PREFIX, prepared_smile, cache_key
 from wrapped_vol_resolver import DegradedSmileWarning
 
 
@@ -55,8 +56,8 @@ class MarketService:
                      for m, row in zip(markets, rows.itertuples())))
         if key in self.cache:
             self.cache.move_to_end(key)
-            converted, reasons, prepared = self.cache[key]
-            for reason in reasons:
+            converted, reasons, prepared, notes = self.cache[key]
+            for reason in reasons + notes:
                 self.collector.append((model, "curve", reason))
             return converted.copy(), reasons, prepared
         prepared = []
@@ -65,21 +66,60 @@ class MarketService:
                 self.progress(index, len(markets), getattr(row, "tenor", str(row.expiry)[:10]))
             prepared.append(prepared_smile(m, row.expiry, valuation, model, broker))
         prepared = tuple(prepared)
-        reasons = tuple(dict.fromkeys(
-            p.diagnostics.reason for p in prepared if p.diagnostics.degraded))
-        converted = rows.copy()
-        if not reasons:
-            for index, p in zip(converted.index, prepared):
-                for column, attr in (("atm", "atm"), ("rr_25", "rr_25"),
-                                     ("rr_10", "rr_10"), ("bf_25", "bf_25"),
-                                     ("bf_10", "bf_10")):
-                    converted.at[index, column] = getattr(p.resolved, attr)
-        else:
-            for reason in reasons:
-                self.collector.append((model, "curve", reason))
+        converted, reasons, notes = convert_pillars(rows, prepared)
+        for reason in reasons + notes:
+            self.collector.append((model, "curve", reason))
+        if reasons:
             warnings.warn("Smile curve preparation failed; using original quotes.",
                           DegradedSmileWarning, stacklevel=2)
-        self.cache[key] = (converted.copy(), reasons, prepared)
+        self.cache[key] = (converted.copy(), reasons, prepared, notes)
         if len(self.cache) > 64:
             self.cache.popitem(last=False)
         return converted, reasons, prepared
+
+
+_QUOTE_COLUMNS = ("atm", "rr_25", "rr_10", "bf_25", "bf_10")
+
+
+def convert_pillars(rows, prepared):
+    """Replace broker quotes with converted two-vol quotes, pillar by pillar.
+
+    Returns ``(converted, reasons, notes)``. A pillar whose conversion failed
+    keeps its ATM and risk reversals and takes the strangle adjustment
+    (two-vol minus broker butterfly) interpolated by expiry from the pillars
+    that converted, flat beyond the first and last. ``notes`` describe those
+    and other fallbacks. Only when no pillar converted are ``reasons``
+    returned: the original quotes are kept and the caller uses the legacy
+    smile.
+    """
+    converted = rows.copy()
+    good = [not p.diagnostics.degraded for p in prepared]
+    if not any(good):
+        return converted, tuple(dict.fromkeys(p.diagnostics.reason for p in prepared)), ()
+    labels = [str(getattr(row, "tenor", str(row.expiry)[:10])) for row in rows.itertuples()]
+    ordinals = np.array([pd.Timestamp(e).toordinal() for e in rows["expiry"]], dtype=float)
+    adjustments = {}
+    for column in ("bf_25", "bf_10"):
+        adjustments[column] = np.array([
+            getattr(p.resolved, column) - float(rows.at[index, column]) if ok else np.nan
+            for index, p, ok in zip(rows.index, prepared, good)])
+    order = np.argsort(ordinals)
+    known = [i for i in order if good[i]]
+    for position, (index, p) in enumerate(zip(converted.index, prepared)):
+        if good[position]:
+            for column in _QUOTE_COLUMNS:
+                converted.at[index, column] = getattr(p.resolved, column)
+            continue
+        for column in ("bf_25", "bf_10"):
+            converted.at[index, column] = float(rows.at[index, column]) + float(np.interp(
+                ordinals[position], ordinals[known], adjustments[column][known]))
+    notes = []
+    failed = [label for label, ok in zip(labels, good) if not ok]
+    if failed:
+        notes.append(FALLBACK_PREFIX + "broker strangle conversion failed at {}; strangle "
+                     "adjustment interpolated from converted pillars".format(", ".join(failed)))
+    substituted = [label for label, p in zip(labels, prepared) if p.diagnostics.fallback]
+    if substituted:
+        notes.append(FALLBACK_PREFIX + "conversion fallback at {} (see pillar diagnostics)"
+                     .format(", ".join(substituted)))
+    return converted, (), tuple(notes)

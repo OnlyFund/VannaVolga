@@ -46,6 +46,8 @@ class DegradedSmileWarning(RuntimeWarning):
 
 @dataclass(frozen=True)
 class SmileDiagnostics:
+    """``status`` is "resolved", "fallback" (a documented substitute was used
+    and ``reason`` says which) or "degraded" (the legacy model was used)."""
     status: str
     reason: Optional[str] = None
     stage: Optional[str] = None
@@ -56,6 +58,10 @@ class SmileDiagnostics:
     @property
     def degraded(self):
         return self.status == "degraded"
+
+    @property
+    def fallback(self):
+        return self.status == "fallback"
 
 
 @dataclass(frozen=True)
@@ -111,9 +117,13 @@ def prepare_smile(market, expiry_date, valuation_date, model="vv",
     try:
         ctx = resolve_conventions(raw, expiry, valuation)
         stage = "conversion" if broker_strangle else "preparation"
-        quotes, pillars, core, matches = prepare_core(raw, ctx, model, broker_strangle, beta)
+        quotes, pillars, core, matches, note = prepare_core(
+            raw, ctx, model, broker_strangle, beta)
         diagnostics = SmileDiagnostics(
-            "resolved", premium_matches=matches,
+            "fallback" if note else "resolved",
+            "{}: {}".format(stage, note) if note else None,
+            stage if note else None,
+            premium_matches=matches,
             sabr_parameters=getattr(core, "parameters", None),
             sabr_calibration_relative_rms=getattr(core, "calibration_relative_rms", None))
     except (PreparationError, FloatingPointError, OverflowError) as exc:
