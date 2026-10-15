@@ -36,14 +36,15 @@ def test_linear_weights_split_between_neighbours_and_clamp():
 
 def test_option_on_a_bucket_lands_in_one_cell():
     grid = strike_grid([line(0.25)], TENORS, DATES, "vega")
+    assert TOTAL not in grid.columns and TOTAL not in grid.index     # no totals by default
     assert grid.at["1M", "25C"] == pytest.approx(100.0)
-    assert grid.drop(index=TOTAL).drop(columns=TOTAL).values.sum() == pytest.approx(100.0)
+    assert grid.values.sum() == pytest.approx(100.0)
 
 
 def test_intermediate_delta_and_expiry_are_split_proportionally():
     # 22.5 call delta: half 20C, half 25C. Expiry 1/4 of the way from 1M to 3M.
     quarter = date.fromordinal(DATES[0].toordinal() + (DATES[1].toordinal() - DATES[0].toordinal()) // 4)
-    grid = strike_grid([line(0.225, quarter)], TENORS, DATES, "vega")
+    grid = strike_grid([line(0.225, quarter)], TENORS, DATES, "vega", totals=True)
     share = (quarter.toordinal() - DATES[0].toordinal()) / (DATES[1].toordinal() - DATES[0].toordinal())
     assert grid.at["1M", "20C"] == pytest.approx(50.0 * (1 - share))
     assert grid.at["3M", "25C"] == pytest.approx(50.0 * share)
@@ -53,9 +54,9 @@ def test_intermediate_delta_and_expiry_are_split_proportionally():
 def test_totals_equal_the_portfolio_and_hedges_go_to_the_last_call_bucket():
     lines = [line(0.62, vega=40.0, delta=1e6), line(0.08, DATES[1], vega=-15.0, delta=-2e5),
              RiskLine("H", DATES[0], None, {"delta": -8e5})]
-    vega = strike_grid(lines, TENORS, DATES, "vega")
+    vega = strike_grid(lines, TENORS, DATES, "vega", totals=True)
     assert vega.at[TOTAL, TOTAL] == pytest.approx(25.0)
-    delta = strike_grid(lines, TENORS, DATES, "delta")
+    delta = strike_grid(lines, TENORS, DATES, "delta", totals=True)
     assert delta.at["1M", "5C"] == pytest.approx(-8e5)
     assert delta.at[TOTAL, TOTAL] == pytest.approx(0.0)
     buckets = greek_buckets(lines, TENORS, DATES)
@@ -93,7 +94,7 @@ def test_risk_lines_from_a_booked_book(tmp_path):
     deltas = sorted(l.call_delta for l in lines if l.call_delta is not None)
     assert deltas[0] == pytest.approx(0.25, abs=0.03) and deltas[-1] == pytest.approx(0.75, abs=0.03)
     labels, dates, tenor_errors = tenor_axis(markets.market("EURUSD"))
-    grid = strike_grid(lines, labels, dates, "delta")
+    grid = strike_grid(lines, labels, dates, "delta", totals=True)
     assert grid.at[TOTAL, TOTAL] == pytest.approx(0.0, abs=1e-6)     # hedged book
     assert grid[TOTAL].drop(TOTAL).sum() == pytest.approx(0.0, abs=1e-6)
     store.close()

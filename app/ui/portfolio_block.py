@@ -172,12 +172,11 @@ def premium_currency_options(market_pair, pairs=()):
     return (options, default) if options else (["BASE", "TERM"], "TERM")
 
 
-def render_portfolio_block(portfolio_tab, ladder_tab, market_pair, quote_label="quote",
+def render_portfolio_block(portfolio_tab, market_pair, quote_label="quote",
                            pairs=()):
-    """Render pricer lines, hedge choice, and spot ladder inputs.
+    """Render the Pricer lines and the hedge choice.
 
-    ``pairs`` are the loaded markets: the grid offers their currencies and
-    the spot ladder chooses among them.
+    ``pairs`` are the loaded markets: the grid offers their currencies.
     """
     market_pair = str(market_pair).upper()
     premium_currencies, premium_default = premium_currency_options(market_pair, pairs)
@@ -393,41 +392,4 @@ def render_portfolio_block(portfolio_tab, ladder_tab, market_pair, quote_label="
             key="delta_hedge",
             help="Adds offsetting base-currency forward trades grouped by pair and expiry.",
         )
-    with ladder_tab:
-        st.subheader("Spot ladder")
-        ladder_pairs = list(dict.fromkeys(
-            [pair for pair in (market_pair, *pairs) if _is_pair_code(str(pair))]
-        )) or [market_pair]
-        if st.session_state.get("ladder_pair") not in ladder_pairs:
-            st.session_state["ladder_pair"] = ladder_pairs[0]
-        ladder_col0, ladder_col1, ladder_col2 = st.columns(3)
-        with ladder_col0:
-            ladder_pair = st.selectbox(
-                "Currency pair", ladder_pairs, key="ladder_pair",
-                help="Shocks this pair's spot and revalues its lines (and its "
-                     "forward hedges). Lines on other pairs are not included.",
-            )
-        with ladder_col1:
-            ladder_steps = st.number_input(
-                "Steps on each side of spot",
-                min_value=0,
-                max_value=20,
-                value=5,
-                step=1,
-                key="ladder_steps",
-            )
-        with ladder_col2:
-            ladder_increment = st.number_input(
-                "Spot increment (%)",
-                min_value=0.0001,
-                value=0.50,
-                step=0.05,
-                format="%.2f",
-                key="ladder_increment",
-            )
-        ladder_calculate = st.button(
-            "Calculate spot ladder", type="primary", key="calculate_spot_ladder"
-        )
-    
-    return (edited_rows, ladder_steps, ladder_increment, ladder_calculate, delta_hedge,
-            ladder_pair, ticked)
+    return edited_rows, delta_hedge, ticked

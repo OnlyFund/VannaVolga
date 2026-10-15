@@ -8,7 +8,7 @@ import streamlit as st
 from market_data import Modifications
 from app import pricer
 from app.market_context import (
-    MarketContextError, PricingSettings, build_context, interpolate_delivery_curve, naive_date,
+    PricingSettings, build_context, interpolate_delivery_curve, naive_date,
 )
 from app.market_set import MarketSet
 from app.market_service import MarketService
@@ -18,7 +18,6 @@ from app.smile_service import (
     SURFACE_CACHE_VERSION, DiagnosticsCollector, SurfaceCache, bind_cache,
 )
 from helper_functions.premium_quotes import PREMIUM_QUOTES, premium_quote_label
-from app.reports.spot_ladder import calculate_spot_ladder, render_spot_ladder
 from app.ui.market_block import render_market_block
 from app.ui.portfolio_block import (
     BOOK_COLUMN, GREEK_NAMES, TRADE_ID_COLUMN, render_portfolio_block,
@@ -212,8 +211,11 @@ def render_app():
             help="Applies to reported deltas and hedges only. Premium adjustment "
                  "uses the FX pair convention; smile pillars remain unchanged.",
         )
+        # Loading a market sets this key; a widget default as well would make
+        # Streamlit warn, so the default is applied only when the key is new.
+        st.session_state.setdefault("broker_strangle", True)
         broker_strangle = st.checkbox(
-            "BF quotes are broker strangles", value=True, key="broker_strangle",
+            "BF quotes are broker strangles", key="broker_strangle",
             help="Disable only for already converted two-vol butterflies.",
         )
         premium_quote_options = list(PREMIUM_QUOTES)
@@ -250,8 +252,8 @@ def render_app():
         )
 
     surface_progress = st.empty()
-    markets_tab, portfolio_tab, ladder_tab, blotter_tab, book_tab, risk_tab = st.tabs(
-        ["Markets", "Pricer", "Spot ladder", "Blotter", "Portfolio", "Risk"]
+    markets_tab, portfolio_tab, blotter_tab, book_tab, risk_tab = st.tabs(
+        ["Markets", "Pricer", "Blotter", "Portfolio", "Risk"]
     )
 
     spot, forward_divisor, currency_pair, vol_rows, forward_rows, event_rows = render_market_block(
@@ -365,9 +367,8 @@ def render_app():
 
 
     mods = Modifications(beta_atm=beta_atm, beta_rr=beta_rr, beta_bf=beta_bf)
-    (edited_rows, ladder_steps, ladder_increment, ladder_calculate, delta_hedge,
-     ladder_pair, ticked_lines) = render_portfolio_block(
-        portfolio_tab, ladder_tab,
+    edited_rows, delta_hedge, ticked_lines = render_portfolio_block(
+        portfolio_tab,
         market_pair=str(st.session_state.currency_pair).strip().upper(),
         quote_label=premium_quote_label(premium_quote, _base_ccy, _term_ccy),
         pairs=sorted(market_set.pairs),
@@ -571,55 +572,6 @@ def render_app():
             "roll theta when a hedge is enabled."
         )
 
-    if ladder_calculate:
-        ladder_spot, ladder_results, ladder_errors, skipped = spot, [], [], 0
-        with st.spinner("Calculating spot ladder..."):
-            mods = Modifications(beta_atm=beta_atm, beta_rr=beta_rr, beta_bf=beta_bf)
-            # The ladder shocks one pair's spot and revalues that pair's lines;
-            # lines on other pairs belong to other spots and are left out.
-            line_pairs = edited_rows["currency_pair"].astype(str).str.strip().str.upper()
-            ladder_rows = edited_rows[line_pairs == ladder_pair]
-            skipped = len(edited_rows) - len(ladder_rows)
-            try:
-                ladder_market = market_set.market(ladder_pair)
-                if getattr(ladder_market, "reason", None):
-                    raise MarketContextError(f"{ladder_pair} cannot price: {ladder_market.reason}")
-                if ladder_rows.empty:
-                    raise MarketContextError(f"No {ladder_pair} lines in the portfolio")
-            except MarketContextError as exc:
-                ladder_errors = [str(exc)]
-            else:
-                ladder_spot = float(ladder_market.spot)
-                ladder_spots = [
-                    ladder_spot * (1.0 + step * float(ladder_increment) / 100.0)
-                    for step in range(-int(ladder_steps), int(ladder_steps) + 1)
-                ]
-                forward_positions = []
-                hedge_errors = []
-                if delta_hedge:
-                    forward_positions, hedge_errors = pricer.build_delta_hedges(
-                        ladder_market, ladder_rows, mods
-                    )
-                if hedge_errors:
-                    ladder_errors = hedge_errors
-                else:
-                    ladder_results, ladder_errors = calculate_spot_ladder(
-                        list(ladder_rows.iterrows()),
-                        ladder_spots,
-                        valuation_date,
-                        ladder_market.market_for_expiry,
-                        ladder_market.resolve_market_expiry,
-                        pricing_model,
-                        atm_type,
-                        delta_base,
-                        mods,
-                        mode=spot_ladder_mode,
-                        forward_positions=forward_positions,
-                    )
-        render_spot_ladder(ladder_tab, ladder_results, ladder_errors, ladder_spot)
-        if skipped:
-            with ladder_tab:
-                st.caption(f"{skipped} line(s) on other pairs are not in the {ladder_pair} ladder.")
     render_blotter(blotter_tab)
     render_portfolio(book_tab, market_set, mods, premium_quote)
     render_risk(risk_tab, market_set, mods, premium_quote, spot_ladder_mode)

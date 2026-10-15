@@ -100,8 +100,9 @@ def _tenor_weights(expiry, tenor_dates):
     return linear_weights(pd.Timestamp(expiry).toordinal(), ordinals)
 
 
-def strike_grid(lines: Sequence[RiskLine], tenor_labels, tenor_dates, measure, step=5):
-    """Tenor x strike-bucket table of ``measure``, with totals.
+def strike_grid(lines: Sequence[RiskLine], tenor_labels, tenor_dates, measure, step=5,
+                totals=False):
+    """Tenor x strike-bucket table of ``measure``; ``totals`` adds a Total row and column.
 
     Forwards (``call_delta is None``) go to the last call bucket.
     """
@@ -119,8 +120,9 @@ def strike_grid(lines: Sequence[RiskLine], tenor_labels, tenor_dates, measure, s
             for column, strike_weight in strikes:
                 grid[tenor, column] += amount * tenor_weight * strike_weight
     frame = pd.DataFrame(grid, index=list(tenor_labels), columns=labels)
-    frame[TOTAL] = frame.sum(axis=1)
-    frame.loc[TOTAL] = frame.sum(axis=0)
+    if totals:
+        frame[TOTAL] = frame.sum(axis=1)
+        frame.loc[TOTAL] = frame.sum(axis=0)
     return frame
 
 
