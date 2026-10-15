@@ -1,0 +1,133 @@
+{
+  "currency_pair": "EURUSD",
+  "valuation_date": "2026-10-02",
+  "spot": 1.125,
+  "forward_divisor": 10000.0,
+  "broker_strangle": true,
+  "rate_compounding": "simple",
+  "vol_data": [
+    {
+      "tenor": "1w",
+      "expiry": "2026-10-09T00:00:00.000Z",
+      "atm": 6.388,
+      "rr_25": -1.345,
+      "bf_25": 0.21,
+      "rr_10": -2.465,
+      "bf_10": 0.6988
+    },
+    {
+      "tenor": "2W",
+      "expiry": "2026-10-16T00:00:00.000Z",
+      "atm": 6.372,
+      "rr_25": -1.338,
+      "bf_25": 0.205,
+      "rr_10": -2.475,
+      "bf_10": 0.7
+    },
+    {
+      "tenor": "1M",
+      "expiry": "2026-11-04T00:00:00.000Z",
+      "atm": 6.55,
+      "rr_25": -1.312,
+      "bf_25": 0.203,
+      "rr_10": -2.427,
+      "bf_10": 0.685
+    },
+    {
+      "tenor": "2M",
+      "expiry": "2026-12-03T00:00:00.000Z",
+      "atm": 6.51,
+      "rr_25": -1.265,
+      "bf_25": 0.22,
+      "rr_10": -2.358,
+      "bf_10": 0.773
+    },
+    {
+      "tenor": "3M",
+      "expiry": "2027-01-04T00:00:00.000Z",
+      "atm": 6.495,
+      "rr_25": -1.19,
+      "bf_25": 0.24,
+      "rr_10": -2.22,
+      "bf_10": 0.838
+    },
+    {
+      "tenor": "6M",
+      "expiry": "2027-04-02T00:00:00.000Z",
+      "atm": 6.76,
+      "rr_25": -1.062,
+      "bf_25": 0.282,
+      "rr_10": -1.985,
+      "bf_10": 1.03
+    },
+    {
+      "tenor": "9M",
+      "expiry": "2027-07-02T00:00:00.000Z",
+      "atm": 7.078,
+      "rr_25": -0.988,
+      "bf_25": 0.31,
+      "rr_10": -1.86,
+      "bf_10": 1.155
+    },
+    {
+      "tenor": "1Y",
+      "expiry": "2027-10-04T00:00:00.000Z",
+      "atm": 7.175,
+      "rr_25": -0.917,
+      "bf_25": 0.357,
+      "rr_10": -1.705,
+      "bf_10": 1.3
+    }
+  ],
+  "forward_points": [
+    {
+      "tenor": "1W",
+      "delivery_date": "2026-10-14T00:00:00.000Z",
+      "fwd_pts": 3.38,
+      "term_discount": 0.05
+    },
+    {
+      "tenor": "2W",
+      "delivery_date": "2026-10-20T00:00:00.000Z",
+      "fwd_pts": 6.55,
+      "term_discount": 0.05
+    },
+    {
+      "tenor": "1M",
+      "delivery_date": "2026-11-06T00:00:00.000Z",
+      "fwd_pts": 13.87,
+      "term_discount": 0.05
+    },
+    {
+      "tenor": "2M",
+      "delivery_date": "2026-12-07T00:00:00.000Z",
+      "fwd_pts": 29.45,
+      "term_discount": 0.05
+    },
+    {
+      "tenor": "3M",
+      "delivery_date": "2027-01-06T00:00:00.000Z",
+      "fwd_pts": 44.22,
+      "term_discount": 0.05
+    },
+    {
+      "tenor": "6M",
+      "delivery_date": "2027-04-06T00:00:00.000Z",
+      "fwd_pts": 89.32,
+      "term_discount": 0.05
+    },
+    {
+      "tenor": "9M",
+      "delivery_date": "2027-07-07T00:00:00.000Z",
+      "fwd_pts": 132.0,
+      "term_discount": 0.05
+    },
+    {
+      "tenor": "1Y",
+      "delivery_date": "2027-10-06T00:00:00.000Z",
+      "fwd_pts": 175.75,
+      "term_discount": 0.05
+    }
+  ],
+  "event_calendar": []
+}

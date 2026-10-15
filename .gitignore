@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+
+# Streamlit local config and secrets
+.streamlit/secrets.toml
+
+# Local runtime data (trade store, scratch market snapshots)
+data/local/
+*.sqlite
+*.db

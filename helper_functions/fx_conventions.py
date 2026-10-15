@@ -1,0 +1,388 @@
+"""FX market conventions for option pricing and curve construction.
+
+Verify delta/ATM conventions against your market data provider before production use.
+
+This version folds in the full pair coverage from `fx_conventions_full`
+(all G10 crosses incl. Scandi/DKK, plus the USD- and EUR-based EM set).
+Two conventions from that source were reconciled against the richer
+PairConv model already in this file:
+
+  * `delta_base` / `premium_ccy` in the source dict map directly onto
+    `premium_adjusted` / `premium_ccy` here (premium quoted in the base
+    currency <=> premium-adjusted delta).
+  * `delta_type: "forward"` in the source (applied unconditionally to every
+    EM pair, at every tenor) is modelled here by setting
+    `fwd_delta_beyond="0D"`, which collapses the spot/forward cutoff to the
+    spot date so `delta_type()` always returns the forward-delta branch.
+    Several EM pairs that were already present (USDMXN, USDZAR, USDTRY,
+    USDPLN, USDCZK, USDHUF, USDSGD, USDHKD) previously used the default
+    1Y spot/forward split and have been updated to match.
+
+Currencies/pairs added here that have no dedicated QuantLib calendar
+(Colombia, Malaysia, Philippines, Vietnam) fall back to `ql.WeekendsOnly()`
+-- supplement with an explicit holiday list before using these in
+production. `deliverable` flags for the EM names are best-effort market
+convention (most offshore EM pairs trade NDF) and should be confirmed
+against your prime broker / venue documentation.
+"""
+from dataclasses import dataclass, field
+from typing import Dict, Optional
+import QuantLib as ql
+
+
+# ---------------------------------------------------------------- currencies
+
+@dataclass(frozen=True)
+class CcyConv:
+    code: str
+    day_count: ql.DayCounter
+    calendar: ql.Calendar
+    # rank orders the base currency in a cross: lower rank wins the base slot
+    rank: int
+
+
+def _cal(c):
+    return c
+
+
+CCY: Dict[str, CcyConv] = {
+    # --- G10 -----------------------------------------------------------
+    "EUR": CcyConv("EUR", ql.Actual360(),      ql.TARGET(),                                        rank=10),
+    "GBP": CcyConv("GBP", ql.Actual365Fixed(), ql.UnitedKingdom(ql.UnitedKingdom.Exchange),         rank=20),
+    "AUD": CcyConv("AUD", ql.Actual365Fixed(), ql.Australia(),                                      rank=30),
+    "NZD": CcyConv("NZD", ql.Actual365Fixed(), ql.NewZealand(),                                     rank=40),
+    "USD": CcyConv("USD", ql.Actual360(),      ql.UnitedStates(ql.UnitedStates.FederalReserve),     rank=50),
+    "CAD": CcyConv("CAD", ql.Actual365Fixed(), ql.Canada(),                                         rank=60),
+    "CHF": CcyConv("CHF", ql.Actual360(),      ql.Switzerland(),                                    rank=70),
+    "NOK": CcyConv("NOK", ql.Actual360(),      ql.Norway(),                                         rank=80),
+    "SEK": CcyConv("SEK", ql.Actual360(),      ql.Sweden(),                                         rank=90),
+    "DKK": CcyConv("DKK", ql.Actual360(),      ql.Denmark(),                                        rank=95),
+    "JPY": CcyConv("JPY", ql.Actual360(),      ql.Japan(),                                          rank=100),
+
+    # --- Asia G10-adjacent ----------------------------------------------
+    "SGD": CcyConv("SGD", ql.Actual365Fixed(), ql.Singapore(),                                      rank=110),
+    "HKD": CcyConv("HKD", ql.Actual365Fixed(), ql.HongKong(),                                       rank=120),
+
+    # --- LatAm -----------------------------------------------------------
+    "MXN": CcyConv("MXN", ql.Actual360(),      ql.Mexico(),                                         rank=130),
+    "BRL": CcyConv("BRL", ql.Actual360(),      ql.Brazil(),                                         rank=190),
+    "CLP": CcyConv("CLP", ql.Actual360(),      ql.Chile(),                                          rank=200),
+    "COP": CcyConv("COP", ql.Actual360(),      ql.WeekendsOnly(),  # no QuantLib Colombia calendar
+                    rank=210),
+    "ARS": CcyConv("ARS", ql.Actual360(),      ql.Argentina(),                                      rank=220),
+
+    # --- EMEA --------------------------------------------------------
+    "ZAR": CcyConv("ZAR", ql.Actual365Fixed(), ql.SouthAfrica(),                                    rank=140),
+    "PLN": CcyConv("PLN", ql.Actual365Fixed(), ql.Poland(),                                         rank=150),
+    "CZK": CcyConv("CZK", ql.Actual360(),      ql.CzechRepublic(),                                  rank=160),
+    "HUF": CcyConv("HUF", ql.Actual360(),      ql.Hungary(),                                        rank=170),
+    "TRY": CcyConv("TRY", ql.Actual360(),      ql.Turkey(),                                         rank=180),
+    "ILS": CcyConv("ILS", ql.Actual365Fixed(), ql.Israel(),                                         rank=230),
+
+    # --- Asia EM -----------------------------------------------------
+    "CNH": CcyConv("CNH", ql.Actual360(),      ql.China(ql.China.SSE),  # approximation; offshore
+                    rank=240),                                          # CNH really trades HK+CN
+    "KRW": CcyConv("KRW", ql.Actual365Fixed(), ql.SouthKorea(ql.SouthKorea.Settlement),             rank=250),
+    "INR": CcyConv("INR", ql.Actual365Fixed(), ql.India(),                                          rank=260),
+    "TWD": CcyConv("TWD", ql.Actual365Fixed(), ql.Taiwan(),                                         rank=270),
+    "MYR": CcyConv("MYR", ql.Actual365Fixed(), ql.WeekendsOnly(),  # no QuantLib Malaysia calendar
+                    rank=280),
+    "THB": CcyConv("THB", ql.Actual365Fixed(), ql.Thailand(),                                       rank=290),
+    "IDR": CcyConv("IDR", ql.Actual365Fixed(), ql.Indonesia(),                                      rank=300),
+    "PHP": CcyConv("PHP", ql.Actual365Fixed(), ql.WeekendsOnly(),  # no QuantLib Philippines calendar
+                    rank=310),
+    "VND": CcyConv("VND", ql.Actual365Fixed(), ql.WeekendsOnly(),  # no QuantLib Vietnam calendar
+                    rank=320),
+}
+
+
+# ---------------------------------------------------------------- pairs
+
+# quote currencies conventionally shown to 2dp -> forward points divide by 100;
+# everything else is conventionally shown to 4dp -> forward points divide by 10,000
+_2DP_QUOTES = {"JPY", "TRY", "KRW"}
+
+
+@dataclass(frozen=True)
+class PairConv:
+    base: str
+    quote: str
+    spot_lag: int            # business days, trade -> spot
+    pip: float               # F = S + points * pip
+    premium_adjusted: bool   # delta is premium-adjusted
+    premium_ccy: str         # currency premium is normally quoted in
+    atm: str                 # "dn" (delta-neutral straddle) or "ATMF"
+    fwd_delta_beyond: str = "1Y"   # spot delta up to here, forward delta after
+    deliverable: bool = True
+    fwd_divisor: Optional[int] = None  # forward pts -> price: F = S + points / fwd_divisor
+                                        # auto-derived from quote ccy if not given explicitly
+
+    def __post_init__(self):
+        if self.fwd_divisor is None:
+            object.__setattr__(
+                self, "fwd_divisor",
+                100 if self.quote in _2DP_QUOTES else 10_000,
+            )
+
+    @property
+    def name(self) -> str:
+        return self.base + self.quote
+
+
+_P = PairConv
+
+PAIRS: Dict[str, PairConv] = {p.name: p for p in [
+    # ================= G10 (spot delta) =================================
+
+    # --- USD quote (G10) : premium in USD, not premium-adjusted ---------
+    _P("EUR", "USD", 2, 1e-4, False, "USD", "dn"),
+    _P("GBP", "USD", 2, 1e-4, False, "USD", "dn"),
+    _P("AUD", "USD", 2, 1e-4, False, "USD", "dn"),
+    _P("NZD", "USD", 2, 1e-4, False, "USD", "dn"),
+
+    # --- USD base (G10) : premium in USD -> premium-adjusted ------------
+    _P("USD", "JPY", 2, 1e-2, True,  "USD", "dn"),
+    _P("USD", "CHF", 2, 1e-4, True,  "USD", "dn"),
+    _P("USD", "CAD", 1, 1e-4, True,  "USD", "dn"),   # T+1
+    _P("USD", "NOK", 2, 1e-4, True,  "USD", "dn"),
+    _P("USD", "SEK", 2, 1e-4, True,  "USD", "dn"),
+    _P("USD", "DKK", 2, 1e-4, True,  "USD", "dn"),
+
+    # --- EUR crosses ------------------------------------------------------
+    _P("EUR", "GBP", 2, 1e-4, True,  "EUR", "dn"),
+    _P("EUR", "AUD", 2, 1e-4, True,  "EUR", "dn"),
+    _P("EUR", "NZD", 2, 1e-4, True,  "EUR", "dn"),
+    _P("EUR", "CAD", 2, 1e-4, True,  "EUR", "dn"),
+    _P("EUR", "CHF", 2, 1e-4, True,  "EUR", "dn"),
+    _P("EUR", "NOK", 2, 1e-4, True,  "EUR", "dn"),
+    _P("EUR", "SEK", 2, 1e-4, True,  "EUR", "dn"),
+    _P("EUR", "DKK", 2, 1e-4, True,  "EUR", "dn"),
+    _P("EUR", "JPY", 2, 1e-2, True,  "EUR", "dn"),
+    _P("EUR", "PLN", 2, 1e-4, True,  "EUR", "dn"),
+    _P("EUR", "CZK", 2, 1e-4, True,  "EUR", "dn"),
+    _P("EUR", "HUF", 2, 1e-2, True,  "EUR", "dn"),
+
+    # --- GBP crosses --------------------------------------------------
+    _P("GBP", "AUD", 2, 1e-4, True,  "GBP", "dn"),
+    _P("GBP", "NZD", 2, 1e-4, True,  "GBP", "dn"),
+    _P("GBP", "CAD", 2, 1e-4, True,  "GBP", "dn"),
+    _P("GBP", "CHF", 2, 1e-4, True,  "GBP", "dn"),
+    _P("GBP", "NOK", 2, 1e-4, True,  "GBP", "dn"),
+    _P("GBP", "SEK", 2, 1e-4, True,  "GBP", "dn"),
+    _P("GBP", "DKK", 2, 1e-4, True,  "GBP", "dn"),
+    _P("GBP", "JPY", 2, 1e-2, True,  "GBP", "dn"),
+
+    # --- AUD crosses --------------------------------------------------
+    _P("AUD", "NZD", 2, 1e-4, True,  "AUD", "dn"),
+    _P("AUD", "CAD", 2, 1e-4, True,  "AUD", "dn"),
+    _P("AUD", "CHF", 2, 1e-4, True,  "AUD", "dn"),
+    _P("AUD", "NOK", 2, 1e-4, True,  "AUD", "dn"),
+    _P("AUD", "SEK", 2, 1e-4, True,  "AUD", "dn"),
+    _P("AUD", "DKK", 2, 1e-4, True,  "AUD", "dn"),
+    _P("AUD", "JPY", 2, 1e-2, True,  "AUD", "dn"),
+
+    # --- NZD crosses --------------------------------------------------
+    _P("NZD", "CAD", 2, 1e-4, True,  "NZD", "dn"),
+    _P("NZD", "CHF", 2, 1e-4, True,  "NZD", "dn"),
+    _P("NZD", "NOK", 2, 1e-4, True,  "NZD", "dn"),
+    _P("NZD", "SEK", 2, 1e-4, True,  "NZD", "dn"),
+    _P("NZD", "DKK", 2, 1e-4, True,  "NZD", "dn"),
+    _P("NZD", "JPY", 2, 1e-2, True,  "NZD", "dn"),
+
+    # --- CAD / CHF / Scandi crosses ------------------------------------
+    _P("CAD", "CHF", 2, 1e-4, True,  "CAD", "dn"),
+    _P("CAD", "NOK", 2, 1e-4, True,  "CAD", "dn"),
+    _P("CAD", "SEK", 2, 1e-4, True,  "CAD", "dn"),
+    _P("CAD", "DKK", 2, 1e-4, True,  "CAD", "dn"),
+    _P("CAD", "JPY", 2, 1e-2, True,  "CAD", "dn"),
+
+    _P("CHF", "NOK", 2, 1e-4, True,  "CHF", "dn"),
+    _P("CHF", "SEK", 2, 1e-4, True,  "CHF", "dn"),
+    _P("CHF", "DKK", 2, 1e-4, True,  "CHF", "dn"),
+    _P("CHF", "JPY", 2, 1e-2, True,  "CHF", "dn"),
+
+    _P("NOK", "SEK", 2, 1e-4, True,  "NOK", "dn"),
+    _P("NOK", "DKK", 2, 1e-4, True,  "NOK", "dn"),
+    _P("NOK", "JPY", 2, 1e-2, True,  "NOK", "dn"),
+
+    _P("SEK", "DKK", 2, 1e-4, True,  "SEK", "dn"),
+    _P("SEK", "JPY", 2, 1e-2, True,  "SEK", "dn"),
+
+    _P("DKK", "JPY", 2, 1e-2, True,  "DKK", "dn"),
+
+    # ================= EM (forward delta, every tenor) ==================
+    # fwd_delta_beyond="0D" forces the forward-delta branch unconditionally,
+    # matching fx_conventions_full's "delta_type": "forward" for every one
+    # of these pairs regardless of expiry.
+
+    # --- USD base -------------------------------------------------------
+    _P("USD", "SGD", 2, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D"),
+    _P("USD", "HKD", 2, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D"),
+    _P("USD", "MXN", 2, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D"),
+    _P("USD", "BRL", 2, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D", deliverable=False),
+    _P("USD", "CLP", 2, 1,    True,  "USD", "dn", fwd_delta_beyond="0D", deliverable=False),
+    _P("USD", "COP", 2, 1,    True,  "USD", "dn", fwd_delta_beyond="0D", deliverable=False),
+    _P("USD", "ARS", 2, 1e-2, True,  "USD", "dn", fwd_delta_beyond="0D", deliverable=False),
+    _P("USD", "TRY", 1, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D"),   # T+1
+    _P("USD", "ZAR", 2, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D"),
+    _P("USD", "PLN", 2, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D"),
+    _P("USD", "HUF", 2, 1e-2, True,  "USD", "dn", fwd_delta_beyond="0D"),
+    _P("USD", "CZK", 2, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D"),
+    _P("USD", "ILS", 2, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D"),
+    _P("USD", "CNH", 2, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D"),
+    _P("USD", "KRW", 2, 1,    True,  "USD", "dn", fwd_delta_beyond="0D", deliverable=False),
+    _P("USD", "INR", 2, 1e-2, True,  "USD", "dn", fwd_delta_beyond="0D", deliverable=False),
+    _P("USD", "TWD", 2, 1e-3, True,  "USD", "dn", fwd_delta_beyond="0D", deliverable=False),
+    _P("USD", "MYR", 2, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D", deliverable=False),
+    _P("USD", "THB", 2, 1e-2, True,  "USD", "dn", fwd_delta_beyond="0D"),
+    _P("USD", "IDR", 2, 1,    True,  "USD", "dn", fwd_delta_beyond="0D", deliverable=False),
+    _P("USD", "PHP", 1, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D", deliverable=False),
+    _P("USD", "VND", 2, 1,    True,  "USD", "dn", fwd_delta_beyond="0D", deliverable=False),
+
+    # --- EUR base ---------------------------------------------------------
+    _P("EUR", "BRL", 2, 1e-4, True,  "EUR", "dn", fwd_delta_beyond="0D", deliverable=False),
+    _P("EUR", "MXN", 2, 1e-4, True,  "EUR", "dn", fwd_delta_beyond="0D"),
+    _P("EUR", "CLP", 2, 1,    True,  "EUR", "dn", fwd_delta_beyond="0D", deliverable=False),
+    _P("EUR", "COP", 2, 1,    True,  "EUR", "dn", fwd_delta_beyond="0D", deliverable=False),
+    _P("EUR", "ARS", 2, 1e-2, True,  "EUR", "dn", fwd_delta_beyond="0D", deliverable=False),
+    _P("EUR", "TRY", 1, 1e-4, True,  "EUR", "dn", fwd_delta_beyond="0D"),   # T+1
+    _P("EUR", "ZAR", 2, 1e-4, True,  "EUR", "dn", fwd_delta_beyond="0D"),
+    _P("EUR", "ILS", 2, 1e-4, True,  "EUR", "dn", fwd_delta_beyond="0D"),
+    _P("EUR", "SGD", 2, 1e-4, True,  "EUR", "dn", fwd_delta_beyond="0D"),
+    _P("EUR", "HKD", 2, 1e-4, True,  "EUR", "dn", fwd_delta_beyond="0D"),
+    _P("EUR", "CNH", 2, 1e-4, True,  "EUR", "dn", fwd_delta_beyond="0D"),
+    _P("EUR", "KRW", 2, 1,    True,  "EUR", "dn", fwd_delta_beyond="0D", deliverable=False),
+    _P("EUR", "INR", 2, 1e-2, True,  "EUR", "dn", fwd_delta_beyond="0D", deliverable=False),
+    _P("EUR", "TWD", 2, 1e-3, True,  "EUR", "dn", fwd_delta_beyond="0D", deliverable=False),
+    _P("EUR", "MYR", 2, 1e-4, True,  "EUR", "dn", fwd_delta_beyond="0D", deliverable=False),
+    _P("EUR", "THB", 2, 1e-2, True,  "EUR", "dn", fwd_delta_beyond="0D"),
+    _P("EUR", "IDR", 2, 1,    True,  "EUR", "dn", fwd_delta_beyond="0D", deliverable=False),
+    _P("EUR", "PHP", 1, 1e-4, True,  "EUR", "dn", fwd_delta_beyond="0D", deliverable=False),
+    _P("EUR", "VND", 2, 1,    True,  "EUR", "dn", fwd_delta_beyond="0D", deliverable=False),
+]}
+
+
+# ---------------------------------------------------------------- lookup
+
+def normalise(pair: str) -> str:
+    return pair.replace("/", "").replace(" ", "").upper()
+
+
+def get_pair(pair: str) -> PairConv:
+    """Look up a pair, deriving an inverted-quote entry if needed."""
+    key = normalise(pair)
+    if key in PAIRS:
+        return PAIRS[key]
+    inv = key[3:] + key[:3]
+    if inv in PAIRS:
+        raise KeyError(
+            f"{key} is quoted as {inv} in the market; "
+            f"invert spot/strike rather than flipping the convention."
+        )
+    raise KeyError(f"unknown pair {key}")
+
+
+def market_pair(ccy_a: str, ccy_b: str) -> str:
+    """Return the market-conventional quote order for two currencies."""
+    a, b = CCY[ccy_a], CCY[ccy_b]
+    return (a.code + b.code) if a.rank < b.rank else (b.code + a.code)
+
+
+def joint_calendar(pair: str) -> ql.Calendar:
+    p = get_pair(pair)
+    cal = ql.JointCalendar(CCY[p.base].calendar, CCY[p.quote].calendar)
+    if "USD" not in (p.base, p.quote):
+        # USD holidays still block settlement on crosses
+        cal = ql.JointCalendar(cal, CCY["USD"].calendar)
+    return cal
+
+
+# ---------------------------------------------------------------- dates
+
+@dataclass
+class OptionDates:
+    trade: ql.Date
+    spot: ql.Date
+    expiry: ql.Date
+    delivery: ql.Date
+    premium: ql.Date
+
+
+def spot_date(pair: str, trade: ql.Date) -> ql.Date:
+    """Trade date -> spot date, honouring the pair's settlement lag.
+
+    Note: for USD crosses the strict market rule advances over non-USD
+    holidays first and then checks USD as a final good-business-day test.
+    This approximation uses the joint calendar throughout, which agrees in
+    the overwhelming majority of cases but can differ around US-only holidays.
+    """
+    p = get_pair(pair)
+    return joint_calendar(pair).advance(
+        trade, ql.Period(p.spot_lag, ql.Days), ql.Following
+    )
+
+
+def option_dates(pair: str,
+                 trade: ql.Date,
+                 tenor: Optional[str] = None,
+                 expiry: Optional[ql.Date] = None,
+                 premium_at_spot: bool = True) -> OptionDates:
+    """Build the full date set for an FX option.
+
+    Tenors are spot-relative and end-of-month aware: expiry is derived by
+    advancing spot by the tenor, then unwinding the settlement lag.
+    """
+    p = get_pair(pair)
+    cal = joint_calendar(pair)
+    spot = spot_date(pair, trade)
+
+    if expiry is None:
+        if tenor is None:
+            raise ValueError("supply either tenor or expiry")
+        delivery = cal.advance(spot, ql.Period(tenor),
+                               ql.ModifiedFollowing, True)   # end-of-month
+        expiry = cal.advance(delivery, ql.Period(-p.spot_lag, ql.Days),
+                             ql.Preceding)
+    else:
+        expiry = cal.adjust(expiry, ql.Preceding)
+        delivery = cal.advance(expiry, ql.Period(p.spot_lag, ql.Days),
+                               ql.Following)
+
+    premium = spot if premium_at_spot else trade
+    return OptionDates(trade, spot, expiry, delivery, premium)
+
+
+# ---------------------------------------------------------------- deltas
+
+def delta_type(pair: str, expiry: ql.Date, trade: ql.Date) -> int:
+    """QuantLib BlackDeltaCalculator delta type for this pair and tenor."""
+    p = get_pair(pair)
+    cal = joint_calendar(pair)
+    cutoff = cal.advance(spot_date(pair, trade), ql.Period(p.fwd_delta_beyond))
+    if expiry <= cutoff:
+        return (ql.DeltaVolQuote.PaSpot if p.premium_adjusted
+                else ql.DeltaVolQuote.Spot)
+    return (ql.DeltaVolQuote.PaFwd if p.premium_adjusted
+            else ql.DeltaVolQuote.Fwd)
+
+
+def atm_type(pair: str) -> int:
+    return (ql.DeltaVolQuote.AtmDeltaNeutral
+            if get_pair(pair).atm == "dn"
+            else ql.DeltaVolQuote.AtmFwd)
+
+
+# ---------------------------------------------------------------- example
+
+if __name__ == "__main__":
+    trade = ql.Date(25, 9, 2026)
+    ql.Settings.instance().evaluationDate = trade
+
+    for pair in ("EURUSD", "USDJPY", "USDCAD", "EURJPY",
+                 "EURDKK", "GBPNOK", "USDMXN", "EURINR"):
+        d = option_dates(pair, trade, "3M")
+        p = get_pair(pair)
+        print(f"{pair}  T+{p.spot_lag}  pip={p.pip:g}  pa={p.premium_adjusted}  "
+              f"fwd_delta_beyond={p.fwd_delta_beyond}  fwd_divisor={p.fwd_divisor}")
+        print(f"   spot={d.spot}  expiry={d.expiry}  deliv={d.delivery}")
+

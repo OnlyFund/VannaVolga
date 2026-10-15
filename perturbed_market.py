@@ -1,0 +1,69 @@
+from market_data import MarketData
+
+
+class PerturbedMarket:
+    # Suggested defaults for 10Δ / 25Δ ratios
+    RR_D10_RATIO = 1.85
+    BF_D10_RATIO = 3.8
+
+    def __init__(self, base_market: MarketData):
+        self.base = base_market
+
+    def _bump(self, attr: str, delta: float) -> MarketData:
+        """Generic bump method for any single market attribute."""
+        return self.base.copy_with(**{attr: getattr(self.base, attr) + delta})
+
+    # --- RR / BF bumping ---
+    def bump_rr(self, delta: float, which="25") -> MarketData:
+        return self._bump(f"rr_{which}", delta)
+
+    def bump_bf(self, delta: float, which="25") -> MarketData:
+        return self._bump(f"bf_{which}", delta)
+
+    def bump_rr_with_ratio(self, eps=0.01, d10_ratio=None) -> MarketData:
+        if d10_ratio is None:
+            d10_ratio = self.RR_D10_RATIO
+        return self.base.copy_with(
+            rr_25=self.base.rr_25 + eps,
+            rr_10=self.base.rr_10 + eps * d10_ratio
+        )
+
+    def bump_bf_with_ratio(self, eps=0.01, d10_ratio=None) -> MarketData:
+        if d10_ratio is None:
+            d10_ratio = self.BF_D10_RATIO
+        return self.base.copy_with(
+            bf_25=self.base.bf_25 + eps,
+            bf_10=self.base.bf_10 + eps * d10_ratio
+        )
+
+    # Vol scaler - bumps ATM by ``eps`` vol points and scales the whole smile
+    # by the same factor, so RR and BF keep their sign and their ATM ratios.
+    def scale_all_vols(self, eps: float) -> MarketData:
+        atm = self.base.v_atm
+        if atm <= 0:
+            raise ValueError("ATM volatility must be positive for proportional scaling")
+        scale = (atm + eps) / atm
+        return self.base.copy_with(
+            v_atm=atm * scale,
+            rr_25=self.base.rr_25 * scale,
+            rr_10=self.base.rr_10 * scale,
+            bf_25=self.base.bf_25 * scale,
+            bf_10=self.base.bf_10 * scale,
+        )
+
+    # Spot & ATM vol bump
+    def shift_spot(self, delta_spot: float) -> MarketData:
+        return self.base.copy_with(s=self.base.s * (1 + delta_spot))
+
+    def bump_vol(self, delta_vol: float) -> MarketData:
+        return self.base.copy_with(v_atm=self.base.v_atm + delta_vol)
+
+    def scale_vol(self, method='atm', eps=0.01):
+        if method == 'atm':
+            return self.bump_vol(delta_vol=eps)
+        elif method == 'smile':
+            return self.scale_all_vols(eps=eps)
+        else:
+            raise ValueError(f"Unknown method: {method}")
+
+

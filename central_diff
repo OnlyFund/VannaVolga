@@ -1,0 +1,64 @@
+ base_md = MarketData(
+        S=self.S,
+        fwd_pts=self.fwd_pts,
+        v_atm=self.v_atm_pct,
+        rr_25=self.rr_25,
+        rr_10=self.rr_10,
+        bf_25=self.bf_25,
+        bf_10=self.bf_10,
+    )
+
+    perturber = PerturbedMarket(base_md)
+
+    # Choose which param to bump
+    rr_key = "rr" if param_name.upper() == "RR" else "bf"
+
+    if delta >= 0.25:
+        kwargs_up_md = perturber.bump_rr(step, "25") if rr_key == "rr" else perturber.bump_bf(step, "25")
+        kwargs_dn_md = perturber.bump_rr(-step, "25") if rr_key == "rr" else perturber.bump_bf(-step, "25")
+    elif delta <= 0.1:
+        kwargs_up_md = perturber.bump_rr(step, "10") if rr_key == "rr" else perturber.bump_bf(step, "10")
+        kwargs_dn_md = perturber.bump_rr(-step, "10") if rr_key == "rr" else perturber.bump_bf(-step, "10")
+    else:
+        # Weighted bump on 10 and 25 delta vols
+        up_10 = step * w_10
+        up_25 = step * w_25
+        dn_10 = -step * w_10
+        dn_25 = -step * w_25
+
+        md_up_10 = perturber.bump_rr(up_10, "10") if rr_key == "rr" else perturber.bump_bf(up_10, "10")
+        md_up = PerturbedMarket(md_up_10)
+        kwargs_up_md = md_up.bump_rr(up_25, "25") if rr_key == "rr" else md_up.bump_bf(up_25, "25")
+
+        md_dn_10 = perturber.bump_rr(dn_10, "10") if rr_key == "rr" else perturber.bump_bf(dn_10, "10")
+        md_dn = PerturbedMarket(md_dn_10)
+        kwargs_dn_md = md_dn.bump_rr(dn_25, "25") if rr_key == "rr" else md_dn.bump_bf(dn_25, "25")
+
+    # Now unpack kwargs from bumped MarketData
+    def md_to_kwargs(md: MarketData):
+        return dict(
+            S=md.S,
+            K=self.K,
+            fwd_pts=self.fwd_pts,
+            expiry_date=self.expiry_date,
+            valuation_date=self.valuation_date,
+            v_atm=md.v_atm,
+            rr_25=md.rr_25,
+            rr_10=md.rr_10,
+            bf_25=md.bf_25,
+            bf_10=md.bf_10,
+            CallPut=self.CallPut,
+            BuySell=self.BuySell,
+            Notional=self.Notional,
+            deltaBase=self.deltaBase,
+            atm_conv=self.atm_conv,
+            strike_type=self.strike_type,
+            black_scholes_vol_in_percent=self.black_scholes_vol_in_percent,
+            black_scholes_vega_per_percent=self.black_scholes_vega_per_percent,
+            config=self.config,
+        )
+
+    vol_up = VannaVolga(**md_to_kwargs(kwargs_up_md)).GetImpliedVol()
+    vol_dn = VannaVolga(**md_to_kwargs(kwargs_dn_md)).GetImpliedVol()
+
+    return (vol_up - vol_dn) / (2.0 * step)

@@ -1,0 +1,20 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+pandas = "*"
+numpy = "*"
+plotly = "*"
+seaborn = "*"
+scipy ="*"
+streamlit = "*"
+typing_extensions = "*"
+QuantLib = "==1.32"
+
+
+[dev-packages]
+
+[requires]
+python_version = "3.7"
