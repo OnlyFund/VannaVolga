@@ -24,6 +24,7 @@ from app.ui.portfolio_block import (
     BOOK_COLUMN, GREEK_NAMES, TRADE_ID_COLUMN, render_portfolio_block,
 )
 from app.ui.trades_block import render_blotter, render_portfolio, trade_store
+from app.ui.risk_block import render_risk
 from app.trades import service as trade_service
 
 # Pricing helpers now live in the backend; kept here under their old names.
@@ -249,8 +250,8 @@ def render_app():
         )
 
     surface_progress = st.empty()
-    markets_tab, portfolio_tab, ladder_tab, blotter_tab, book_tab = st.tabs(
-        ["Markets", "Pricer", "Spot ladder", "Blotter", "Portfolio"]
+    markets_tab, portfolio_tab, ladder_tab, blotter_tab, book_tab, risk_tab = st.tabs(
+        ["Markets", "Pricer", "Spot ladder", "Blotter", "Portfolio", "Risk"]
     )
 
     spot, forward_divisor, currency_pair, vol_rows, forward_rows, event_rows = render_market_block(
@@ -621,5 +622,6 @@ def render_app():
                 st.caption(f"{skipped} line(s) on other pairs are not in the {ladder_pair} ladder.")
     render_blotter(blotter_tab)
     render_portfolio(book_tab, market_set, mods, premium_quote)
+    render_risk(risk_tab, market_set, mods, premium_quote, spot_ladder_mode)
     if diagnostics.records():
         st.warning("Some calculations used legacy fallback. The selected pricing model was retained.")

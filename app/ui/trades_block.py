@@ -262,6 +262,8 @@ def render_portfolio(tab, market_set, mods, premium_quote):
             return
         live = store.trades(status=LIVE)
         selected = _filters(live, "portfolio")
+        # The Risk tab reports on this same selection.
+        st.session_state["_portfolio_selection"] = [t.trade_id for t in selected]
         st.caption(f"{len(selected)} live trades selected "
                    f"({sum(t.is_option for t in selected)} options, "
                    f"{sum(t.is_forward for t in selected)} forwards).")
