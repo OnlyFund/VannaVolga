@@ -49,6 +49,35 @@ def _with_line_results(rows, results):
     return display
 
 
+#: Cells a user types; an added line without any of them is a placeholder.
+LINE_INPUT_COLUMNS = (
+    "currency_pair", "strike", "expiry", "call_put", "buy_sell", "notional", "premium",
+)
+
+
+def _has_value(value):
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    try:
+        return not pd.isna(value)
+    except (TypeError, ValueError):
+        return True
+
+
+def _only_placeholder_rows_added(editor_state):
+    """True when the only change is new lines carrying no typed values."""
+    added = editor_state.get("added_rows", [])
+    return (
+        bool(added)
+        and not editor_state.get("edited_rows")
+        and not editor_state.get("deleted_rows")
+        and not any(_has_value(row.get(column)) for row in added
+                    for column in LINE_INPUT_COLUMNS)
+    )
+
+
 def _marked_row_indices(editor_state):
     """Return rows selected in the explicit transient removal column."""
     return [
@@ -147,6 +176,12 @@ def render_portfolio_block(portfolio_tab, ladder_tab, market_pair, quote_label="
         arrives.
         """
         editor_state = st.session_state.get("portfolio_editor_v3", {})
+        if _only_placeholder_rows_added(editor_state):
+            # Clicking into the blank row adds a line holding only column
+            # defaults before the typed value arrives. Committing it would
+            # reset the editor and drop the cell being typed; the editor keeps
+            # the line until it carries a value.
+            return
         editor_state = dict(editor_state)
         editor_state["deleted_rows"] = [
             *editor_state.get("deleted_rows", []),

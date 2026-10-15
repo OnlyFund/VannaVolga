@@ -285,7 +285,10 @@ EXPIRY_FORMAT = "%Y-%m-%d"
 
 
 def _blank(value):
-    return value is None or (not isinstance(value, str) and pd.isna(value)) or not str(value).strip()
+    if value is None or (not isinstance(value, str) and pd.isna(value)):
+        return True
+    # Empty cells that went through str() arrive as "nan" or "None".
+    return str(value).strip().lower() in {"", "nan", "none"}
 
 
 def _numeric_strike(value):

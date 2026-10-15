@@ -204,3 +204,23 @@ def test_complete_lines_that_cannot_resolve_are_reported(markets):
     assert failures[1].startswith("Line 2: ")
     assert len(failures) == 2
     assert resolved.at[2, "expiry"] != "1M" and resolved.at[2, "strike"] == "25"
+
+
+def test_placeholder_line_from_the_blank_row_is_not_committed():
+    """Committing it would reset the editor and drop the cell being typed."""
+    from app.ui.portfolio_block import _only_placeholder_rows_added
+    placeholder = {"edited_rows": {}, "deleted_rows": [],
+                   "added_rows": [{"premium_ccy": "USD", "_remove": False}]}
+    assert _only_placeholder_rows_added(placeholder)
+    typed = dict(placeholder, added_rows=[{"premium_ccy": "USD", "strike": "25d"}])
+    assert not _only_placeholder_rows_added(typed)
+    mixed = dict(placeholder, edited_rows={0: {"notional": "2m"}})
+    assert not _only_placeholder_rows_added(mixed)
+    assert not _only_placeholder_rows_added({"edited_rows": {}, "added_rows": [], "deleted_rows": []})
+
+
+def test_empty_strike_text_is_blank_not_an_alias(markets):
+    rows = pd.DataFrame([trade("EURUSD", strike="nan", expiry="1M", call_put=None)])
+    resolved, changed, failures = pricer.resolve_line_inputs(markets, rows, "EURUSD")
+    assert failures == [] and resolved.at[0, "strike"] == "nan"
+    assert changed   # the expiry still resolves

@@ -166,8 +166,11 @@ def render_app():
     # The strike editor accepts both numeric values and delta strings such as
     # ``25d``, so keep this column as text even when the initial value is numeric.
     if "strike" in st.session_state.option_rows:
+        # Empty cells stay empty: str() would turn them into the text "nan".
         st.session_state.option_rows["strike"] = (
-            st.session_state.option_rows["strike"].map(str)
+            st.session_state.option_rows["strike"].map(
+                lambda value: "" if not isinstance(value, str) and pd.isna(value) else str(value)
+            )
         )
 
     with st.sidebar:
