@@ -97,7 +97,9 @@ def price_line(markets, line_number, source_row, mods, premium_quote="term_cash"
         row["currency_pair"] = currency_pair
         row["expiry"] = context.resolve_market_expiry(row["expiry"])
         row["notional"] = parse_notional(row["notional"])
-        premium = pd.to_numeric(row.get("premium", 0.0), errors="coerce")
+        # An empty premium cell (a new grid line) means no premium.
+        premium_cell = row.get("premium", 0.0)
+        premium = 0.0 if _blank(premium_cell) else pd.to_numeric(premium_cell, errors="coerce")
         if pd.isna(premium) or not np.isfinite(float(premium)) or premium < 0:
             raise ValueError("Premium must be a finite non-negative amount")
         premium_ccy = str(row.get("premium_ccy", currency_pair[3:])).strip().upper()
@@ -129,8 +131,12 @@ def price_line(markets, line_number, source_row, mods, premium_quote="term_cash"
         quoted_mtm = pricing_result.get("mtm_" + premium_quote, pricing_result.get("mtm_term"))
         quoted_pnl = pricing_result.get("pnl_" + premium_quote, pricing_result.get("pnl_term"))
         status, reason = market_diagnostics(market, row["expiry"])
+        # A booked trade keeps its id through pricing; typed lines have none.
+        identity = ({"trade_id": source_row["trade_id"]}
+                    if not _blank_id(source_row.get("trade_id")) else {})
         return line_number, {
             "row": line_number,
+            **identity,
             **pricing_result,
             "strike": resolved_strike,
             "call_put": row["call_put"],
@@ -144,6 +150,10 @@ def price_line(markets, line_number, source_row, mods, premium_quote="term_cash"
         }, None, resolved_strike
     except Exception as exc:
         return line_number, None, "Line {}: {}".format(line_number, exc), resolved_strike
+
+
+def _blank_id(value):
+    return value is None or (not isinstance(value, str) and pd.isna(value)) or not str(value).strip()
 
 
 def _numbered(rows):
@@ -224,13 +234,73 @@ def build_delta_hedges(markets, rows, mods):
     return positions, errors
 
 
+def value_forward(markets, pair, expiry, base_amount, contract_rate):
+    """MTM, delta and roll theta of one FX forward, as a hedge-trade row.
+
+    ``delta_offset`` is the forward's delta in the units the Pricer reports
+    option deltas in, so it offsets them directly. Raises on failure.
+    """
+    valuation_date = markets.valuation_date
+    if not np.isfinite(base_amount):
+        raise ValueError("hedge amount is not finite")
+    context = market_for_pair(markets, pair)
+    market = context.market_for_expiry(expiry)
+    delta_factor = forward_delta_factor(market, expiry, valuation_date)
+    position = FxForwardPosition(
+        currency_pair=pair, expiry=expiry, base_amount=base_amount,
+        contract_rate=contract_rate,
+    )
+    value = position.value(market, valuation_date)
+    next_valuation = next_business_day(pair, valuation_date)
+    next_market = context.market_for_expiry(expiry, as_of=next_valuation, allow_short_end=True)
+    theta = calculate_forward_theta(position, market, next_market, valuation_date, next_valuation)
+    return {
+        "currency_pair": pair,
+        "expiry": expiry,
+        "direction": "BUY BASE" if base_amount > 0 else "SELL BASE",
+        "base_amount": base_amount,
+        "forward_rate": contract_rate,
+        "delta_offset": base_amount * delta_factor,
+        "mtm_term": value["mtm_term"],
+        "mtm_base": value["mtm_base"],
+        "pnl_term": value["mtm_term"],
+        "pnl_base": value["mtm_base"],
+        "theta": theta,
+    }
+
+
+def hedge_amounts(markets, results):
+    """Forward base amount that flattens each priced line's smile delta.
+
+    Returns ``({(pair, expiry, forward rate): [(result, base amount)]}, errors)``:
+    lines are grouped by the forward that would hedge them, and each line's
+    amount is its own share, so a group's amounts sum to its hedge.
+    """
+    valuation_date = markets.valuation_date
+    groups, errors = {}, []
+    for result in results:
+        key = (result["currency_pair"], result["expiry"], float(result["_forward_rate"]))
+        try:
+            delta = float(result["delta"])
+            if not np.isfinite(delta):
+                raise ValueError("Smile-adjusted delta is invalid")
+            market = market_for_pair(markets, key[0]).market_for_expiry(key[1])
+            amount = -delta / forward_delta_factor(market, key[1], valuation_date)
+            if not np.isfinite(amount):
+                raise ValueError("hedge amount is not finite")
+        except Exception as exc:
+            errors.append("{} {} hedge: {}".format(key[0], key[1], exc))
+            continue
+        groups.setdefault(key, []).append((result, amount))
+    return groups, errors
+
+
 def hedge_trades_for(markets, results):
     """Forward trades that flatten the priced lines' smile delta, per expiry.
 
     Returns ``(trades, errors)``. A hedge group that cannot be valued is
     reported and skipped; it never stops the other groups or the pricing.
     """
-    valuation_date = markets.valuation_date
     grouped = {}
     for result in results:
         key = (result["currency_pair"], result["expiry"], float(result["_forward_rate"]))
@@ -240,42 +310,14 @@ def hedge_trades_for(markets, results):
         try:
             if not np.isfinite(net_smile_delta):
                 raise ValueError("Smile-adjusted delta is invalid")
-            context = market_for_pair(markets, pair)
-            market = context.market_for_expiry(expiry)
-            hedge_delta_factor = forward_delta_factor(market, expiry, valuation_date)
-            base_amount = -net_smile_delta / hedge_delta_factor
-            if not np.isfinite(base_amount):
-                raise ValueError("hedge amount is not finite")
-            if abs(base_amount) < 1e-12:
+            market = market_for_pair(markets, pair).market_for_expiry(expiry)
+            base_amount = -net_smile_delta / forward_delta_factor(
+                market, expiry, markets.valuation_date)
+            if np.isfinite(base_amount) and abs(base_amount) < 1e-12:
                 continue
-            position = FxForwardPosition(
-                currency_pair=pair, expiry=expiry, base_amount=base_amount,
-                contract_rate=forward_rate,
-            )
-            value = position.value(market, valuation_date)
-            next_valuation = next_business_day(pair, valuation_date)
-            next_market = context.market_for_expiry(
-                expiry, as_of=next_valuation, allow_short_end=True
-            )
-            hedge_theta = calculate_forward_theta(
-                position, market, next_market, valuation_date, next_valuation
-            )
+            trades.append(value_forward(markets, pair, expiry, base_amount, forward_rate))
         except Exception as exc:
             errors.append("{} {} hedge: {}".format(pair, expiry, exc))
-            continue
-        trades.append({
-            "currency_pair": pair,
-            "expiry": expiry,
-            "direction": "BUY BASE" if base_amount > 0 else "SELL BASE",
-            "base_amount": base_amount,
-            "forward_rate": forward_rate,
-            "delta_offset": base_amount * hedge_delta_factor,
-            "mtm_term": value["mtm_term"],
-            "mtm_base": value["mtm_base"],
-            "pnl_term": value["mtm_term"],
-            "pnl_base": value["mtm_base"],
-            "theta": hedge_theta,
-        })
     return trades, errors
 
 

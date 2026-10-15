@@ -224,3 +224,11 @@ def test_empty_strike_text_is_blank_not_an_alias(markets):
     resolved, changed, failures = pricer.resolve_line_inputs(markets, rows, "EURUSD")
     assert failures == [] and resolved.at[0, "strike"] == "nan"
     assert changed   # the expiry still resolves
+
+
+def test_new_grid_line_without_a_premium_prices(markets):
+    for empty in (None, float("nan"), ""):
+        results, errors = pricer.price_lines(markets, [trade("EURUSD", premium=empty)], MODS)
+        assert errors == [] and results[0]["pnl_base"] == pytest.approx(results[0]["mtm_base"])
+    _, errors = pricer.price_lines(markets, [trade("EURUSD", premium=-1.0)], MODS)
+    assert errors == ["Line 1: Premium must be a finite non-negative amount"]
