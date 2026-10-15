@@ -97,3 +97,19 @@ def test_blotter_shows_amounts_and_rates_at_pair_precision(store, markets):
     assert frame.at[0, "strike"].count(".") == 1 and len(frame.at[0, "strike"].split(".")[1]) == 4
     assert frame.at[1, "contract_rate"].count(".") == 1 and len(frame.at[1, "contract_rate"].split(".")[1]) == 5
     assert "," in frame.at[1, "notional"] or float(frame.at[1, "notional"]) < 1000
+
+
+def test_portfolio_defaults_to_totals_per_pair(store, markets):
+    from app.trades import service
+    from app.ui.trades_block import BY_PAIR, PORTFOLIO_VIEWS, pair_totals
+    assert PORTFOLIO_VIEWS[0] == BY_PAIR
+    service.book_lines(store, markets, grid({}, {}, {"currency_pair": "USDJPY", "premium_ccy": "JPY"}),
+                       MODS, with_hedges=True)
+    results, forwards, errors = service.price_trades(markets, store.trades(), MODS)
+    assert errors == []
+    totals = pair_totals(results, forwards)
+    assert list(totals["currency_pair"]) == ["EURUSD", "USDJPY"]
+    assert list(totals["options"]) == [2, 1] and list(totals["forwards"]) == [1, 1]
+    assert list(totals["delta"]) == pytest.approx([0.0, 0.0], abs=1e-6)
+    eur = [r for r in results if r["currency_pair"] == "EURUSD"]
+    assert totals.at[0, "mtm_base"] == pytest.approx(sum(r["mtm_base"] for r in eur))

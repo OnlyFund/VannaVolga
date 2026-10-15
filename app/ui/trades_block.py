@@ -235,6 +235,20 @@ def _export_import(store):
                 st.experimental_rerun()
 
 
+BY_PAIR, LINE_ITEMS = "By pair", "Line items"
+#: Portfolio sub-tabs; the first is shown by default.
+PORTFOLIO_VIEWS = (BY_PAIR, LINE_ITEMS)
+
+
+def pair_totals(results, forwards):
+    """Totals per currency pair with the number of options and forwards in each."""
+    totals = pricer.aggregate_by_pair(results, forwards)
+    count = lambda rows, pair: sum(row["currency_pair"] == pair for row in rows)  # noqa: E731
+    totals.insert(1, "options", [count(results, pair) for pair in totals["currency_pair"]])
+    totals.insert(2, "forwards", [count(forwards, pair) for pair in totals["currency_pair"]])
+    return totals.sort_values("currency_pair").reset_index(drop=True)
+
+
 def results_strikes(results):
     return [result["strike"] for result in results]
 
@@ -266,27 +280,41 @@ def render_portfolio(tab, market_set, mods, premium_quote):
             return
         for error in errors:
             st.error("Not priced — " + error)
-        if results:
-            st.markdown("**Options**")
-            columns = ["trade_id", "currency_pair", "buy_sell", "call_put", "strike", "expiry",
-                       "notional", "vol_pct", "mtm_base", "pnl_base",
-                       *pricer.GREEK_NAMES, "smile_status"]
-            frame = _display(results, amounts=("mtm_base", "pnl_base", *pricer.GREEK_NAMES))
-            frame["vol_pct"] = frame["vol_pct"].map(lambda v: f"{float(v):.4f}")
-            frame["strike"] = [pricer.format_strike_for_pair(pair, k) for pair, k
-                               in zip(frame["currency_pair"], results_strikes(results))]
-            st.dataframe(frame[[c for c in columns if c in frame]], use_container_width=True,
-                         hide_index=True)
-        if forwards:
-            st.markdown("**Forwards**")
-            st.dataframe(_display(forwards, first=("trade_id", "currency_pair", "expiry", "direction"),
-                                  amounts=("base_amount", "delta_offset", "mtm_term", "mtm_base",
-                                           "pnl_term", "pnl_base", "theta"),
-                                  rates=("forward_rate",)),
-                         use_container_width=True, hide_index=True)
-        if results or forwards:
-            st.markdown("**By pair**")
-            totals = pricer.aggregate_by_pair(results, forwards)
+        if not (results or forwards):
+            return
+        pair_tab, items_tab = st.tabs(list(PORTFOLIO_VIEWS))
+        with pair_tab:
+            totals = pair_totals(results, forwards)
             st.dataframe(_display(totals.to_dict("records"), first=("currency_pair",),
-                                  amounts=[c for c in totals.columns if c != "currency_pair"]),
+                                  amounts=[c for c in totals.columns
+                                           if c not in ("currency_pair", "options", "forwards")]),
                          use_container_width=True, hide_index=True)
+            st.caption("One row per currency pair, hedge forwards included. MTM, P&L and "
+                       "Greeks are in the pair's base currency (theta in its premium "
+                       "currency); pairs are not converted to one currency.")
+        with items_tab:
+            _line_items(results, forwards)
+
+
+def _line_items(results, forwards):
+    """One pair's options and forwards, by trade id."""
+    pairs = sorted({row["currency_pair"] for row in (*results, *forwards)})
+    pair = st.selectbox("Currency pair", pairs, key="portfolio_items_pair")
+    options = [row for row in results if row["currency_pair"] == pair]
+    hedges = [row for row in forwards if row["currency_pair"] == pair]
+    if options:
+        st.markdown("**Options**")
+        columns = ["trade_id", "buy_sell", "call_put", "strike", "expiry", "notional",
+                   "vol_pct", "mtm_base", "pnl_base", *pricer.GREEK_NAMES, "smile_status"]
+        frame = _display(options, amounts=("mtm_base", "pnl_base", *pricer.GREEK_NAMES))
+        frame["vol_pct"] = frame["vol_pct"].map(lambda v: f"{float(v):.4f}")
+        frame["strike"] = [pricer.format_strike_for_pair(pair, k) for k in results_strikes(options)]
+        st.dataframe(frame[[c for c in columns if c in frame]], use_container_width=True,
+                     hide_index=True)
+    if hedges:
+        st.markdown("**Forwards**")
+        st.dataframe(_display(hedges, first=("trade_id", "expiry", "direction"),
+                              amounts=("base_amount", "delta_offset", "mtm_term", "mtm_base",
+                                       "pnl_term", "pnl_base", "theta"),
+                              rates=("forward_rate",)).drop(columns=["currency_pair"]),
+                     use_container_width=True, hide_index=True)
