@@ -1,0 +1,2 @@
+# Entrypoint-local manifest takes precedence over the legacy root Pipfile.
+-r ../requirements.txt
