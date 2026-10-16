@@ -190,11 +190,16 @@ def fetch_and_store(valuation_date=None, store=None, vols=True):
     forwards = fetch_forward_points(valuation_date) if vols else {}
     store = store or open_market_data_store()
     date_time = data_date_time(valuation_date, fetched_at)
+    # Pin the event calendar current at the fetch, so the market always
+    # prices with the same events.
+    event_set_id = store.latest_event_set_id(at_or_before=fetched_at)
     market_id = store.save(date_time, 'bloomberg', spots=spots, depo_curves=curves,
-                           vols=surfaces, forward_points=forwards, fetched_at=fetched_at)
+                           vols=surfaces, forward_points=forwards, fetched_at=fetched_at,
+                           event_set_id=event_set_id)
+    events = f'event set {event_set_id}' if event_set_id is not None else 'no event set'
     print(f'Saved market {market_id} (bloomberg, {date_time}): {len(spots)} spots, '
           f'{len(curves)} depo curves, {len(surfaces)} vol surfaces, '
-          f'{len(forwards)} forward curves to {store.path}')
+          f'{len(forwards)} forward curves, {events} to {store.path}')
     from market_data.discount_curves import DiscountCurves
     for alert in DiscountCurves(store.load(market_id=market_id), store).basis_alerts():
         print('Basis alert:', alert)

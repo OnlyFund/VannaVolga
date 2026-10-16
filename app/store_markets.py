@@ -17,6 +17,9 @@ It never raises. Every failure is reported instead:
 * a chosen market does not exist, or its data is from after the valuation
   date -> ``problem``;
 * the market has no vols or forward points -> ``problem``;
+* the market's pinned event set cannot be read -> every pair is unavailable
+  (pricing without the events it was pinned to would be wrong); no pinned
+  set, or a pair without events in it -> an empty calendar, noted;
 * a pair cannot be built (no spot, no discount rate ...), its build raises,
   or the result fails the app's market validation -> that pair is in
   ``unavailable`` with the reason; the other pairs still load.
@@ -82,16 +85,37 @@ def load_store_markets(valuation_date, market_id=None, store=None, pairs=None):
     try:
         from app.market_store import read_market_file
         from market_data.discount_curves import DiscountCurves
+        from market_data.events import event_table
         from market_data.market_tables import market
         curves = DiscountCurves(snapshot, store)
     except Exception as exc:
         return _failed(f"cannot build markets: {exc}", snapshot, notes)
 
     wanted = sorted(set(snapshot.vols) | set(snapshot.forward_points)) if pairs is None else pairs
+    event_set, events_problem = None, None
+    if snapshot.event_set_id is None:
+        notes.append(f"{label} has no event set pinned; markets built without events")
+    else:
+        try:
+            event_set = store.load_event_set(snapshot.event_set_id)
+            if event_set is None:
+                events_problem = f"its event set {snapshot.event_set_id} does not exist"
+        except Exception as exc:
+            events_problem = f"its event set {snapshot.event_set_id} cannot be read: {exc}"
+    if events_problem:
+        return StoreMarkets(snapshot, {}, {pair: f"{pair}: {label} {events_problem}"
+                                           for pair in wanted},
+                            notes, f"{label} {events_problem}")
+    if event_set is not None:
+        without = [pair for pair in wanted if pair not in event_set.events]
+        if without:
+            notes.append(f"event set {event_set.event_set_id} has no events for "
+                         f"{', '.join(without)}; built without events")
     payloads, unavailable = {}, {}
     for pair in wanted:
         try:
-            payload, pair_notes = market(snapshot, pair, curves=curves)
+            payload, pair_notes = market(snapshot, pair, curves=curves,
+                                         event_rows=event_table(event_set, pair))
         except Exception as exc:             # one pair's failure must not stop the others
             unavailable[pair] = f"{pair} could not be built from {label}: {exc}"
             continue

@@ -23,10 +23,18 @@ and its quotes, one row ``(kind, name, tenor, value)`` each:
 New kinds can be stored without a schema change. Markets are only ever
 added, so any past state can be read back.
 
-Failsafes: a store written before this schema (version 1: ``snapshots``
-with ``id``, ``as_of``, ``valuation_date``, ``source``) is copied to a
-timestamped backup and migrated in one transaction, all or nothing; a store
-written by a newer schema is refused rather than misread.
+Event calendars are kept apart from the quotes, as versioned **event sets**
+(``event_set_id``, ``source``, ``date_time``) of per-pair rows
+``(pair, event_date, event, variance_days)``; several events on one date
+are separate rows whose variance days add up. A market is **pinned** to one
+event set (the latest at its fetch), so it always prices with the same
+events; ``pin_events`` re-pins it explicitly and every pin is recorded.
+
+Failsafes: a store written by an older schema (1: ``snapshots``; 2: markets
+without event sets) is copied to a timestamped backup and migrated in one
+transaction, all or nothing; a store written by a newer schema is refused
+rather than misread; event rows are validated as a whole and a set with any
+bad row is not stored.
 """
 import json
 import shutil
@@ -39,12 +47,35 @@ from pathlib import Path
 import pandas as pd
 
 DEFAULT_PATH = Path(__file__).resolve().parents[1] / "data" / "local" / "market_data.sqlite"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 SPOT, DEPO, FWD_PTS = "spot", "depo", "fwd_pts"
 VOL_FIELDS = ("atm", "rr_25", "bf_25", "rr_10", "bf_10")
 VOL_PREFIX = "vol_"
 #: ``date_time`` of a fetch for a past date: that date's close.
 CLOSE = "23:59:59"
+
+_EVENT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS event_sets (
+    event_set_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL,
+    date_time TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS events (
+    event_set_id INTEGER NOT NULL REFERENCES event_sets (event_set_id),
+    pair TEXT NOT NULL,
+    event_date TEXT NOT NULL,
+    event TEXT NOT NULL,
+    variance_days REAL NOT NULL,
+    PRIMARY KEY (event_set_id, pair, event_date, event)
+);
+CREATE TABLE IF NOT EXISTS event_pins (
+    market_id INTEGER NOT NULL REFERENCES markets (market_id),
+    event_set_id INTEGER NOT NULL REFERENCES event_sets (event_set_id),
+    pinned_at TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT ''
+);
+"""
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_info (version INTEGER NOT NULL);
@@ -53,7 +84,8 @@ CREATE TABLE IF NOT EXISTS markets (
     market_source TEXT NOT NULL,
     date_time TEXT NOT NULL,
     fetched_at TEXT NOT NULL,
-    note TEXT NOT NULL DEFAULT ''
+    note TEXT NOT NULL DEFAULT '',
+    event_set_id INTEGER REFERENCES event_sets (event_set_id)
 );
 CREATE INDEX IF NOT EXISTS markets_date_time ON markets (date_time);
 CREATE TABLE IF NOT EXISTS quotes (
@@ -65,9 +97,9 @@ CREATE TABLE IF NOT EXISTS quotes (
     PRIMARY KEY (market_id, kind, name, tenor)
 );
 CREATE INDEX IF NOT EXISTS quotes_series ON quotes (kind, name, tenor);
-"""
+""" + _EVENT_SCHEMA
 
-_SNAPSHOT_FIELDS = ("market_id market_source date_time fetched_at note "
+_SNAPSHOT_FIELDS = ("market_id market_source date_time fetched_at note event_set_id "
                     "spots depo_curves vols forward_points")
 
 
@@ -81,7 +113,10 @@ class Snapshot(namedtuple("Snapshot", _SNAPSHOT_FIELDS)):
         return self.date_time[:10]
 
 
-Snapshot.__new__.__defaults__ = ("", {}, {}, {}, {})
+Snapshot.__new__.__defaults__ = ("", None, {}, {}, {}, {})
+
+#: ``events`` is ``{pair: [(event_date, event, variance_days), ...]}`` in date order.
+EventSet = namedtuple("EventSet", "event_set_id source date_time note events")
 
 
 class MarketDataStoreError(RuntimeError):
@@ -104,6 +139,42 @@ def data_date_time(valuation_date, now=None):
     if _day(valuation_date) == _day(now):
         return _iso(now)
     return f"{_day(valuation_date)}T{CLOSE}"
+
+
+def validate_events(rows):
+    """``[(PAIR, YYYY-MM-DD, event, variance_days)]`` from ``rows`` of
+    ``(pair, date, event, variance_days)``; raises ``ValueError`` listing
+    every bad row (1-based), so a set is stored whole or not at all."""
+    import math
+    import re
+    clean, errors, seen = [], [], set()
+    for number, row in enumerate(rows, start=1):
+        try:
+            pair, date, event, variance_days = row
+            pair = str(pair or "").replace("/", "").replace(" ", "").upper()
+            if not re.fullmatch(r"[A-Z]{6}", pair):
+                raise ValueError(f"pair {row[0]!r} is not two 3-letter currency codes")
+            stamp = pd.Timestamp(date)
+            if stamp is pd.NaT or pd.isna(stamp):
+                raise ValueError(f"date {date!r} is not a date")
+            day = stamp.strftime("%Y-%m-%d")
+            event = str(event or "").strip()
+            if not event:
+                raise ValueError("event name is empty")
+            days = float(variance_days)
+            if not math.isfinite(days):
+                raise ValueError(f"variance days {variance_days!r} is not a finite number")
+            if (pair, day, event) in seen:
+                raise ValueError(f"duplicate of an earlier row ({pair} {day} {event})")
+            seen.add((pair, day, event))
+            clean.append((pair, day, event, days))
+        except (TypeError, ValueError) as exc:
+            errors.append(f"row {number}: {exc}")
+    if errors:
+        raise ValueError("event set not stored: " + "; ".join(errors))
+    if not clean:
+        raise ValueError("event set not stored: no events")
+    return clean
 
 
 def _rows(spots=None, depo_curves=None, vols=None, forward_points=None):
@@ -133,6 +204,8 @@ class MarketDataStore:
                 "SELECT name FROM sqlite_master WHERE type = 'table'")}
             if "snapshots" in tables and "markets" not in tables:
                 self._migrate_v1(db)
+            elif "markets" in tables and "event_sets" not in tables:
+                self._migrate_v2(db)
             with db:
                 db.executescript(_SCHEMA)
                 version = db.execute("SELECT MAX(version) FROM schema_info").fetchone()[0]
@@ -148,15 +221,43 @@ class MarketDataStore:
         db.execute("PRAGMA foreign_keys = ON")
         return db
 
+    def _backup(self, version):
+        backup = self.path.with_name(f"{self.path.stem}.v{version}-backup-"
+                                     f"{datetime.now():%Y%m%d_%H%M%S}{self.path.suffix}")
+        shutil.copy2(str(self.path), str(backup))
+        return backup
+
+    def _migrate_v2(self, db):
+        """Schema 2 -> 3: event sets, and ``markets.event_set_id`` (unpinned).
+
+        Backed up first; one explicit transaction, rolled back on any error.
+        """
+        backup = self._backup(2)
+        db.isolation_level = None
+        try:
+            db.execute("BEGIN")
+            for statement in filter(str.strip, _EVENT_SCHEMA.split(";")):
+                db.execute(statement)
+            db.execute("ALTER TABLE markets ADD COLUMN event_set_id INTEGER "
+                       "REFERENCES event_sets (event_set_id)")
+            db.execute("DELETE FROM schema_info")
+            db.execute("INSERT INTO schema_info VALUES (?)", (SCHEMA_VERSION,))
+            db.execute("COMMIT")
+        except Exception as exc:
+            db.execute("ROLLBACK")
+            raise MarketDataStoreError(
+                f"could not migrate {self.path} (unchanged; backup at {backup}): {exc}") from exc
+        finally:
+            db.isolation_level = ""
+        self.migrated_from = backup
+
     def _migrate_v1(self, db):
         """``snapshots`` (id, as_of, valuation_date, source) -> ``markets``.
 
         The file is copied to a backup first; the migration is one explicit
         transaction, rolled back entirely on any error.
         """
-        backup = self.path.with_name(
-            f"{self.path.stem}.v1-backup-{datetime.now():%Y%m%d_%H%M%S}{self.path.suffix}")
-        shutil.copy2(str(self.path), str(backup))
+        backup = self._backup(1)
         db.isolation_level = None                      # explicit BEGIN / COMMIT below
         try:
             db.execute("BEGIN")
@@ -196,25 +297,103 @@ class MarketDataStore:
         self.migrated_from = backup
 
     def save(self, date_time, market_source, spots=None, depo_curves=None, vols=None,
-             forward_points=None, fetched_at=None, note=""):
+             forward_points=None, fetched_at=None, note="", event_set_id=None):
         """Store one market in a single transaction and return its ``market_id``.
 
         ``vols`` is ``{pair: {tenor: {field: value}}}`` with fields from
-        ``VOL_FIELDS``; ``forward_points`` is ``{pair: {tenor: points}}``.
+        ``VOL_FIELDS``; ``forward_points`` is ``{pair: {tenor: points}}``;
+        ``event_set_id`` pins the market's events (recorded as a pin).
         """
         if not market_source:
             raise ValueError("market_source is required")
         rows = _rows(spots, depo_curves, vols, forward_points)
+        fetched_at = _iso(fetched_at or datetime.now())
         with closing(self._connect()) as db, db:
             cursor = db.execute(
-                "INSERT INTO markets (market_source, date_time, fetched_at, note) "
-                "VALUES (?, ?, ?, ?)",
-                (market_source, _iso(date_time), _iso(fetched_at or datetime.now()), note))
+                "INSERT INTO markets (market_source, date_time, fetched_at, note, event_set_id) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (market_source, _iso(date_time), fetched_at, note, event_set_id))
             market_id = cursor.lastrowid
             db.executemany(
                 "INSERT INTO quotes (market_id, kind, name, tenor, value) VALUES (?, ?, ?, ?, ?)",
                 [(market_id, *row) for row in rows])
+            if event_set_id is not None:
+                db.execute("INSERT INTO event_pins VALUES (?, ?, ?, ?)",
+                           (market_id, event_set_id, fetched_at, "pinned when saved"))
         return market_id
+
+    # -- event sets ----------------------------------------------------------
+
+    def save_event_set(self, rows, source, date_time=None, note=""):
+        """Store a new event set from ``(pair, date, event, variance_days)``
+        rows, validated as a whole (``validate_events``); returns its id."""
+        if not source:
+            raise ValueError("event set source is required")
+        clean = validate_events(rows)
+        with closing(self._connect()) as db, db:
+            event_set_id = db.execute(
+                "INSERT INTO event_sets (source, date_time, note) VALUES (?, ?, ?)",
+                (source, _iso(date_time or datetime.now()), note)).lastrowid
+            db.executemany("INSERT INTO events VALUES (?, ?, ?, ?, ?)",
+                           [(event_set_id, *row) for row in clean])
+        return event_set_id
+
+    def load_event_set(self, event_set_id):
+        """The event set, or ``None`` when it does not exist."""
+        with closing(self._connect()) as db:
+            head = db.execute("SELECT event_set_id, source, date_time, note FROM event_sets "
+                              "WHERE event_set_id = ?", (int(event_set_id),)).fetchone()
+            if head is None:
+                return None
+            rows = db.execute("SELECT pair, event_date, event, variance_days FROM events "
+                              "WHERE event_set_id = ? ORDER BY pair, event_date, event",
+                              (head[0],)).fetchall()
+        events = {}
+        for pair, day, event, days in rows:
+            events.setdefault(pair, []).append((day, event, days))
+        return EventSet(*head, events)
+
+    def latest_event_set_id(self, at_or_before=None):
+        """The id of the latest event set (by ``date_time``), or ``None``."""
+        query, args = "SELECT event_set_id FROM event_sets", ()
+        if at_or_before is not None:
+            query += " WHERE date_time <= ?"
+            args = (_iso(at_or_before),)
+        with closing(self._connect()) as db:
+            row = db.execute(query + " ORDER BY date_time DESC, event_set_id DESC LIMIT 1",
+                             args).fetchone()
+        return None if row is None else row[0]
+
+    def event_sets(self):
+        """Event sets, newest first: ``event_set_id, source, date_time, note, events``."""
+        with closing(self._connect()) as db:
+            return pd.read_sql_query(
+                "SELECT s.event_set_id, s.source, s.date_time, s.note, COUNT(e.pair) AS events "
+                "FROM event_sets s LEFT JOIN events e ON e.event_set_id = s.event_set_id "
+                "GROUP BY s.event_set_id ORDER BY s.date_time DESC, s.event_set_id DESC", db)
+
+    def pin_events(self, market_id, event_set_id, reason):
+        """Re-pin a market to an event set; the change is recorded."""
+        if not str(reason or "").strip():
+            raise ValueError("a reason is required to re-pin a market's events")
+        with closing(self._connect()) as db, db:
+            if db.execute("SELECT 1 FROM markets WHERE market_id = ?",
+                          (int(market_id),)).fetchone() is None:
+                raise ValueError(f"market {market_id} does not exist")
+            if db.execute("SELECT 1 FROM event_sets WHERE event_set_id = ?",
+                          (int(event_set_id),)).fetchone() is None:
+                raise ValueError(f"event set {event_set_id} does not exist")
+            db.execute("UPDATE markets SET event_set_id = ? WHERE market_id = ?",
+                       (int(event_set_id), int(market_id)))
+            db.execute("INSERT INTO event_pins VALUES (?, ?, ?, ?)",
+                       (int(market_id), int(event_set_id), _iso(datetime.now()), reason))
+
+    def event_pins(self, market_id):
+        """A market's pin history, oldest first."""
+        with closing(self._connect()) as db:
+            return pd.read_sql_query("SELECT event_set_id, pinned_at, reason FROM event_pins "
+                                     "WHERE market_id = ? ORDER BY rowid", db,
+                                     params=(int(market_id),))
 
     def snapshots(self, date=None):
         """Markets, newest first: ``market_id, market_source, date_time,
@@ -238,8 +417,8 @@ class MarketDataStore:
         earlier (a date: any time that day), or taken ``at_or_before`` a
         date-time; with none of them, the latest market.
         """
-        query, args = ("SELECT market_id, market_source, date_time, fetched_at, note "
-                       "FROM markets WHERE 1 = 1"), []
+        query, args = ("SELECT market_id, market_source, date_time, fetched_at, note, "
+                       "event_set_id FROM markets WHERE 1 = 1"), []
         if market_id is not None:
             query += " AND market_id = ?"
             args.append(int(market_id))

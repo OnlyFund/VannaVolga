@@ -5,7 +5,8 @@ import sqlite3
 import pytest
 
 from market_data.store import (
-    DEPO, SPOT, VOL_FIELDS, MarketDataStore, MarketDataStoreError, data_date_time,
+    DEPO, SCHEMA_VERSION, SPOT, VOL_FIELDS, MarketDataStore, MarketDataStoreError,
+    data_date_time,
 )
 
 
@@ -170,7 +171,7 @@ def test_a_store_from_a_newer_schema_is_refused(tmp_path):
     path = tmp_path / "market_data.sqlite"
     MarketDataStore(path)
     db = sqlite3.connect(str(path))
-    db.execute("UPDATE schema_info SET version = 3")
+    db.execute("UPDATE schema_info SET version = ?", (SCHEMA_VERSION + 1,))
     db.commit()
     db.close()
     with pytest.raises(MarketDataStoreError, match="newer than this code"):
