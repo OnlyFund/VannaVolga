@@ -302,15 +302,32 @@ def render_app():
 
 
     def prepare_market_surfaces():
-        """Calibrate every loaded pair's pillars once per market state, with progress.
+        """Calibrate the pairs in use, each once per market state, with progress.
 
-        Each pair has its own fingerprint, so editing one pair recalibrates
-        only that pair. A pair that fails is skipped here; pricing reports
-        its errors per line.
+        Only the active pair, the Pricer lines' pairs and the selected
+        Portfolio trades' pairs are calibrated here, and a pair only when its
+        market changed (fingerprint), so adding a pair calibrates just that
+        pair. Store markets restore from the disk cache. Other pairs
+        calibrate on demand if something prices them. A pair that fails is
+        skipped here; pricing reports its errors per line.
         """
+        from app.calibration_plan import calibrate_pairs, pairs_in_use
+        from app.ui.trades_block import trade_store
+        rows = st.session_state.get("option_rows")
+        trades = []
+        trades_store, _ = trade_store()
+        if trades_store is not None:
+            try:
+                live = trades_store.trades(status="live")
+                selected = st.session_state.get("_portfolio_selection")
+                trades = live if selected is None else [
+                    trade for trade in live if trade.trade_id in set(selected)]
+            except Exception:
+                trades = []           # an unreadable book only means less pre-calibration
+        pairs = pairs_in_use(market_set.available(), market_context.currency_pair, rows, trades)
         common = (repr(settings), str(valuation_date))
         fingerprints = {}
-        for pair in market_set.available():
+        for pair in pairs:
             if pair == market_context.currency_pair:
                 state = (spot, forward_divisor, broker_strangle,
                          vol_rows.to_json(date_format="iso"),
@@ -320,48 +337,23 @@ def render_app():
                 state = json.dumps(market_library.get(pair), sort_keys=True, default=str)
             fingerprints[pair] = repr((common, state))
         done = st.session_state.setdefault("_surface_fingerprints", {})
-        todo = []
-        for pair, fingerprint in fingerprints.items():
-            if done.get(pair) == fingerprint:
-                continue
-            try:
-                expiries = market_set.market(pair).pillar_expiries()
-            except Exception:
-                expiries = []
-            todo.append((pair, fingerprint, expiries))
-        total = sum(len(expiries) for _, _, expiries in todo)
-        if not total:
-            for pair, fingerprint, _ in todo:
-                done[pair] = fingerprint
+        if all(done.get(pair) == fingerprints[pair] for pair in pairs):
             return
         bar = surface_progress.progress(0.0, text="Preparing volatility surfaces...")
-        completed = 0
-        try:
-            for pair, fingerprint, expiries in todo:
-                context = market_set.market(pair)
-                first = completed
 
-                def report(index, count, label, pair=pair, first=first):
-                    bar.progress(min(first / total, 1.0),
-                                 text=f"{pair}: converting quotes {label} ({index + 1}/{count})")
-                market_service.progress = report
-                try:
-                    for expiry in expiries:
-                        bar.progress(min(completed / total, 1.0),
-                                     text=f"{pair}: building {pricing_model} smile for "
-                                          f"{expiry:%d-%b-%Y} ({completed + 1}/{total})")
-                        context.calibrate_pillar(expiry)
-                        market_service.progress = None
-                        completed += 1
-                except Exception:
-                    # Invalid inputs for this pair: pricing reports the error.
-                    completed = first + len(expiries)
-                finally:
-                    market_service.progress = None
-                done[pair] = fingerprint
+        def report(position, count, pair):
+            bar.progress(min(position / max(count, 1), 1.0),
+                         text=f"{pair}: preparing {pricing_model} smiles ({position + 1}/{count})")
+        try:
+            outcomes = calibrate_pairs(
+                market_set, pairs, fingerprints, done, settings, valuation_date,
+                st.session_state[cache_key], market_service,
+                origins=st.session_state.get("_market_origins", {}),
+                payloads=market_library, progress=report)
         finally:
             market_service.progress = None
             surface_progress.empty()
+        st.session_state["_last_calibration"] = outcomes
 
     prepare_market_surfaces()
 
