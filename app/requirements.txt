@@ -1,2 +1,9 @@
-# Entrypoint-local manifest takes precedence over the legacy root Pipfile.
--r ../requirements.txt
+# Streamlit Community Cloud: select Python 3.11 in deployment settings.
+# Keep experimental_rerun support until the app migrates to st.rerun.
+streamlit==1.36.0
+numpy==1.26.4
+pandas==2.2.3
+scipy==1.13.1
+numba==0.60.0
+typing_extensions==4.12.2
+QuantLib==1.32
