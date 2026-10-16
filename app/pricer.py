@@ -442,14 +442,15 @@ def aggregate_by_pair(results, hedge_trades=()):
         "pnl_base",
         *(column for greek in GREEK_NAMES for column in (f"fixed_{greek}", greek)),
     ]
-    if not results:
-        return pd.DataFrame(columns=columns)
-    result_df = pd.DataFrame(results)
-    aggregation = (
-        result_df[columns]
-        .groupby("currency_pair", as_index=False, sort=True)
-        .sum(min_count=1)
-    )
+    if results:
+        aggregation = (
+            pd.DataFrame(results)[columns]
+            .groupby("currency_pair", as_index=False, sort=True)
+            .sum(min_count=1)
+        )
+    else:
+        # Forwards alone still give their pairs a row.
+        aggregation = pd.DataFrame(columns=columns)
     for trade in hedge_trades:
         pair = str(trade["currency_pair"]).upper()
         matches = aggregation["currency_pair"] == pair

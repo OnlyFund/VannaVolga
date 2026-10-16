@@ -1,6 +1,6 @@
 from vanna_volga_sabr import VannaVolga_SABR, VannaVolga
 from market_data import MarketData
-from helper_functions.vol_data import VolData
+from market_data.vol_data import VolData
 from pricing_utils.BlackScholes import BlackScholes
 from helper_functions.VannaVolga_function import normalize_atm_type
 from itertools import islice

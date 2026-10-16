@@ -15,8 +15,9 @@ class EventCalendar:
     def __init__(self, csv_file: str, calendar_years_ahead: int = 5):
         path = Path(csv_file).expanduser()
         if not path.is_file() and not path.is_absolute():
-            root = Path(__file__).resolve().parent
-            for candidate in (root / path, root / path.name, root / "helper_functions" / path.name):
+            root = Path(__file__).resolve().parents[1]
+            for candidate in (root / path, root / path.name,
+                              root / "market_data" / "samples" / path.name):
                 if candidate.is_file():
                     path = candidate
                     break

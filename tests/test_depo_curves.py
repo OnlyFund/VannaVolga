@@ -1,9 +1,9 @@
 """Depo curve tickers and curve construction (no Bloomberg call)."""
 import pytest
 
-from helper_functions.depo_tickers import TENORS, depo_tickers
+from market_data.depo_tickers import TENORS, depo_tickers
 
-get_spots = pytest.importorskip("get_spots")
+get_spots = pytest.importorskip("market_data.bloomberg_fetch")
 
 
 def test_tickers_use_root_and_tenor_suffix_unless_special():

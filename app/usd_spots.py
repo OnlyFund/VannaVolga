@@ -1,6 +1,6 @@
 """Conversion to USD with the USD spots from the market data store.
 
-``get_spots.py`` stores the spots of every USD pair (``EURUSD``, ``USDJPY``
+``market_data.bloomberg_fetch`` stores the spots of every USD pair (``EURUSD``, ``USDJPY``
 ...), so any currency converts to USD with one spot, and a cross such as
 EURJPY is the product or ratio of two USD spots.
 """
@@ -15,7 +15,7 @@ USD_COLUMNS = (("mtm_base", "mtm_usd"), ("pnl_base", "pnl_usd"),
 
 def latest_snapshot(valuation_date=None, store=None):
     """The newest stored snapshot for ``valuation_date`` or before it, or ``None``."""
-    from app.market_data_store import open_market_data_store
+    from market_data.store import open_market_data_store
     store = store or open_market_data_store()
     return store.load(valuation_date=valuation_date, on_or_before=valuation_date is not None)
 

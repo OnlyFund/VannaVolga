@@ -1,6 +1,6 @@
 """Market data snapshots: every quote fetched, by datetime, in one SQLite file.
 
-Each fetch (``get_spots.py``) saves one snapshot: when it was taken
+Each fetch (``market_data.bloomberg_fetch``) saves one snapshot: when it was taken
 (``as_of``), the valuation date it is for, and its quotes. A quote is one
 row ``(kind, name, tenor, value)``:
 

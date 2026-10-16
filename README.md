@@ -25,9 +25,9 @@ The normal production path is:
    dynamics.
 
 `vanna_volga_sabr.py` is an optional model that calibrates SABR directly to
-the five quoted pillars and uses SABR for wing behavior. The `SABR/` directory
-also contains reference and experimental implementations; those modules are
-not all production-ready.
+the five quoted pillars and uses SABR for wing behavior. The `research/SABR/`
+directory also contains reference and experimental implementations; those
+modules are not all production-ready.
 
 ## Market-data schema and units
 
@@ -507,7 +507,7 @@ base amount to both fixed and smile delta totals.
 
 ## Forward volatility and events
 
-`helper_functions/vol_data.py` builds a forward volatility curve from total
+`market_data/vol_data.py` builds a forward volatility curve from total
 variance. Weekdays contribute one variance day, Saturday contributes zero,
 Sunday contributes 0.2, and configured events add variance days. The event
 interval is `(start, end]`; the base interval is `[start, end)`.
@@ -528,7 +528,7 @@ choosing a bracket. A pillar on the valuation date is retained as the
 zero-variance interpolation anchor.
 
 Volatility and event CSVs are resolved from the current working directory
-first, then from the bundled project data locations. Explicit paths retain
+first, then from the bundled samples in `market_data/samples/`. Explicit paths retain
 priority. Invalid required quote fields are dropped during CSV cleanup, but
 the loader raises if no valid rows remain, reconstructed wing vols are not
 positive, or expiry/variance times are ambiguous. Malformed nonnumeric event
@@ -538,18 +538,24 @@ error rather than silently disabling event adjustments.
 ## Repository structure
 
 ```text
-market_data.py                    Market quotes and smile perturbation types
+app/                              Streamlit risk app (markets, pricer, trades, reports)
+market_data/                      Market data: model, stored snapshots and sources
+  model.py                        MarketData quotes and Modifications (smile dynamics)
+  store.py                        Snapshots of fetched quotes by datetime (SQLite)
+  bloomberg_fetch.py              Fetch USD spots and depo curves into the store
+  depo_tickers.py                 Bloomberg depo curve tickers
+  vol_data.py, event_calendar.py  CSV vol curves and event variance-day calendar
+  samples/                        Example vol, event calendar and market files
 VannaVolga_ImpliedVol.py           Main Vanna-Volga implied-vol engine
 vanna_volga_sabr.py                Five-pillar SABR/Vanna-Volga extension
-pricing_utils/                    Black-Scholes and SABR numerical routines
-helper_functions/                 Strike, delta, interpolation, and vol helpers
+pricing/, pricing_utils/          Pricing entry points; Black-Scholes and SABR routines
+helper_functions/                 Strike, delta, interpolation, and convention helpers
 surface_models/                   Spot-dependent smile reconstruction
 Greeks/                           Fixed, smile, cross, decay, and weighted risks
-variance_swap/                    Variance-swap integration utilities
-event_calendar.py                 Event variance-day calendar
-SABR/                             Reference and experimental SABR implementations
-test_files/                       Executable examples and comparison scripts
-tests/                            Regression tests for conventions and curves
+research/                         Experimental scripts: SABR, variance swap, digitals,
+                                  cross skew, Greek comparisons (not used by the app)
+tests/                            Regression and golden tests
+data/local/                       Runtime data, not committed: trades, market data store
 ```
 
 ## Running examples and tests
@@ -560,6 +566,7 @@ Run commands from the project directory:
 python -m pytest -q
 python -m pytest -q tests/test_vol_modeling_consistency.py
 python -m pytest -q tests/test_forward_vol_curve.py
+python -m market_data.bloomberg_fetch     # needs a Bloomberg terminal
 ```
 
 Example scripts should be run as modules or with the project directory on

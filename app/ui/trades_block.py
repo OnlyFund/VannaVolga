@@ -412,7 +412,7 @@ def _pair_view(totals, market, overrides, valuation_date=None):
     unconverted = list(totals["currency_pair"][is_pair & totals[usd[0]].isna()])
     if unconverted:
         st.warning("No USD spot for " + ", ".join(unconverted) + ": USD columns left blank"
-                   + ("." if snapshot else "; run get_spots.py for a USD spot snapshot."))
+                   + ("." if snapshot else "; run python -m market_data.bloomberg_fetch for a USD spot snapshot."))
     moved = [f"{pair} {pricer.format_strike_for_pair(pair, spot)} "
              f"(market {pricer.format_strike_for_pair(pair, market[pair])})"
              for pair, spot in sorted(overrides.items())]

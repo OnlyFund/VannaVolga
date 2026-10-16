@@ -7,15 +7,15 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from event_calendar import EventCalendar
-from helper_functions.vol_data import VolData
+from market_data.event_calendar import EventCalendar
+from market_data.vol_data import VolData
 
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 
 
 def test_event_calendar_normalizes_timezone_and_includes_events():
-    calendar = EventCalendar(os.path.join(ROOT, "event_calendar.csv"))
+    calendar = EventCalendar(os.path.join(ROOT, "market_data", "samples", "event_calendar.csv"))
     assert calendar.get_event_weights(["2025-09-05"]).iloc[0] == pytest.approx(1.5)
     assert calendar.get_var_days("2025-09-04", "2025-09-05") == pytest.approx(2.5)
     assert calendar.get_var_days("2025-09-04", "2025-09-06") == pytest.approx(3.5)
@@ -29,7 +29,7 @@ def _expected_interpolated_vol(valuation_date, target_date, pillars, column="ATM
     calendar days), interpolated linearly against the event-weighted
     variance-day clock, then annualized over the target's calendar days.
     """
-    calendar = EventCalendar(os.path.join(ROOT, "event_calendar.csv"))
+    calendar = EventCalendar(os.path.join(ROOT, "market_data", "samples", "event_calendar.csv"))
     valuation_date = pd.Timestamp(valuation_date)
     target_date = pd.Timestamp(target_date)
     x = np.concatenate(([0.0], pillars["vdays"].to_numpy(dtype=float)))
@@ -45,9 +45,9 @@ def _expected_interpolated_vol(valuation_date, target_date, pillars, column="ATM
 
 def test_pre_event_maturity_is_discounted_relative_to_event_pillar():
     data = VolData(
-        os.path.join(ROOT, "vol_data.csv"),
+        os.path.join(ROOT, "market_data", "samples", "vol_data.csv"),
         valuation_date="2025-08-29",
-        calendar_csv=os.path.join(ROOT, "event_calendar.csv"),
+        calendar_csv=os.path.join(ROOT, "market_data", "samples", "event_calendar.csv"),
     )
     pillars = data.vols_5pt_df.dropna(subset=["expiry"])
     pre_event = data.interpolate_vols("2025-09-04")
@@ -68,9 +68,9 @@ def test_interpolated_vols_are_not_rescaled_by_the_variance_day_clock():
     relying on the exact-match shortcut inside ``interpolate_vols``.
     """
     data = VolData(
-        os.path.join(ROOT, "vol_data.csv"),
+        os.path.join(ROOT, "market_data", "samples", "vol_data.csv"),
         valuation_date="2025-08-29",
-        calendar_csv=os.path.join(ROOT, "event_calendar.csv"),
+        calendar_csv=os.path.join(ROOT, "market_data", "samples", "event_calendar.csv"),
     )
     pillars = data.vols_5pt_df.dropna(subset=["expiry"])
     for column in ("PUT_10", "PUT_25", "ATM", "CALL_25", "CALL_10"):
@@ -82,9 +82,9 @@ def test_interpolated_vols_are_not_rescaled_by_the_variance_day_clock():
 
 def test_rolled_valuation_excludes_already_observed_event():
     data = VolData(
-        os.path.join(ROOT, "vol_data.csv"),
+        os.path.join(ROOT, "market_data", "samples", "vol_data.csv"),
         valuation_date="2025-09-05",
-        calendar_csv=os.path.join(ROOT, "event_calendar.csv"),
+        calendar_csv=os.path.join(ROOT, "market_data", "samples", "event_calendar.csv"),
     )
     pillars = data.vols_5pt_df.dropna(subset=["expiry"])
     overnight = data.interpolate_vols("2025-09-06")
@@ -101,9 +101,9 @@ def test_rolled_valuation_excludes_already_observed_event():
 
 def test_forward_curve_is_valid_and_first_bucket_is_defined():
     data = VolData(
-        os.path.join(ROOT, "vol_data.csv"),
+        os.path.join(ROOT, "market_data", "samples", "vol_data.csv"),
         valuation_date="2025-08-29",
-        calendar_csv=os.path.join(ROOT, "event_calendar.csv"),
+        calendar_csv=os.path.join(ROOT, "market_data", "samples", "event_calendar.csv"),
     )
     curve = data.vols_5pt_df.dropna(subset=["expiry"])
     forward_cols = [c for c in curve.columns if c.startswith("FWDVOL_")]
@@ -114,9 +114,9 @@ def test_forward_curve_is_valid_and_first_bucket_is_defined():
 
 def test_interpolation_reproduces_quotes_and_rejects_out_of_range_dates():
     data = VolData(
-        os.path.join(ROOT, "vol_data.csv"),
+        os.path.join(ROOT, "market_data", "samples", "vol_data.csv"),
         valuation_date="2025-08-29",
-        calendar_csv=os.path.join(ROOT, "event_calendar.csv"),
+        calendar_csv=os.path.join(ROOT, "market_data", "samples", "event_calendar.csv"),
     )
     valid = data.vols_5pt_df.dropna(subset=["expiry"])
     for _, row in valid.iterrows():

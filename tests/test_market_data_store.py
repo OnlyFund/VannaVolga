@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from app.market_data_store import DEPO, SPOT, MarketDataStore
+from market_data.store import DEPO, SPOT, MarketDataStore
 
 
 @pytest.fixture
@@ -58,12 +58,12 @@ def test_json_files_import_into_one_snapshot(store, tmp_path):
 
 
 def test_app_reads_stored_market_data_without_loading_bloomberg():
-    # The app prices from the store; only get_spots.py talks to Bloomberg.
+    # The app prices from the store; only market_data.bloomberg_fetch talks to Bloomberg.
     import subprocess
     import sys
-    code = ("import sys, app.ui.app, app.ui.trades_block, app.usd_spots, app.market_data_store; "
+    code = ("import sys, app.ui.app, app.ui.trades_block, app.usd_spots, market_data.store; "
             "print(sorted(n for n in sys.modules if n.split('.')[0] in "
-            "('xbbg', 'blpapi', 'get_spots')))")
+            "('xbbg', 'blpapi') or n == 'market_data.bloomberg_fetch'))")
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                             timeout=300)
     assert result.stdout.strip().splitlines()[-1] == "[]", result.stderr[-2000:]

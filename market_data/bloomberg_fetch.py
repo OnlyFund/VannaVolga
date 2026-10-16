@@ -4,8 +4,8 @@ from datetime import datetime
 import pandas as pd
 from xbbg.blp import bdh
 
-from app.market_data_store import open_market_data_store
-from helper_functions.depo_tickers import TENORS, depo_tickers
+from market_data.store import open_market_data_store
+from market_data.depo_tickers import TENORS, depo_tickers
 
 COMMON_CCY = 'USD'
 BASE_EXCEPTIONS = ['EUR', 'GBP', 'AUD', 'NZD']

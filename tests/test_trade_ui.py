@@ -122,7 +122,7 @@ def test_portfolio_reports_spot_and_usd_columns(store, markets, tmp_path):
     service.book_lines(store, markets, grid({}, {}, {"currency_pair": "USDJPY", "premium_ccy": "JPY"}),
                        MODS, with_hedges=True)
     results, forwards, _ = service.price_trades(markets, store.trades(), MODS)
-    from app.market_data_store import MarketDataStore
+    from market_data.store import MarketDataStore
     spots = {"EURUSD": 1.12, "USDJPY": 158.0}
     market_data = MarketDataStore(tmp_path / "market_data.sqlite")
     market_data.save("2026-10-15", "2026-10-15T17:00:00", spots={**spots, "EURUSD": 1.0})
@@ -169,3 +169,18 @@ def test_portfolio_spot_reprices_without_moving_the_market(store, markets):
         "EURUSD": 1.2, "USDJPY": 160.0}
     spots = portfolio_spots(market, overrides, {"EURUSD": 1.0, "GBPUSD": 1.3})
     assert spots == {"EURUSD": 1.2, "USDJPY": 158.0, "GBPUSD": 1.3}
+
+
+def test_forwards_alone_still_total_per_pair(store, markets):
+    from app.trades import service
+    from app.ui.trades_block import pair_totals
+    service.book_lines(store, markets, grid({}, {}), MODS, with_hedges=True)
+    forwards_only = [t for t in store.trades() if t.is_forward]
+    results, forwards, errors = service.price_trades(markets, forwards_only, MODS)
+    assert errors == [] and results == [] and len(forwards) == 1
+    totals = pair_totals(results, forwards)
+    assert list(totals["currency_pair"]) == ["EURUSD"]
+    assert list(totals["options"]) == [0] and list(totals["forwards"]) == [1]
+    assert float(totals.at[0, "mtm_base"]) == pytest.approx(forwards[0]["mtm_base"])
+    assert float(totals.at[0, "delta"]) == pytest.approx(forwards[0]["delta_offset"])
+    assert float(totals.at[0, "vega"]) == 0.0

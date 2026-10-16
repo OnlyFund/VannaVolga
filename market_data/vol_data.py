@@ -4,7 +4,7 @@ from pathlib import Path
 from math import sqrt
 from concurrent.futures import ThreadPoolExecutor
 import warnings
-from event_calendar import EventCalendar
+from market_data.event_calendar import EventCalendar
 
 PILLARS = ['PUT_10', 'PUT_25', 'ATM', 'CALL_25', 'CALL_10']
 
@@ -43,7 +43,7 @@ class VolData:
     """
 
     def __init__(self, data_file: str, valuation_date=None, calendar_csv='event_calendar.csv'):
-        self.data_file = _resolve_data_path(data_file, "helper_functions")
+        self.data_file = _resolve_data_path(data_file, "market_data/samples")
         self.df = pd.read_csv(self.data_file)
         required = {'tenor', 'expiry', 'v_atm', 'rr_25', 'bf_25', 'rr_10', 'bf_10'}
         missing = required.difference(self.df.columns)
