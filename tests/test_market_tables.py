@@ -49,15 +49,15 @@ def _snapshot(tmp_path, spots=None, depo_curves=None):
 def test_stored_quotes_build_a_market_the_app_loads_and_calibrates(tmp_path):
     from app.market_context import MarketContext, PricingSettings
     from app.market_store import read_market_file
-    from market_data.market_tables import DEFAULT_TERM_DISCOUNT, market, market_bundle
+    from market_data.market_tables import market, market_bundle
     usd_depo = {tenor: 0.04 for tenor in APP_TENORS if tenor != "9M"}
     snapshot = _snapshot(tmp_path, depo_curves={"USD": usd_depo})
     payload, notes = market(snapshot, "EURUSD")
     assert payload["forward_divisor"] == 10000.0 and payload["spot"] == 1.1258
     forwards = pd.DataFrame(payload["forward_points"])
     assert list(forwards["tenor"]) == list(APP_TENORS)
-    assert list(forwards["term_discount"]) == [0.04] * 6 + [DEFAULT_TERM_DISCOUNT, 0.04]
-    assert notes == ["EURUSD: no USD depo rate for 9M; term discount 0.05 used"]
+    assert list(forwards["term_discount"]) == pytest.approx([0.04] * 8)   # SOFR, 9M interpolated
+    assert notes == ["USD: SOFR 9M interpolated"]
 
     bundle, _ = market_bundle(snapshot)
     markets, errors = read_market_file(bundle)               # the Markets tab's loader
@@ -75,7 +75,7 @@ def test_stored_quotes_build_a_market_the_app_loads_and_calibrates(tmp_path):
 
 def test_market_needs_spot_and_tenors_with_both_vols_and_forwards(tmp_path):
     from market_data.market_tables import market
-    snapshot = _snapshot(tmp_path)
+    snapshot = _snapshot(tmp_path, depo_curves={"USD": {"1M": 0.04}})
     assert market(snapshot, "USDJPY")[0] is None             # no spot, no quotes
     partial = snapshot._replace(forward_points={"EURUSD": {"1M": 14.2, "3M": 44.4}})
     payload, notes = market(partial, "EURUSD")
@@ -101,7 +101,7 @@ def test_butterfly_convention_by_pair(tmp_path):
     from market_data.universe import EM_CROSSES, G10_CROSSES, broker_strangle
     assert all(broker_strangle(pair) for pair in G10_CROSSES)
     assert not any(broker_strangle(pair) for pair in EM_CROSSES) and len(EM_CROSSES) == 20
-    snapshot = _snapshot(tmp_path)
+    snapshot = _snapshot(tmp_path, depo_curves={"USD": {"1M": 0.04}})
     assert market(snapshot, "EURUSD")[0]["broker_strangle"] is True
     assert market(snapshot, "EURUSD", broker_strangle=False)[0]["broker_strangle"] is False
     em = snapshot._replace(spots={"USDTRY": 49.5}, vols={"USDTRY": SURFACE},

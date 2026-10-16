@@ -8,7 +8,7 @@ from datetime import datetime
 import pandas as pd
 from xbbg.blp import bdh
 
-from market_data.depo_tickers import CURVE_FILL, TENORS, depo_tickers
+from market_data.depo_tickers import TENORS, depo_tickers
 from market_data.fwd_tickers import TENORS as FWD_TENORS, fwd_ticker
 from market_data.store import open_market_data_store
 from market_data.universe import (  # noqa: F401  (re-exported for callers)
@@ -45,45 +45,17 @@ def fetch_spots(valuation_date):
     return spots
 
 
-def build_depo_curve(quotes, fill='bfill'):
-    """``{tenor: decimal rate}`` from ``{tenor: pct rate or None}``, in tenor order
-    (``ON`` first when quoted, then ``TENORS``).
+def build_depo_curve(quotes):
+    """``{tenor: decimal rate}`` from ``{tenor: pct rate or None}``: the quoted
+    tenors only, in tenor order (``ON`` first when quoted).
 
-    ``bfill``: a missing tenor takes the next quoted tenor's rate; tenors after
-    the last quote stay missing and are left out. ``forwards``: only quoted
-    tenors; the rest are implied later from forward points
-    (``fill_from_forwards``).
+    Missing tenors are not filled here: markets discount at forward-implied
+    rates, and a quoted curve is only their fallback
+    (``market_data.discount_curves``), which fills gaps itself.
     """
     tenors = (['ON'] if quotes.get('ON') is not None else []) + list(TENORS)
-    curve = pd.Series([quotes.get(tenor) for tenor in tenors], index=tenors, dtype=float) / 100.0
-    curve = curve.dropna() if fill == 'forwards' else curve.bfill().dropna()
-    return {tenor: round(float(rate), 10) for tenor, rate in curve.items()}
-
-
-def fill_from_forwards(curves, spots, forward_points, valuation_date):
-    """Fill the unquoted tenors of ``CURVE_FILL == 'forwards'`` currencies with
-    rates implied by their USD pair's forward points and the USD curve.
-
-    Quoted tenors are kept. Returns the curves (updated in place).
-    """
-    from market_data.implied_rates import implied_rates
-    for ccy, fill in CURVE_FILL.items():
-        if fill != 'forwards':
-            continue
-        pair = next((p for p in CCY_LIST if ccy in (p[:3], p[3:])), None)
-        if pair is None or pair not in spots or pair not in forward_points or COMMON_CCY not in curves:
-            print(f'{ccy}: cannot imply depo rates (needs {pair} spot, forward points and a USD curve)')
-            continue
-        implied = implied_rates(ccy, pair, valuation_date, spots[pair], forward_points[pair],
-                                curves[COMMON_CCY])
-        quoted = curves.get(ccy, {})
-        filled = [tenor for tenor in TENORS if tenor not in quoted and tenor in implied]
-        tenors = (['ON'] if 'ON' in quoted else []) + list(TENORS)
-        curves[ccy] = {tenor: quoted.get(tenor, implied.get(tenor)) for tenor in tenors
-                       if tenor in quoted or tenor in implied}
-        if filled:
-            print(f'{ccy}: {", ".join(filled)} implied from {pair} forward points and the USD curve')
-    return curves
+    return {tenor: round(float(quotes[tenor]) / 100.0, 10)
+            for tenor in tenors if quotes.get(tenor) is not None}
 
 
 def fetch_depo_curves(valuation_date, currencies=CURRENCIES):
@@ -111,18 +83,13 @@ def fetch_depo_curves(valuation_date, currencies=CURRENCIES):
             print(f'No depo tickers for {ccy}')
             continue
         quotes = {tenor: last(ticker) for tenor, ticker in by_tenor.items()}
-        fill = CURVE_FILL.get(ccy, 'bfill')
-        curve = build_depo_curve(quotes, fill)
-        missing = [tenor for tenor in TENORS if quotes.get(tenor) is None]
+        curve = build_depo_curve(quotes)
         if not curve:
             print(f'No depo quotes for {ccy}')
             continue
+        missing = [tenor for tenor in TENORS if quotes.get(tenor) is None]
         if missing:
-            dropped = [tenor for tenor in TENORS if tenor not in curve]
-            if fill == 'bfill':
-                print(f'{ccy}: no quote for {", ".join(missing)}'
-                      + (f'; {", ".join(dropped)} left out (nothing after them to bfill from)'
-                         if dropped else '; filled from the next tenor'))
+            print(f'{ccy}: no depo quote for {", ".join(missing)}')
         curves[ccy] = curve
     return curves
 
@@ -216,13 +183,15 @@ def fetch_and_store(valuation_date=None, store=None, vols=True):
     curves = fetch_depo_curves(valuation_date)
     surfaces = fetch_vols(valuation_date) if vols else {}
     forwards = fetch_forward_points(valuation_date) if vols else {}
-    fill_from_forwards(curves, spots, forwards, valuation_date)
     store = store or open_market_data_store()
     snapshot_id = store.save(valuation_date, as_of, spots=spots, depo_curves=curves,
                              vols=surfaces, forward_points=forwards, source='bloomberg')
     print(f'Saved snapshot {snapshot_id} ({as_of:%Y-%m-%d %H:%M:%S}) for {valuation_date}: '
           f'{len(spots)} spots, {len(curves)} depo curves, {len(surfaces)} vol surfaces, '
           f'{len(forwards)} forward curves to {store.path}')
+    from market_data.discount_curves import DiscountCurves
+    for alert in DiscountCurves(store.load(snapshot_id=snapshot_id), store).basis_alerts():
+        print('Basis alert:', alert)
     return snapshot_id
 
 

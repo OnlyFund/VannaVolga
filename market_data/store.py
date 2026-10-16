@@ -124,21 +124,24 @@ class MarketDataStore:
         with closing(self._connect()) as db:
             return pd.read_sql_query(query, db, params=args)
 
-    def load(self, as_of=None, valuation_date=None, on_or_before=False):
+    def load(self, as_of=None, valuation_date=None, on_or_before=False, snapshot_id=None):
         """The latest snapshot taken at or before ``as_of`` (default: now), or ``None``.
 
         ``valuation_date`` limits it to snapshots for that date, or with
-        ``on_or_before`` to that date or earlier.
+        ``on_or_before`` to that date or earlier; ``snapshot_id`` loads that
+        snapshot alone.
         """
         query, args = "SELECT id, as_of, valuation_date, source FROM snapshots WHERE 1 = 1", []
+        if snapshot_id is not None:
+            query += " AND id = ?"
+            args.append(int(snapshot_id))
         if as_of is not None:
             query += " AND as_of <= ?"
             args.append(_iso(as_of))
         if valuation_date is not None:
             query += " AND valuation_date " + ("<= ?" if on_or_before else "= ?")
             args.append(_day(valuation_date))
-        query += " ORDER BY valuation_date DESC, as_of DESC, id DESC LIMIT 1" if on_or_before \
-            else " ORDER BY as_of DESC, id DESC LIMIT 1"
+        query += " ORDER BY valuation_date DESC, as_of DESC, id DESC LIMIT 1" if on_or_before             else " ORDER BY as_of DESC, id DESC LIMIT 1"
         with closing(self._connect()) as db:
             head = db.execute(query, args).fetchone()
             if head is None:
@@ -155,6 +158,24 @@ class MarketDataStore:
             elif kind.startswith(VOL_PREFIX):
                 vols.setdefault(name, {}).setdefault(tenor, {})[kind[len(VOL_PREFIX):]] = value
         return Snapshot(*head, spots, curves, vols, forwards)
+
+    def earlier(self, snapshot, since):
+        """Snapshots for valuation dates from ``since`` up to (not including)
+        ``snapshot``'s, and taken before it; newest first."""
+        with closing(self._connect()) as db:
+            ids = [row[0] for row in db.execute(
+                "SELECT id FROM snapshots WHERE valuation_date >= ? AND valuation_date < ? "
+                "AND as_of <= ? ORDER BY valuation_date DESC, as_of DESC, id DESC",
+                (_day(since), _day(snapshot.valuation_date), snapshot.as_of))]
+        return [self.load(snapshot_id=snapshot_id) for snapshot_id in ids]
+
+    def previous(self, snapshot):
+        """The snapshot taken just before ``snapshot`` (any valuation date), or ``None``."""
+        with closing(self._connect()) as db:
+            row = db.execute("SELECT id FROM snapshots WHERE (as_of < ? OR (as_of = ? AND id < ?)) "
+                             "ORDER BY as_of DESC, id DESC LIMIT 1",
+                             (snapshot.as_of, snapshot.as_of, snapshot.id)).fetchone()
+        return None if row is None else self.load(snapshot_id=row[0])
 
     def history(self, kind, name, tenor="", start=None, end=None):
         """One quote over time: ``as_of, valuation_date, value``, oldest first."""

@@ -19,15 +19,11 @@ def test_tickers_use_root_and_tenor_suffix_unless_special():
     assert depo_tickers("DKK") == {}
 
 
-def test_curve_is_decimal_and_backfilled():
+def test_curve_keeps_the_quoted_tenors_as_decimals():
     curve = get_spots.build_depo_curve({"1M": 3.74, "3M": 3.78, "6M": 4.245, "9M": None,
                                         "1Y": 4.775})
-    assert list(curve) == list(TENORS)
-    assert curve["1W"] == curve["2W"] == pytest.approx(0.0374)
-    assert curve["2M"] == pytest.approx(0.0378)
-    assert curve["9M"] == pytest.approx(0.04775)
-    # Nothing after the last quote to bfill from: those tenors are left out.
-    assert list(get_spots.build_depo_curve({"1M": 6.77})) == ["1W", "2W", "1M"]
+    assert curve == {"1M": 0.0374, "3M": 0.0378, "6M": 0.04245, "1Y": 0.04775}
+    assert list(get_spots.build_depo_curve({"ON": 6.5, "1M": 6.77})) == ["ON", "1M"]
     assert get_spots.build_depo_curve({}) == {}
 
 
@@ -49,14 +45,10 @@ def test_cnh_uses_cny_tickers_and_mxn_has_an_overnight_point():
     assert depo_tickers("MXN") == {"ON": "MXONBR Index", "1M": "MXIBTIIE Index"}
 
 
-def test_forwards_fill_keeps_only_quotes_then_implies_the_rest():
-    quoted = get_spots.build_depo_curve({"ON": 6.5, "1M": 6.7659}, "forwards")
-    assert quoted == {"ON": 0.065, "1M": 0.067659}
-    # USD at 4%, USDMXN forward points consistent with MXN at 7% on every tenor.
-    from market_data.implied_rates import implied_rates
-    from market_data.market_tables import tenor_dates
+def test_implied_rates_invert_covered_interest_parity():
     from helper_functions.fx_conventions import spot_date
-    from market_data.market_tables import _ql_date
+    from market_data.implied_rates import implied_rates
+    from market_data.market_tables import _ql_date, tenor_dates
     spot, valuation = 18.4, "2026-10-16"
     usd = {tenor: 0.04 for tenor in TENORS}
     points = {}
@@ -67,11 +59,5 @@ def test_forwards_fill_keeps_only_quotes_then_implies_the_rest():
         points[tenor] = (forward - spot) * 10000
     assert implied_rates("MXN", "USDMXN", valuation, spot, points, usd) == pytest.approx(
         {tenor: 0.07 for tenor in TENORS})
-    # And back the other way: the USD leg from MXN.
     assert implied_rates("USD", "USDMXN", valuation, spot, points,
                          {tenor: 0.07 for tenor in TENORS})["3M"] == pytest.approx(0.04)
-    curves = {"USD": usd, "MXN": dict(quoted)}
-    get_spots.fill_from_forwards(curves, {"USDMXN": spot}, {"USDMXN": points}, valuation)
-    assert list(curves["MXN"]) == ["ON", *TENORS]
-    assert curves["MXN"]["ON"] == 0.065 and curves["MXN"]["1M"] == 0.067659   # quotes kept
-    assert curves["MXN"]["6M"] == pytest.approx(0.07)

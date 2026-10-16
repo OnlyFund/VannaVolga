@@ -12,7 +12,8 @@ worked out here rather than stored:
 
 ``vol_table`` has the Markets tab's vol columns (vols in percentage points)
 plus ``delivery_date``; ``forward_table`` its forward columns, with
-``term_discount`` from the term currency's stored depo curve; ``market``
+``term_discount`` from the term currency's discount curve
+(``market_data.discount_curves``: SOFR or forward-implied, with fallbacks); ``market``
 puts them together as the single-pair market dict the app saves and loads,
 and ``market_bundle`` does it for every pair in the snapshot.
 """
@@ -22,8 +23,6 @@ import QuantLib as ql
 from helper_functions.fx_conventions import joint_calendar, option_dates, spot_date
 from market_data.vol_tickers import TENORS
 
-#: Term rate used where the snapshot has no depo curve for the term currency.
-DEFAULT_TERM_DISCOUNT = 0.05
 
 #: The pillars the app quotes; ON is stored but the app derives its short end from 1W.
 APP_TENORS = tuple(tenor for tenor in TENORS if tenor != "ON")
@@ -74,32 +73,31 @@ def vol_tables(snapshot, pairs=None, tenors=APP_TENORS):
 FORWARD_COLUMNS = ("tenor", "delivery_date", "fwd_pts", "term_discount")
 
 
-def forward_table(snapshot, pair, tenors=APP_TENORS):
-    """``(table, notes)``: the pair's forward points with each tenor's delivery
-    date and the term currency's depo rate at that tenor as ``term_discount``.
+def forward_table(snapshot, pair, tenors=APP_TENORS, curves=None):
+    """``(table, notes, source)``: the pair's forward points with each tenor's
+    delivery date and the term currency's discount rate as ``term_discount``.
 
-    Tenors without forward points are left out; a term currency without a
-    stored depo rate for a tenor gets ``DEFAULT_TERM_DISCOUNT``, noted.
+    ``source`` is the discount curve's (``sofr``, ``implied``, ``quoted``,
+    ``stale`` or ``unavailable``); when unavailable the table is empty.
+    Tenors without forward points are left out.
     """
+    from market_data.discount_curves import UNAVAILABLE, DiscountCurves
+    curve = (curves or DiscountCurves(snapshot)).curve(pair[3:])
+    if curve.source == UNAVAILABLE:
+        return pd.DataFrame(columns=list(FORWARD_COLUMNS)), list(curve.notes), curve.source
     points = snapshot.forward_points.get(pair, {})
-    depo = snapshot.depo_curves.get(pair[3:], {})
-    rows, defaulted = [], []
+    rows = []
     for tenor in tenors:
         if tenor not in points:
             continue
         _, delivery = tenor_dates(pair, snapshot.valuation_date, tenor)
-        if tenor not in depo:
-            defaulted.append(tenor)
         rows.append({"tenor": tenor, "delivery_date": delivery, "fwd_pts": points[tenor],
-                     "term_discount": depo.get(tenor, DEFAULT_TERM_DISCOUNT)})
-    notes = []
-    if defaulted:
-        notes.append(f"{pair}: no {pair[3:]} depo rate for {', '.join(defaulted)}; "
-                     f"term discount {DEFAULT_TERM_DISCOUNT:g} used")
-    return pd.DataFrame(rows, columns=list(FORWARD_COLUMNS)), notes
+                     "term_discount": curve.rates[tenor]})
+    return pd.DataFrame(rows, columns=list(FORWARD_COLUMNS)), list(curve.notes), curve.source
 
 
-def market(snapshot, pair, broker_strangle=None, event_rows=None, tenors=APP_TENORS):
+def market(snapshot, pair, broker_strangle=None, event_rows=None, tenors=APP_TENORS,
+           curves=None):
     """``(market dict, notes)`` for ``pair`` in the app's saved-market format,
     or ``(None, notes)`` when the snapshot cannot build it.
 
@@ -107,7 +105,8 @@ def market(snapshot, pair, broker_strangle=None, event_rows=None, tenors=APP_TEN
     follow the pair's convention (``universe.broker_strangle``: broker
     strangles for G10, smile strangles for EM) unless ``broker_strangle`` is
     given. Events are empty unless ``event_rows`` (``event_date``,
-    ``variance_days``) is given.
+    ``variance_days``) is given. ``curves`` (a ``DiscountCurves``) lets
+    several markets share one snapshot's discount curves and fallbacks.
     """
     from app.market_context import EVENT_COLUMNS
     from app.market_service import pair_divisor
@@ -121,7 +120,9 @@ def market(snapshot, pair, broker_strangle=None, event_rows=None, tenors=APP_TEN
     if not spot == spot:            # nan: no spot for either leg
         return None, [f"{pair}: no spot in snapshot {snapshot.id}"]
     vols = vol_table(snapshot.vols.get(pair, {}), pair, snapshot.valuation_date, tenors)
-    forwards, notes = forward_table(snapshot, pair, tenors)
+    forwards, notes, source = forward_table(snapshot, pair, tenors, curves)
+    if source == "unavailable":
+        return None, notes + [f"{pair}: unavailable, no {pair[3:]} discount rate"]
     both = [tenor for tenor in vols["tenor"] if tenor in set(forwards["tenor"])]
     if not both:
         return None, notes + [f"{pair}: no tenor with both vols and forward points"]
@@ -137,15 +138,21 @@ def market(snapshot, pair, broker_strangle=None, event_rows=None, tenors=APP_TEN
     return payload, notes
 
 
-def market_bundle(snapshot, pairs=None, broker_strangle=None):
+def market_bundle(snapshot, pairs=None, broker_strangle=None, store=None):
     """``(bundle, notes)``: every buildable pair as one market bundle, the file
-    the Markets tab loads (``app.market_store`` bundle format)."""
+    the Markets tab loads (``app.market_store`` bundle format).
+
+    With ``store``, a currency without a live rate can use an earlier
+    snapshot's (``discount_curves`` step 3).
+    """
     from app.market_store import bundle_payload
+    from market_data.discount_curves import DiscountCurves
     pairs = sorted(set(snapshot.vols) | set(snapshot.forward_points)) if pairs is None else pairs
+    curves = DiscountCurves(snapshot, store)
     markets, notes = {}, []
     for pair in pairs:
-        payload, pair_notes = market(snapshot, pair, broker_strangle)
+        payload, pair_notes = market(snapshot, pair, broker_strangle, curves=curves)
         notes += pair_notes
         if payload is not None:
             markets[pair] = payload
-    return bundle_payload(markets, snapshot.valuation_date), notes
+    return bundle_payload(markets, snapshot.valuation_date), list(dict.fromkeys(notes))
