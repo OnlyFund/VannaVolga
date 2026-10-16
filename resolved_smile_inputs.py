@@ -60,6 +60,11 @@ class MarketSnapshot:
         return MarketData(**{key: _thaw(value) for key, value in self.values})
 
     def __getattr__(self, name):
+        # Only called for names not set normally. ``values`` and dunders
+        # (pickle asks for ``__setstate__`` before ``values`` exists) must not
+        # be looked up in ``values``, or the lookup recurses.
+        if name == "values" or name.startswith("__"):
+            raise AttributeError(name)
         for key, value in self.values:
             if key == name:
                 return value

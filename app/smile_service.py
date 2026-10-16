@@ -89,6 +89,18 @@ class SurfaceCache:
         with self._lock:
             return len(self._stores.get(store, ()))
 
+    def entries(self):
+        """``{store: [(key, value), ...]}``: a copy of every cached entry."""
+        with self._lock:
+            return {store: list(items.items()) for store, items in self._stores.items()}
+
+    def merge(self, entries):
+        """Add ``entries`` (as from ``entries()``); keys are full market states,
+        so an entry can only ever be reused for the inputs it was built from."""
+        for store, items in entries.items():
+            for key, value in items:
+                self.put(store, key, value)
+
 
 _caches = weakref.WeakValueDictionary()
 
