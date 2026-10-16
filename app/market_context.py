@@ -22,6 +22,7 @@ Fallback: ``UnavailableMarket`` stands in for a pair whose market could not
 be built. It answers every request with the construction error, so callers
 report that error per line instead of failing as a whole.
 """
+import copy
 import math
 import re
 from dataclasses import dataclass
@@ -179,6 +180,16 @@ class MarketContext:
             loaded["forward_rows"], loaded["event_rows"], settings=settings,
             market_service=market_service, diagnostics=diagnostics,
         )
+
+    def with_spot(self, spot):
+        """This market at another spot; quotes, curves and caches are shared."""
+        number = float(spot)
+        if not math.isfinite(number) or number <= 0:
+            raise MarketContextError(
+                f"{self.currency_pair} spot must be a finite positive number, not {spot!r}")
+        moved = copy.copy(self)
+        moved.spot = number
+        return moved
 
     def __repr__(self):
         return (f"MarketContext({self.currency_pair}, {naive_date(self.valuation_date):%Y-%m-%d}, "

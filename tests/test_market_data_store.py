@@ -1,0 +1,69 @@
+"""Market data snapshots: save, read back by datetime and valuation date, history."""
+import json
+
+import pytest
+
+from app.market_data_store import DEPO, SPOT, MarketDataStore
+
+
+@pytest.fixture
+def store(tmp_path):
+    return MarketDataStore(tmp_path / "market_data.sqlite")
+
+
+def test_snapshots_read_back_by_datetime_and_valuation_date(store):
+    assert store.load() is None
+    first = store.save("2026-10-15", "2026-10-15T17:30:00", spots={"EURUSD": 1.12},
+                       depo_curves={"USD": {"1W": 0.0389, "1M": 0.0393}}, source="bloomberg")
+    second = store.save("2026-10-16", "2026-10-16T09:00:00", spots={"EURUSD": 1.13},
+                        depo_curves={"USD": {"1W": 0.0390}})
+    third = store.save("2026-10-16", "2026-10-16T11:00:00", spots={"EURUSD": 1.14})
+
+    latest = store.load()
+    assert (latest.id, latest.spots, latest.depo_curves) == (third, {"EURUSD": 1.14}, {})
+    assert store.load(as_of="2026-10-16T10:00:00").id == second
+    assert store.load(as_of="2026-10-16 08:00").id == first
+    assert store.load(as_of="2026-10-15T00:00:00") is None
+    assert store.load(valuation_date="2026-10-15").depo_curves == {
+        "USD": {"1W": 0.0389, "1M": 0.0393}}
+    assert store.load(valuation_date="2026-10-17") is None
+    assert store.load(valuation_date="2026-10-17", on_or_before=True).id == third
+    assert store.load(valuation_date="2026-10-16", as_of="2026-10-16T10:00:00").id == second
+
+    listed = store.snapshots()
+    assert list(listed["id"]) == [third, second, first]
+    assert list(listed["quotes"]) == [1, 2, 3]
+    assert list(store.snapshots("2026-10-15")["id"]) == [first]
+
+    assert list(store.history(SPOT, "EURUSD")["value"]) == [1.12, 1.13, 1.14]
+    assert list(store.history(DEPO, "USD", "1W")["value"]) == [0.0389, 0.0390]
+    assert list(store.history(SPOT, "EURUSD", start="2026-10-16")["value"]) == [1.13, 1.14]
+
+
+def test_json_files_import_into_one_snapshot(store, tmp_path):
+    stamp = {"valuation_date": "2026-10-16", "as_of": "2026-10-16T11:21:13"}
+    spots = tmp_path / "usd_spots.json"
+    spots.write_text(json.dumps({"format": "usd_spots", **stamp, "spots": {"EURUSD": 1.12}}))
+    depos = tmp_path / "depo_curves.json"
+    depos.write_text(json.dumps({"format": "depo_curves", **stamp,
+                                 "curves": {"USD": {"1W": 0.0389}}}))
+    assert store.import_json(spots) == store.import_json(depos)
+    snapshot = store.load()
+    assert snapshot.spots == {"EURUSD": 1.12}
+    assert snapshot.depo_curves == {"USD": {"1W": 0.0389}}
+    bad = tmp_path / "other.json"
+    bad.write_text(json.dumps({"format": "market", **stamp}))
+    with pytest.raises(ValueError):
+        store.import_json(bad)
+
+
+def test_app_reads_stored_market_data_without_loading_bloomberg():
+    # The app prices from the store; only get_spots.py talks to Bloomberg.
+    import subprocess
+    import sys
+    code = ("import sys, app.ui.app, app.ui.trades_block, app.usd_spots, app.market_data_store; "
+            "print(sorted(n for n in sys.modules if n.split('.')[0] in "
+            "('xbbg', 'blpapi', 'get_spots')))")
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                            timeout=300)
+    assert result.stdout.strip().splitlines()[-1] == "[]", result.stderr[-2000:]

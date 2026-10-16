@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from app import pricer
+from app import pricer, usd_spots
 from app.trades import service
 from app.trades.model import AMENDABLE, CANCELLED, FX_FORWARD, FX_OPTION, LIVE
 from app.trades.store import TradeStoreError, open_trade_store
@@ -253,8 +253,63 @@ def results_strikes(results):
     return [result["strike"] for result in results]
 
 
+#: ``{pair: spot}`` the Portfolio prices at instead of the market data spot.
+SPOT_OVERRIDES = "_portfolio_spot_overrides"
+_SPOT_EDITOR = "_portfolio_spot_editor_version"
+TOTAL_ROW = "Total (USD)"
+
+
+def spot_overrides():
+    return dict(st.session_state.get(SPOT_OVERRIDES, {}))
+
+
+def _reset_spot_editor():
+    # A new key drops the browser's own edit state with the old editor.
+    st.session_state[_SPOT_EDITOR] = st.session_state.get(_SPOT_EDITOR, 0) + 1
+
+
+def refresh_spots():
+    """Back to the market data spots."""
+    st.session_state[SPOT_OVERRIDES] = {}
+    _reset_spot_editor()
+
+
+def apply_spot_edits(edited_rows, pairs, market_spots, overrides):
+    """Overrides after editor edits ``{row: {"spot": value}}`` on rows ``pairs``.
+
+    A spot set back to the market spot, cleared, or not a positive number
+    drops that pair's override; edits to the total row are ignored.
+    """
+    overrides = dict(overrides)
+    for row, change in edited_rows.items():
+        if "spot" not in change or int(row) >= len(pairs) or pairs[int(row)] not in market_spots:
+            continue
+        pair = pairs[int(row)]
+        try:
+            value = float(change["spot"])
+        except (TypeError, ValueError):
+            value = float("nan")
+        if not (0 < value < float("inf")) or value == market_spots[pair]:
+            overrides.pop(pair, None)
+        else:
+            overrides[pair] = value
+    return overrides
+
+
+def _on_spot_edit(key, pairs, market):
+    state = st.session_state.get(key) or {}
+    st.session_state[SPOT_OVERRIDES] = apply_spot_edits(
+        state.get("edited_rows", {}), pairs, market, spot_overrides())
+    _reset_spot_editor()
+
+
+def market_spots(market_set):
+    """``{pair: spot}`` from the market data, for pairs that can price."""
+    return {pair: float(market_set.market(pair).spot) for pair in market_set.available()}
+
+
 def render_portfolio(tab, market_set, mods, premium_quote):
-    """Price a selection of the book through the market set."""
+    """Price a selection of the book through the market set, at the Portfolio spots."""
     store, problem = trade_store()
     with tab:
         st.subheader("Portfolio")
@@ -267,17 +322,25 @@ def render_portfolio(tab, market_set, mods, premium_quote):
         st.caption(f"{len(selected)} live trades selected "
                    f"({sum(t.is_option for t in selected)} options, "
                    f"{sum(t.is_forward for t in selected)} forwards).")
-        if st.button("Price selection", type="primary", key="price_book",
-                     disabled=not selected):
-            results, forwards, errors = service.price_trades(market_set, selected, mods,
-                                                             premium_quote)
-            st.session_state["_portfolio_book_result"] = (
-                [t.trade_id for t in selected], results, forwards, errors)
+        ids = [t.trade_id for t in selected]
+        market = market_spots(market_set)
+        overrides = {pair: spot for pair, spot in spot_overrides().items() if pair in market}
         cached = st.session_state.get("_portfolio_book_result")
+        if cached and len(cached) != 5:
+            cached = None          # priced before Portfolio spots existed
+        clicked = st.button("Price selection", type="primary", key="price_book",
+                            disabled=not selected)
+        # A moved or refreshed spot reprices the selection already priced.
+        respot = bool(cached) and cached[0] == ids and cached[1] != overrides
+        if clicked or respot:
+            results, forwards, errors = service.price_trades(
+                market_set.with_spots(overrides), selected, mods, premium_quote)
+            cached = (ids, overrides, results, forwards, errors)
+            st.session_state["_portfolio_book_result"] = cached
         if not cached:
             return
-        ids, results, forwards, errors = cached
-        if ids != [t.trade_id for t in selected]:
+        priced_ids, _, results, forwards, errors = cached
+        if priced_ids != ids:
             st.info("The selection changed since it was priced; price it again.")
             return
         for error in errors:
@@ -286,16 +349,103 @@ def render_portfolio(tab, market_set, mods, premium_quote):
             return
         pair_tab, items_tab = st.tabs(list(PORTFOLIO_VIEWS))
         with pair_tab:
-            totals = pair_totals(results, forwards)
-            st.dataframe(_display(totals.to_dict("records"), first=("currency_pair",),
-                                  amounts=[c for c in totals.columns
-                                           if c not in ("currency_pair", "options", "forwards")]),
-                         use_container_width=True, hide_index=True)
-            st.caption("One row per currency pair, hedge forwards included. MTM, P&L and "
-                       "Greeks are in the pair's base currency (theta in its premium "
-                       "currency); pairs are not converted to one currency.")
+            _pair_view(pair_totals(results, forwards), market, overrides,
+                       market_set.valuation_date)
         with items_tab:
             _line_items(results, forwards)
+
+
+def usd_totals(totals, spots):
+    """Pair totals with spot and USD columns, plus a USD total row across pairs."""
+    frame = usd_spots.add_usd_columns(totals, spots)
+    usd = [target for _, target in usd_spots.USD_COLUMNS if target in frame]
+    counts = [c for c in ("options", "forwards") if c in frame]
+    total = {"currency_pair": TOTAL_ROW, **frame[counts + usd].sum(min_count=1).to_dict()}
+    return pd.concat([frame, pd.DataFrame([total])], ignore_index=True), usd
+
+
+def portfolio_spots(market, overrides, snapshot_spots=None):
+    """Spots the Portfolio converts at: snapshot, then market data, then overrides."""
+    return {**(snapshot_spots or {}), **market, **overrides}
+
+
+#: By-pair columns always shown, and the optional ones shown until the user changes them.
+FIXED_COLUMNS = ("currency_pair", "spot")
+RATE_COLUMNS = ("currency_pair", "spot", "market_spot")
+DEFAULT_COLUMNS = ("pnl_usd", "delta", "fixed_delta", "gamma", "vega_usd", "vanna_usd",
+                   "volga_usd", "rega_usd", "sega_usd")
+_PAIR_COLUMNS = "_portfolio_pair_columns_choice"
+
+
+def _table_height(rows):
+    """Pixel height that shows every row and the header without scrolling."""
+    return 35 * (rows + 1) + 3
+
+
+def _pair_view(totals, market, overrides, valuation_date=None):
+    try:
+        snapshot = usd_spots.latest_snapshot(valuation_date)
+    except Exception as exc:          # an unreadable store must not stop the page
+        st.warning(f"Market data store unavailable: {exc}")
+        snapshot = None
+    spots = portfolio_spots(market, overrides, snapshot.spots if snapshot else None)
+    totals, usd = usd_totals(totals, spots)
+    totals.insert(totals.columns.get_loc("spot") + 1, "market_spot",
+                  [market.get(pair, float("nan")) for pair in totals["currency_pair"]])
+    is_pair = totals["currency_pair"] != TOTAL_ROW
+    pairs = list(totals["currency_pair"][is_pair])
+    optional = [*DEFAULT_COLUMNS, *(c for c in totals.columns
+                                    if c not in FIXED_COLUMNS and c not in DEFAULT_COLUMNS)]
+    optional = [c for c in optional if c in totals]
+    # Kept outside the widget too: Streamlit drops a widget's state on runs
+    # that do not draw it (an unpriced selection).
+    if "portfolio_pair_columns" not in st.session_state:
+        saved = st.session_state.get(_PAIR_COLUMNS, DEFAULT_COLUMNS)
+        st.session_state["portfolio_pair_columns"] = [c for c in saved if c in optional]
+    picker_col, _ = st.columns([1, 2])
+    with picker_col, st.expander("Columns", expanded=False):
+        chosen = st.multiselect(
+            "Output columns", optional, key="portfolio_pair_columns",
+            label_visibility="collapsed",
+            help="Add or remove output columns; pair and spot are always shown.")
+    st.session_state[_PAIR_COLUMNS] = list(chosen)
+    unconverted = list(totals["currency_pair"][is_pair & totals[usd[0]].isna()])
+    if unconverted:
+        st.warning("No USD spot for " + ", ".join(unconverted) + ": USD columns left blank"
+                   + ("." if snapshot else "; run get_spots.py for a USD spot snapshot."))
+    moved = [f"{pair} {pricer.format_strike_for_pair(pair, spot)} "
+             f"(market {pricer.format_strike_for_pair(pair, market[pair])})"
+             for pair, spot in sorted(overrides.items())]
+    button_col, note_col = st.columns([1, 5])
+    with button_col:
+        st.button("Refresh spot", key="refresh_portfolio_spot", on_click=refresh_spots,
+                  help="Reprice at the market data spots.")
+    with note_col:
+        if moved:
+            st.info("Priced at Portfolio spots: " + ", ".join(moved) + ".")
+    shown = [*FIXED_COLUMNS, *(c for c in optional if c in chosen)]
+    # Spot is a text cell so the total row stays blank; edits are parsed back.
+    frame = _display(totals[shown].to_dict("records"), first=shown,
+                     rates=("spot", "market_spot"),
+                     amounts=[c for c in shown if c not in RATE_COLUMNS])
+    key = f"portfolio_spots_{st.session_state.get(_SPOT_EDITOR, 0)}"
+    st.data_editor(
+        frame, key=key, use_container_width=True, hide_index=True,
+        height=_table_height(len(frame)),
+        disabled=[c for c in frame.columns if c != "spot"],
+        column_config={"spot": st.column_config.TextColumn(
+            "spot ✎",
+            help="Edit to reprice the portfolio at this spot; Refresh spot reverts.")},
+        on_change=_on_spot_edit, args=(key, pairs, market))
+    st.caption("One row per currency pair, hedge forwards included. Edit spot to reprice "
+               "the portfolio at it; market_spot and the Markets tab keep the market data "
+               "spot. Columns ending _usd are converted from the pair's base currency at "
+               "the Portfolio spots (other currencies at the USD spot snapshot) and summed "
+               "in the Total row; the other MTM, P&L and Greek columns, added from "
+               "Columns, stay in the pair's base currency (theta in its premium currency).")
+    if snapshot:
+        st.caption(f"USD spots from market data snapshot {snapshot.id}, taken "
+                   f"{snapshot.as_of.replace('T', ' ')} for {snapshot.valuation_date}.")
 
 
 def _line_items(results, forwards):

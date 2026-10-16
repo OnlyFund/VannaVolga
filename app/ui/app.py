@@ -252,8 +252,8 @@ def render_app():
         )
 
     surface_progress = st.empty()
-    markets_tab, portfolio_tab, blotter_tab, book_tab, risk_tab = st.tabs(
-        ["Markets", "Pricer", "Blotter", "Portfolio", "Risk"]
+    book_tab,risk_tab,portfolio_tab,blotter_tab,markets_tab    = st.tabs(
+        ["Portfolio", "Risk","Pricer","Blotter","Markets"]
     )
 
     spot, forward_divisor, currency_pair, vol_rows, forward_rows, event_rows = render_market_block(

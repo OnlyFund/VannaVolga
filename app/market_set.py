@@ -88,6 +88,21 @@ class MarketSet:
         self._markets[pair] = context
         return context
 
+    def with_spots(self, spots):
+        """A copy whose pairs in ``spots`` (``{pair: spot}``) price at those spots.
+
+        Only the spot moves; vol quotes and forward points stay as quoted.
+        Unavailable pairs and pairs not in the set are left as they are.
+        """
+        moved = MarketSet(self.valuation_date)
+        moved._notes = OrderedDict(self._notes)
+        spots = {normalize_pair(pair): value for pair, value in (spots or {}).items()}
+        for pair, context in self._markets.items():
+            if pair in spots and not isinstance(context, UnavailableMarket):
+                context = context.with_spot(spots[pair])
+            moved._markets[pair] = context
+        return moved
+
     def _note_saved_date(self, pair, saved):
         try:
             saved_date = naive_date(saved)
