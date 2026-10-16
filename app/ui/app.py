@@ -24,6 +24,9 @@ from app.ui.portfolio_block import (
 )
 from app.ui.trades_block import render_blotter, render_portfolio, trade_store
 from app.ui.risk_block import render_risk
+from app.ui.store_sync import LAYERS, render_store_status, sync_store_markets
+from app.market_layers import origins as store_origins, unavailable as store_unavailable
+from app.market_context import UnavailableMarket
 from app.trades import service as trade_service
 
 # Pricing helpers now live in the backend; kept here under their old names.
@@ -201,6 +204,9 @@ def render_app():
     with st.sidebar:
         st.header("Valuation")
         valuation_date = st.date_input("Valuation date", key="valuation_date")
+        # Markets come from the market data store (latest on or before the
+        # date); files and edits sit on top. A store problem only shows here.
+        render_store_status(sync_store_markets(valuation_date, apply_loaded_market))
 
         st.header("Conventions")
         pricing_model = st.selectbox("Pricing model", ["vv", "vv-sabr"], key="pricing_model")
@@ -295,10 +301,19 @@ def render_app():
     # Every loaded pair, valued as of the sidebar date. The pair being edited
     # comes from the live tables; the others from the session's market set.
     market_library = st.session_state.get("market_library", {})
+    layers = st.session_state.get(LAYERS, {})
+    missing = store_unavailable(layers)
+    # A store pair the current market cannot build prices nowhere, not even
+    # from the Markets tab's leftover tables, unless the user edited them.
+    live = None if market_context.currency_pair in missing else market_context
     market_set = MarketSet.from_payloads(
         market_library, valuation_date, settings, market_service=market_service,
-        diagnostics=diagnostics, live=market_context,
+        diagnostics=diagnostics, live=live,
     )
+    for pair, reason in missing.items():
+        if pair not in market_set:
+            market_set.add(UnavailableMarket(pair, reason, valuation_date))
+    st.session_state["_market_origins"] = store_origins(layers)
 
 
     def prepare_market_surfaces():
@@ -381,13 +396,16 @@ def render_app():
 
 
     with portfolio_tab:
+        from app.market_layers import group_by_message, pair_list
         if market_set.available():
             st.caption("Markets: {} (valued as of {:%d-%b-%Y})".format(
-                ", ".join(sorted(market_set.available())), naive_date(valuation_date)))
-        for pair, reason in market_set.problems().items():
-            st.warning(f"{pair} cannot price: {reason}")
-        for note in market_set.notes().values():
-            st.info(note)
+                pair_list(market_set.available()), naive_date(valuation_date)))
+        # Pairs sharing a reason share one line (a date with no market data
+        # would otherwise list every pair).
+        for pairs, reason in group_by_message(market_set.problems()):
+            st.warning(f"{pair_list(pairs)} cannot price: {reason}")
+        for pairs, note in group_by_message(market_set.notes()):
+            st.info(f"{pair_list(pairs)}: {note}")
         for message in st.session_state.get("_portfolio_strike_failures", []):
             st.warning(message)
 

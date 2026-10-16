@@ -535,15 +535,105 @@ positive, or expiry/variance times are ambiguous. Malformed nonnumeric event
 weights warn and fall back to zero; missing event-calendar files raise an
 error rather than silently disabling event adjustments.
 
+## Market data store and how the app uses it
+
+All market data lives in one SQLite file, `data/local/market_data.sqlite`
+(`market_data/store.py`; `VV_MARKET_STORE` overrides the path). Nothing in
+the app talks to Bloomberg: only `market_data.bloomberg_fetch` does, and a
+test guards that the app never imports it.
+
+### Market snapshots
+
+`python -m market_data.bloomberg_fetch [YYYY-MM-DD] [--no-vols]` fetches one
+valuation date (a one-day `bdh` window, not a historical bulk pull) and saves
+it as one **market snapshot**:
+
+| Field | Meaning |
+|---|---|
+| `market_id` | Running serial number |
+| `market_source` | `bloomberg`, `import` (`manual` later) |
+| `date_time` | When the data is from: the fetch time live; 23:59:59 for a past date |
+| `fetched_at` | When it was pulled (audit trail) |
+| `event_set_id` | The event calendar pinned to this market (see below) |
+
+Its quotes are rows `(kind, name, tenor, value)`:
+
+* `spot`: the 20 USD pairs (crosses are derived through USD);
+* `depo`: quoted deposit/OIS curves per currency, decimal, 1W-1Y (`depo_tickers.py`;
+  CNH uses the CNY curve, MXN is Banxico O/N plus 28-day TIIE, HUF BUBOR/FRA);
+* `vol_atm`, `vol_rr_25`, `vol_rr_10`, `vol_bf_25`, `vol_bf_10`: ON-1Y, vol points
+  (`vol_tickers.py`, `<PAIR><V|25R|10R|25B|10B><TENOR> Curncy`);
+* `fwd_pts`: 1W-1Y in the pair's pips (`fwd_tickers.py`: `EUR1M Curncy` for
+  EURUSD, `JPY12M Curncy` for USDJPY, `EURGBP1M Curncy` for crosses).
+
+The universe (`market_data/universe.py`) is the 45 G10 crosses plus 20 EM pairs
+(USD and EUR against SGD, HKD, ZAR, MXN, TRY, CNH, PLN, HUF, ILS, CZK). G10
+butterflies are broker strangles; EM butterflies are smile strangles. A
+store written by an older schema is backed up and migrated in one
+transaction; a newer schema is refused.
+
+**Rule:** a market can value its own date or later, never an earlier one: the
+app uses the latest snapshot whose `date_time` is on or before the
+valuation date (`app/store_markets.py`), and refuses future data.
+
+### Event calendars
+
+Events are kept apart from the quotes as versioned **event sets** of per-pair
+rows `(pair, date, event, variance_days)`; several events on one date add up.
+Each fetch pins the latest event set to the new market, so a market always
+prices with the same events.
+
+```bash
+python -m market_data.events import calendar.csv   # columns: pair,date,event,variance_days
+python -m market_data.events list
+python -m market_data.events pin MARKET_ID EVENT_SET_ID --reason "..."
+```
+
+A CSV is validated whole: any bad row rejects it with every problem listed.
+
+### Discount rates (`term_discount`)
+
+`market_data/discount_curves.py` gives each market's term-currency rate:
+SOFR for USD; for any other currency the rate implied by its USD pair's
+forward points and SOFR (covered interest parity, the USD-collateralised
+rate, consistent with the forwards). Fallbacks per currency: the quoted local
+depo curve (basis not included), then the latest earlier snapshot within 5
+business days (stale), then **unavailable**: the pair is not priced rather
+than priced on a made-up rate. Each fetch prints a basis alert when
+implied-minus-quoted moves more than 50bp (G10) / 200bp (EM).
+
+### Markets in the app
+
+* `market_data/market_tables.py` builds each pair's app market from a snapshot:
+  vol and forward tables with expiry/delivery dates from the pair's
+  conventions (`fx_conventions.option_dates`), discount rates, pinned events.
+* The app loads the latest snapshot on or before the sidebar valuation date
+  (`app/ui/store_sync.py`); the sidebar shows which market is used and any
+  notes. Per pair, **edits win over an uploaded file, which wins over the
+  store** (`app/market_layers.py`); the Markets tab shows each pair's source.
+  Changing the date reloads clean store pairs and keeps files and edits. With
+  no market for the date, clean store pairs become unavailable.
+* Only the pairs in use are calibrated up front (the active pair, the Pricer
+  lines' pairs, the selected Portfolio trades' pairs), and a pair only when
+  its market changed (`app/calibration_plan.py`). Store pairs go through a
+  disk cache, `data/local/calibration_cache/`, kept 24 hours per (market,
+  pair, valuation date, settings, code version) (`app/calibration_cache.py`):
+  a market is calibrated once and restored afterwards, also after a restart.
+
 ## Repository structure
 
 ```text
 app/                              Streamlit risk app (markets, pricer, trades, reports)
 market_data/                      Market data: model, stored snapshots and sources
   model.py                        MarketData quotes and Modifications (smile dynamics)
-  store.py                        Snapshots of fetched quotes by datetime (SQLite)
-  bloomberg_fetch.py              Fetch USD spots and depo curves into the store
-  depo_tickers.py                 Bloomberg depo curve tickers
+  store.py                        Market snapshots, quotes and event sets (SQLite)
+  bloomberg_fetch.py              Fetch spots, depos, vols and forward points (Bloomberg)
+  universe.py                     The 65 pairs and their butterfly convention
+  depo_tickers.py, vol_tickers.py, fwd_tickers.py   Bloomberg tickers
+  events.py                       Event calendar CSV import, list, re-pin
+  discount_curves.py              SOFR / forward-implied rates with fallbacks
+  implied_rates.py                Covered-interest-parity implied rates
+  market_tables.py                App markets (vol, forward, events) from a snapshot
   vol_data.py, event_calendar.py  CSV vol curves and event variance-day calendar
   samples/                        Example vol, event calendar and market files
 VannaVolga_ImpliedVol.py           Main Vanna-Volga implied-vol engine
@@ -555,7 +645,8 @@ Greeks/                           Fixed, smile, cross, decay, and weighted risks
 research/                         Experimental scripts: SABR, variance swap, digitals,
                                   cross skew, Greek comparisons (not used by the app)
 tests/                            Regression and golden tests
-data/local/                       Runtime data, not committed: trades, market data store
+data/local/                       Runtime data, not committed: trades, market data
+                                  store, calibration cache
 ```
 
 ## Running examples and tests
@@ -567,6 +658,7 @@ python -m pytest -q
 python -m pytest -q tests/test_vol_modeling_consistency.py
 python -m pytest -q tests/test_forward_vol_curve.py
 python -m market_data.bloomberg_fetch     # needs a Bloomberg terminal
+python -m market_data.events list
 ```
 
 Example scripts should be run as modules or with the project directory on

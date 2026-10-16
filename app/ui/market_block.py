@@ -19,7 +19,11 @@ def _store_active_market(library, currency_pair, payload):
 
     Only a valid market replaces the stored one, so a half-edited table never
     overwrites the last good copy that switching back or saving all would use.
+    The pair's layer records whether the tables differ from their source
+    (store market or file); an unedited store pair the current market cannot
+    build stays out of the market set.
     """
+    from app.market_layers import describe, record_tables
     if not is_pair(currency_pair):
         return
     try:
@@ -30,7 +34,14 @@ def _store_active_market(library, currency_pair, payload):
         else:
             st.caption(f"{currency_pair} is not in the market set until it is valid: {exc}")
         return
-    library[currency_pair] = payload
+    layers = st.session_state.setdefault("_market_layers", {})
+    if record_tables(layers, currency_pair, payload):
+        library[currency_pair] = payload
+    else:
+        library.pop(currency_pair, None)
+        st.warning(f"{currency_pair}: {layers[currency_pair]['unavailable']}. These tables are "
+                   "from an earlier market; edit them to price on them.")
+    st.caption(f"{currency_pair} source: {describe(layers.get(currency_pair))}")
     st.session_state._active_market_pair = currency_pair
 
 
@@ -51,7 +62,7 @@ def _activate_market(payload, apply_loaded_market, valuation_date=None):
     return True
 
 
-def _load_market_file(raw, library, current_pair, apply_loaded_market):
+def _load_market_file(raw, library, current_pair, apply_loaded_market, file_name=""):
     """Load a single-pair or multi-pair file into the market set.
 
     Valid pairs are added (replacing stored copies) and one becomes active:
@@ -67,6 +78,8 @@ def _load_market_file(raw, library, current_pair, apply_loaded_market):
         st.error(f"Could not load market: {exc}")
         return False
     library.update(markets)
+    from app.market_layers import mark_files
+    mark_files(st.session_state.setdefault("_market_layers", {}), markets, file_name or "file")
     messages = [("success", "Loaded {} market{}: {}; active {}.".format(
         len(markets), "" if len(markets) == 1 else "s", ", ".join(markets), active))]
     messages += [("warning", f"Skipped {label}: {error}") for label, error in errors.items()]
@@ -332,6 +345,7 @@ def render_market_block(markets_tab, valuation_date, apply_loaded_market):
                 if st.button("Remove", key="remove_markets", disabled=not to_remove):
                     for pair in to_remove:
                         library.pop(pair, None)
+                        st.session_state.get("_market_layers", {}).pop(pair, None)
                     st.session_state._market_set_version = version + 1
                     st.experimental_rerun()
 
@@ -359,7 +373,8 @@ def render_market_block(markets_tab, valuation_date, apply_loaded_market):
                 if uploaded_market is None:
                     st.error("Choose a saved market JSON file first.")
                 elif _load_market_file(uploaded_market.getvalue(), library,
-                                       currency_pair, apply_loaded_market):
+                                       currency_pair, apply_loaded_market,
+                                       file_name=uploaded_market.name):
                     st.experimental_rerun()
 
     return spot, forward_divisor, currency_pair, vol_rows, forward_rows, event_rows
