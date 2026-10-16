@@ -14,10 +14,11 @@ USD_COLUMNS = (("mtm_base", "mtm_usd"), ("pnl_base", "pnl_usd"),
 
 
 def latest_snapshot(valuation_date=None, store=None):
-    """The newest stored snapshot for ``valuation_date`` or before it, or ``None``."""
+    """The latest stored market with data on or before ``valuation_date``
+    (the latest of all without one), or ``None``."""
     from market_data.store import open_market_data_store
     store = store or open_market_data_store()
-    return store.load(valuation_date=valuation_date, on_or_before=valuation_date is not None)
+    return store.load(on_or_before=valuation_date)
 
 
 def usd_rate(ccy, spots):

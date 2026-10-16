@@ -66,7 +66,7 @@ def vol_table(surface, pair, valuation_date, tenors=APP_TENORS):
 def vol_tables(snapshot, pairs=None, tenors=APP_TENORS):
     """``{pair: vol table}`` for a stored snapshot (all its pairs by default)."""
     pairs = sorted(snapshot.vols) if pairs is None else pairs
-    return {pair: vol_table(snapshot.vols[pair], pair, snapshot.valuation_date, tenors)
+    return {pair: vol_table(snapshot.vols[pair], pair, snapshot.date, tenors)
             for pair in pairs if pair in snapshot.vols}
 
 
@@ -90,7 +90,7 @@ def forward_table(snapshot, pair, tenors=APP_TENORS, curves=None):
     for tenor in tenors:
         if tenor not in points:
             continue
-        _, delivery = tenor_dates(pair, snapshot.valuation_date, tenor)
+        _, delivery = tenor_dates(pair, snapshot.date, tenor)
         rows.append({"tenor": tenor, "delivery_date": delivery, "fwd_pts": points[tenor],
                      "term_discount": curve.rates[tenor]})
     return pd.DataFrame(rows, columns=list(FORWARD_COLUMNS)), list(curve.notes), curve.source
@@ -118,8 +118,8 @@ def market(snapshot, pair, broker_strangle=None, event_rows=None, tenors=APP_TEN
         broker_strangle = quoted_broker_strangle(pair)
     spot = pair_spot(pair, snapshot.spots)
     if not spot == spot:            # nan: no spot for either leg
-        return None, [f"{pair}: no spot in snapshot {snapshot.id}"]
-    vols = vol_table(snapshot.vols.get(pair, {}), pair, snapshot.valuation_date, tenors)
+        return None, [f"{pair}: no spot in market {snapshot.market_id}"]
+    vols = vol_table(snapshot.vols.get(pair, {}), pair, snapshot.date, tenors)
     forwards, notes, source = forward_table(snapshot, pair, tenors, curves)
     if source == "unavailable":
         return None, notes + [f"{pair}: unavailable, no {pair[3:]} discount rate"]
@@ -133,7 +133,7 @@ def market(snapshot, pair, broker_strangle=None, event_rows=None, tenors=APP_TEN
     vols = vols[vols["tenor"].isin(both)].drop(columns=["delivery_date"])
     forwards = forwards[forwards["tenor"].isin(both)]
     events = pd.DataFrame(columns=list(EVENT_COLUMNS)) if event_rows is None else event_rows
-    payload = market_payload(pair, snapshot.valuation_date, spot, pair_divisor(pair),
+    payload = market_payload(pair, snapshot.date, spot, pair_divisor(pair),
                              broker_strangle, vols, forwards, events)
     return payload, notes
 
@@ -155,4 +155,4 @@ def market_bundle(snapshot, pairs=None, broker_strangle=None, store=None):
         notes += pair_notes
         if payload is not None:
             markets[pair] = payload
-    return bundle_payload(markets, snapshot.valuation_date), list(dict.fromkeys(notes))
+    return bundle_payload(markets, snapshot.date), list(dict.fromkeys(notes))

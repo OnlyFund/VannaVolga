@@ -38,7 +38,7 @@ BASIS_JUMP_BP = {"G10": 50.0, "EM": 200.0}
 SOFR, IMPLIED, QUOTED, STALE, UNAVAILABLE = "sofr", "implied", "quoted", "stale", "unavailable"
 
 #: ``rates`` is ``{tenor: decimal rate}`` (empty when unavailable); ``as_of`` is
-#: the valuation date of the snapshot the rates come from.
+#: the date of the market (snapshot) the rates come from.
 Curve = namedtuple("Curve", "ccy rates source as_of notes")
 
 
@@ -81,22 +81,22 @@ def live_curve(ccy, snapshot):
             return None
         rates, filled = fill_tenors(usd)
         notes = [f"USD: SOFR {', '.join(filled)} interpolated"] if filled else []
-        return Curve(ccy, rates, SOFR, snapshot.valuation_date, notes)
+        return Curve(ccy, rates, SOFR, snapshot.date, notes)
     pair = usd_pair(ccy)
     points = snapshot.forward_points.get(pair) if pair else None
     if usd and points and pair in snapshot.spots:
-        implied = implied_rates(ccy, pair, snapshot.valuation_date, snapshot.spots[pair],
+        implied = implied_rates(ccy, pair, snapshot.date, snapshot.spots[pair],
                                 points, fill_tenors(usd)[0])
         if implied:
             rates, filled = fill_tenors(implied)
             notes = ([f"{ccy}: {', '.join(filled)} interpolated (no {pair} forward points)"]
                      if filled else [])
-            return Curve(ccy, rates, IMPLIED, snapshot.valuation_date, notes)
+            return Curve(ccy, rates, IMPLIED, snapshot.date, notes)
     quoted = snapshot.depo_curves.get(ccy)
     if quoted:
         rates, _ = fill_tenors(quoted)
         why = "no USD curve" if not usd else f"no {pair} spot or forward points"
-        return Curve(ccy, rates, QUOTED, snapshot.valuation_date,
+        return Curve(ccy, rates, QUOTED, snapshot.date,
                      [f"{ccy}: quoted depo curve, basis not included ({why})"])
     return None
 
@@ -118,13 +118,13 @@ class DiscountCurves:
         if live is not None:
             return live
         if self.store is not None:
-            since = pd.Timestamp(self.snapshot.valuation_date) - BDay(self.max_stale_bdays)
+            since = pd.Timestamp(self.snapshot.date) - BDay(self.max_stale_bdays)
             for earlier in self.store.earlier(self.snapshot, since):
                 found = live_curve(ccy, earlier)
                 if found is not None:
                     return found._replace(source=STALE, notes=found.notes + [
-                        f"{ccy}: no live rate; using the {found.source} curve from snapshot "
-                        f"{earlier.id} ({earlier.valuation_date})"])
+                        f"{ccy}: no live rate; using the {found.source} curve from market "
+                        f"{earlier.market_id} ({earlier.date})"])
         return Curve(ccy, {}, UNAVAILABLE, None, [
             f"{ccy}: no discount rate (no {usd_pair(ccy) or ccy} forward points, no quoted "
             f"depo, no snapshot within {self.max_stale_bdays} business days)"])
@@ -145,8 +145,8 @@ class DiscountCurves:
                 if tenor in now and tenor in before:
                     jump = (now[tenor] - before[tenor]) * 1e4
                     if abs(jump) > limit:
-                        alerts.append(f"{ccy} {tenor}: basis moved {jump:+.0f}bp since snapshot "
-                                      f"{previous.id} (limit {limit:.0f}bp); check the quotes")
+                        alerts.append(f"{ccy} {tenor}: basis moved {jump:+.0f}bp since market "
+                                      f"{previous.market_id} (limit {limit:.0f}bp); check the quotes")
         return alerts
 
 

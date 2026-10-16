@@ -40,7 +40,7 @@ def _snapshot(tmp_path, spots=None, depo_curves=None):
     fixture = json.loads(FIXTURE.read_text())["markets"]["EURUSD"]
     points = {row["tenor"].upper(): row["fwd_pts"] for row in fixture["forward_points"]}
     store = MarketDataStore(tmp_path / "market_data.sqlite")
-    store.save("2026-10-16", "2026-10-16T12:00:00", spots=spots or {"EURUSD": 1.1258},
+    store.save("2026-10-16T12:00:00", "bloomberg", spots=spots or {"EURUSD": 1.1258},
                depo_curves=depo_curves or {}, vols={"EURUSD": SURFACE},
                forward_points={"EURUSD": points})
     return store.load()

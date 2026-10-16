@@ -444,8 +444,8 @@ def _pair_view(totals, market, overrides, valuation_date=None):
                "in the Total row; the other MTM, P&L and Greek columns, added from "
                "Columns, stay in the pair's base currency (theta in its premium currency).")
     if snapshot:
-        st.caption(f"USD spots from market data snapshot {snapshot.id}, taken "
-                   f"{snapshot.as_of.replace('T', ' ')} for {snapshot.valuation_date}.")
+        st.caption(f"USD spots from market {snapshot.market_id} ({snapshot.market_source}, "
+                   f"{snapshot.date_time.replace('T', ' ')}).")
 
 
 def _line_items(results, forwards):

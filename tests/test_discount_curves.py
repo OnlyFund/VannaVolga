@@ -30,9 +30,9 @@ def store(tmp_path):
     return MarketDataStore(tmp_path / "market_data.sqlite")
 
 
-def save(store, valuation, as_of, **data):
-    snapshot_id = store.save(valuation, as_of, **data)
-    return store.load(snapshot_id=snapshot_id)
+def save(store, valuation, date_time, **data):
+    market_id = store.save(date_time, "bloomberg", **data)
+    return store.load(market_id=market_id)
 
 
 def test_fill_tenors_interpolates_in_time_and_holds_the_ends_flat():
@@ -75,7 +75,7 @@ def test_stale_curve_within_five_business_days_then_unavailable(store):
     curve = DiscountCurves(today, store).curve("CZK")
     assert curve.source == STALE and curve.as_of == "2026-10-12"
     assert curve.rates["3M"] == pytest.approx(0.035)
-    assert f"snapshot {first.id} (2026-10-12)" in curve.notes[-1]
+    assert f"market {first.market_id} (2026-10-12)" in curve.notes[-1]
     # A week later the 12 October curve is too old: CZK is unavailable.
     later = save(store, "2026-10-23", "2026-10-23T12:00:00", depo_curves={"USD": USD})
     assert DiscountCurves(later, store).curve("CZK").source == UNAVAILABLE

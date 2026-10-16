@@ -125,8 +125,8 @@ def test_portfolio_reports_spot_and_usd_columns(store, markets, tmp_path):
     from market_data.store import MarketDataStore
     spots = {"EURUSD": 1.12, "USDJPY": 158.0}
     market_data = MarketDataStore(tmp_path / "market_data.sqlite")
-    market_data.save("2026-10-15", "2026-10-15T17:00:00", spots={**spots, "EURUSD": 1.0})
-    market_data.save("2026-10-16", "2026-10-16T09:00:00", spots=spots)
+    market_data.save("2026-10-15T17:00:00", "bloomberg", spots={**spots, "EURUSD": 1.0})
+    market_data.save("2026-10-16T09:00:00", "bloomberg", spots=spots)
     assert usd_spots.latest_snapshot("2026-10-16", market_data).spots == spots
     assert usd_spots.latest_snapshot("2026-10-15", market_data).spots["EURUSD"] == 1.0
     assert usd_spots.pair_spot("EURJPY", spots) == pytest.approx(1.12 * 158.0)

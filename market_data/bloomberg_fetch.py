@@ -176,23 +176,29 @@ def fetch_forward_points(valuation_date, pairs=FX_UNIVERSE):
 
 def fetch_and_store(valuation_date=None, store=None, vols=True):
     """Fetch spots, depo curves and (with ``vols``) vol surfaces and forward
-    points for ``valuation_date`` (default today) and save them as one snapshot."""
-    valuation_date = valuation_date or pd.Timestamp.today().strftime('%Y-%m-%d')
-    as_of = datetime.now()
+    points for ``valuation_date`` (default today) and save them as one market.
+
+    Its ``date_time`` is the fetch time for today, else ``valuation_date``'s
+    close (``store.data_date_time``). Returns the ``market_id``.
+    """
+    from market_data.store import data_date_time
+    fetched_at = datetime.now()
+    valuation_date = valuation_date or fetched_at.strftime('%Y-%m-%d')
     spots = fetch_spots(valuation_date)
     curves = fetch_depo_curves(valuation_date)
     surfaces = fetch_vols(valuation_date) if vols else {}
     forwards = fetch_forward_points(valuation_date) if vols else {}
     store = store or open_market_data_store()
-    snapshot_id = store.save(valuation_date, as_of, spots=spots, depo_curves=curves,
-                             vols=surfaces, forward_points=forwards, source='bloomberg')
-    print(f'Saved snapshot {snapshot_id} ({as_of:%Y-%m-%d %H:%M:%S}) for {valuation_date}: '
-          f'{len(spots)} spots, {len(curves)} depo curves, {len(surfaces)} vol surfaces, '
+    date_time = data_date_time(valuation_date, fetched_at)
+    market_id = store.save(date_time, 'bloomberg', spots=spots, depo_curves=curves,
+                           vols=surfaces, forward_points=forwards, fetched_at=fetched_at)
+    print(f'Saved market {market_id} (bloomberg, {date_time}): {len(spots)} spots, '
+          f'{len(curves)} depo curves, {len(surfaces)} vol surfaces, '
           f'{len(forwards)} forward curves to {store.path}')
     from market_data.discount_curves import DiscountCurves
-    for alert in DiscountCurves(store.load(snapshot_id=snapshot_id), store).basis_alerts():
+    for alert in DiscountCurves(store.load(market_id=market_id), store).basis_alerts():
         print('Basis alert:', alert)
-    return snapshot_id
+    return market_id
 
 
 if __name__ == '__main__':
