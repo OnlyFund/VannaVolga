@@ -6,7 +6,12 @@ row ``(kind, name, tenor, value)``:
 
 * ``spot``: ``name`` is the pair (``EURUSD``), ``tenor`` is empty;
 * ``depo``: ``name`` is the currency (``USD``), ``tenor`` is ``1W`` ... ``1Y``,
-  ``value`` a decimal rate.
+  ``value`` a decimal rate;
+* ``vol_atm``, ``vol_rr_25``, ``vol_rr_10``, ``vol_bf_25``, ``vol_bf_10``:
+  ``name`` is the pair, ``tenor`` is ``ON`` ... ``1Y``, ``value`` in vol
+  percentage points;
+* ``fwd_pts``: ``name`` is the pair, ``tenor`` is ``1W`` ... ``1Y``, ``value``
+  in the pair's pips (forward = spot + points / forward divisor).
 
 New kinds can be stored without a schema change. Snapshots are only ever
 added, so any past state can be read back: the latest snapshot taken at or
@@ -22,7 +27,9 @@ from pathlib import Path
 import pandas as pd
 
 DEFAULT_PATH = Path(__file__).resolve().parents[1] / "data" / "local" / "market_data.sqlite"
-SPOT, DEPO = "spot", "depo"
+SPOT, DEPO, FWD_PTS = "spot", "depo", "fwd_pts"
+VOL_FIELDS = ("atm", "rr_25", "bf_25", "rr_10", "bf_10")
+VOL_PREFIX = "vol_"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS snapshots (
@@ -44,7 +51,9 @@ CREATE TABLE IF NOT EXISTS quotes (
 CREATE INDEX IF NOT EXISTS quotes_series ON quotes (kind, name, tenor);
 """
 
-Snapshot = namedtuple("Snapshot", "id as_of valuation_date source spots depo_curves")
+Snapshot = namedtuple("Snapshot",
+                      "id as_of valuation_date source spots depo_curves vols forward_points")
+Snapshot.__new__.__defaults__ = ({}, {})
 
 
 def _iso(value):
@@ -54,6 +63,23 @@ def _iso(value):
 
 def _day(value):
     return pd.Timestamp(value).strftime("%Y-%m-%d")
+
+
+def _rows(spots=None, depo_curves=None, vols=None, forward_points=None):
+    """Quote rows ``(kind, name, tenor, value)`` for one snapshot."""
+    rows = [(SPOT, pair, "", float(value)) for pair, value in (spots or {}).items()]
+    rows += [(DEPO, ccy, tenor, float(rate))
+             for ccy, curve in (depo_curves or {}).items() for tenor, rate in curve.items()]
+    for pair, by_tenor in (vols or {}).items():
+        for tenor, quotes in by_tenor.items():
+            for field, value in quotes.items():
+                if field not in VOL_FIELDS:
+                    raise ValueError(f"unknown vol field {field!r} for {pair} {tenor}")
+                rows.append((VOL_PREFIX + field, pair, tenor, float(value)))
+    rows += [(FWD_PTS, pair, tenor, float(points))
+             for pair, by_tenor in (forward_points or {}).items()
+             for tenor, points in by_tenor.items()]
+    return rows
 
 
 class MarketDataStore:
@@ -68,11 +94,14 @@ class MarketDataStore:
         db.execute("PRAGMA foreign_keys = ON")
         return db
 
-    def save(self, valuation_date, as_of=None, spots=None, depo_curves=None, source=""):
-        """Store one snapshot in a single transaction and return its id."""
-        rows = [(SPOT, pair, "", float(value)) for pair, value in (spots or {}).items()]
-        rows += [(DEPO, ccy, tenor, float(rate))
-                 for ccy, curve in (depo_curves or {}).items() for tenor, rate in curve.items()]
+    def save(self, valuation_date, as_of=None, spots=None, depo_curves=None, source="",
+             vols=None, forward_points=None):
+        """Store one snapshot in a single transaction and return its id.
+
+        ``vols`` is ``{pair: {tenor: {field: value}}}`` with fields from
+        ``VOL_FIELDS``; ``forward_points`` is ``{pair: {tenor: points}}``.
+        """
+        rows = _rows(spots, depo_curves, vols, forward_points)
         with closing(self._connect()) as db, db:
             cursor = db.execute(
                 "INSERT INTO snapshots (as_of, valuation_date, source) VALUES (?, ?, ?)",
@@ -117,11 +146,15 @@ class MarketDataStore:
             quotes = db.execute("SELECT kind, name, tenor, value FROM quotes "
                                 "WHERE snapshot_id = ? ORDER BY rowid", (head[0],)).fetchall()
         spots = {name: value for kind, name, _, value in quotes if kind == SPOT}
-        curves = {}
+        curves, vols, forwards = {}, {}, {}
         for kind, name, tenor, value in quotes:
             if kind == DEPO:
                 curves.setdefault(name, {})[tenor] = value
-        return Snapshot(*head, spots, curves)
+            elif kind == FWD_PTS:
+                forwards.setdefault(name, {})[tenor] = value
+            elif kind.startswith(VOL_PREFIX):
+                vols.setdefault(name, {}).setdefault(tenor, {})[kind[len(VOL_PREFIX):]] = value
+        return Snapshot(*head, spots, curves, vols, forwards)
 
     def history(self, kind, name, tenor="", start=None, end=None):
         """One quote over time: ``as_of, valuation_date, value``, oldest first."""
@@ -156,9 +189,7 @@ class MarketDataStore:
                                (as_of, valuation)).fetchone()
         if found is None:
             return self.save(valuation, as_of, spots, curves, source=f"import:{Path(path).name}")
-        rows = [(SPOT, pair, "", float(v)) for pair, v in (spots or {}).items()]
-        rows += [(DEPO, ccy, tenor, float(r))
-                 for ccy, curve in (curves or {}).items() for tenor, r in curve.items()]
+        rows = _rows(spots, curves)
         with closing(self._connect()) as db, db:
             db.executemany("INSERT OR REPLACE INTO quotes (snapshot_id, kind, name, tenor, value) "
                            "VALUES (?, ?, ?, ?, ?)", [(found[0], *row) for row in rows])

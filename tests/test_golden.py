@@ -221,6 +221,54 @@ def test_market_set_prices_the_mixed_book_exactly_as_each_pair_alone():
     }))
 
 
+@pytest.mark.parametrize("name", PORTFOLIO_CASES)
+def test_booked_trades_price_exactly_as_the_pricer(name, tmp_path):
+    """The Portfolio tab's path (book, then price the booked trades through
+    ``MarketSet.with_spots``) must match the Pricer to the last digit.
+
+    Booking stores a resolved alias strike (atm, 25d ...) at dealing
+    precision, so those lines are compared with the Pricer at the booked
+    strike; lines typed with a numeric strike must match the golden file.
+    """
+    from app import pricer
+    from app.market_set import MarketSet
+    from app.trades import service
+    from app.trades.store import SqliteTradeStore
+
+    market_file, pair, model, _ = CASES[name]
+    golden = json.loads((EXPECTED / f"{name}.json").read_text())["lines"]
+    payloads = load_markets(market_file)
+    harness = AppHarness(payloads[pair], pricing_model=model)
+    rows = reference_portfolio(pair, harness.spot)
+    priced_rows = [rows[line["row"] - 1] for line in golden]
+    markets = MarketSet.from_payloads(payloads, harness.valuation_date)
+    store = SqliteTradeStore(tmp_path / "trades.sqlite")
+    booked = service.book_lines(store, markets, priced_rows, harness.mods,
+                                trade_date=harness.valuation_date)
+    assert booked.ok, booked.errors
+    results, _, errors = service.price_trades(markets.with_spots({}), store.trades(), harness.mods)
+    assert errors == []
+    by_id = {line["trade_id"]: line for line in _plain(results)}
+    as_booked = [by_id[booked.lines[number]] for number in range(1, len(priced_rows) + 1)]
+
+    at_booked_strikes = [dict(row, strike=str(line["strike"]))
+                         for row, line in zip(priced_rows, as_booked)]
+    repriced, _ = pricer.price_lines(markets, pd.DataFrame(at_booked_strikes), harness.mods)
+    strip = lambda line: {k: v for k, v in line.items() if k not in ("row", "trade_id", "book",
+                                                                       "counterparty")}  # noqa: E731
+    assert _differences([strip(line) for line in _plain(repriced)],
+                        [strip(line) for line in as_booked]) == []
+
+    def typed_as_booked(row, line):
+        try:
+            return float(row["strike"]) == line["strike"]
+        except ValueError:                      # an alias: atm, 25d ...
+            return False
+    typed = [i for i, (row, line) in enumerate(zip(priced_rows, as_booked)) if typed_as_booked(row, line)]
+    assert len(typed) >= 4
+    assert _differences([strip(golden[i]) for i in typed], [strip(as_booked[i]) for i in typed]) == []
+
+
 def test_reference_portfolio_exercises_expected_paths():
     """Guard the fixture itself: priced lines price and rejected lines fail."""
     for name in PORTFOLIO_CASES:

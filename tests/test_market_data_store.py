@@ -67,3 +67,26 @@ def test_app_reads_stored_market_data_without_loading_bloomberg():
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                             timeout=300)
     assert result.stdout.strip().splitlines()[-1] == "[]", result.stderr[-2000:]
+
+
+def test_vol_surfaces_round_trip(store):
+    from market_data.store import VOL_FIELDS
+    surface = {"1W": dict(zip(VOL_FIELDS, (6.4, -1.3, 0.21, -2.4, 0.7))),
+               "1M": dict(zip(VOL_FIELDS, (6.1, -1.2, 0.20, -2.3, 0.69)))}
+    store.save("2026-10-16", "2026-10-16T12:00:00", spots={"EURUSD": 1.12},
+               vols={"EURUSD": surface})
+    snapshot = store.load()
+    assert snapshot.vols == {"EURUSD": surface}
+    assert list(store.history("vol_atm", "EURUSD", "1M")["value"]) == [6.1]
+    assert store.snapshots()["quotes"].iloc[0] == 11
+    with pytest.raises(ValueError):
+        store.save("2026-10-16", vols={"EURUSD": {"1M": {"atm_vol": 6.1}}})
+
+
+def test_forward_points_round_trip(store):
+    store.save("2026-10-16", "2026-10-16T12:00:00",
+               forward_points={"EURUSD": {"1M": 14.18, "1Y": 178.8}, "USDJPY": {"1M": -38.6}})
+    snapshot = store.load()
+    assert snapshot.forward_points == {"EURUSD": {"1M": 14.18, "1Y": 178.8},
+                                       "USDJPY": {"1M": -38.6}}
+    assert list(store.history("fwd_pts", "EURUSD", "1Y")["value"]) == [178.8]

@@ -100,7 +100,9 @@ CCY: Dict[str, CcyConv] = {
 
 # quote currencies conventionally shown to 2dp -> forward points divide by 100;
 # everything else is conventionally shown to 4dp -> forward points divide by 10,000
-_2DP_QUOTES = {"JPY", "TRY", "KRW"}
+# Forward points are quoted to 2dp (divisor 100) against these; TRY points are
+# quoted to 4dp like most pairs (Bloomberg USDTRY 3M ~39,000 on spot ~41).
+_2DP_QUOTES = {"JPY", "KRW"}
 
 
 @dataclass(frozen=True)
@@ -159,8 +161,8 @@ PAIRS: Dict[str, PairConv] = {p.name: p for p in [
     _P("EUR", "DKK", 2, 1e-4, True,  "EUR", "dn"),
     _P("EUR", "JPY", 2, 1e-2, True,  "EUR", "dn"),
     _P("EUR", "PLN", 2, 1e-4, True,  "EUR", "dn"),
-    _P("EUR", "CZK", 2, 1e-4, True,  "EUR", "dn"),
-    _P("EUR", "HUF", 2, 1e-2, True,  "EUR", "dn"),
+    _P("EUR", "CZK", 2, 1e-4, True,  "EUR", "dn", fwd_divisor=1_000),   # points to 3dp
+    _P("EUR", "HUF", 2, 1e-2, True,  "EUR", "dn", fwd_divisor=100),     # points to 2dp
 
     # --- GBP crosses --------------------------------------------------
     _P("GBP", "AUD", 2, 1e-4, True,  "GBP", "dn"),
@@ -226,8 +228,8 @@ PAIRS: Dict[str, PairConv] = {p.name: p for p in [
     _P("USD", "TRY", 1, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D"),   # T+1
     _P("USD", "ZAR", 2, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D"),
     _P("USD", "PLN", 2, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D"),
-    _P("USD", "HUF", 2, 1e-2, True,  "USD", "dn", fwd_delta_beyond="0D"),
-    _P("USD", "CZK", 2, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D"),
+    _P("USD", "HUF", 2, 1e-2, True,  "USD", "dn", fwd_delta_beyond="0D", fwd_divisor=100),
+    _P("USD", "CZK", 2, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D", fwd_divisor=1_000),
     _P("USD", "ILS", 2, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D"),
     _P("USD", "CNH", 2, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D"),
     _P("USD", "KRW", 2, 1,    True,  "USD", "dn", fwd_delta_beyond="0D", deliverable=False),
