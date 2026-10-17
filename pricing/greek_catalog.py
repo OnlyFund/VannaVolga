@@ -62,6 +62,14 @@ def extras(names):
     return [name for name in known(names) if name in EXTRA_GREEKS]
 
 
+def greek_of(column):
+    """The Greek a column reports (``fixed_vega_decay_usd`` -> ``vega_decay``),
+    or ``None`` for a column that is not a Greek."""
+    name = column[6:] if column.startswith("fixed_") else column
+    name = name[:-4] if name.endswith("_usd") else name
+    return name if name in CATALOG else None
+
+
 def label(column):
     """Display label for a Greek column (``fixed_vega`` -> ``Fixed vega``)."""
     fixed = column.startswith("fixed_")

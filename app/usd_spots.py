@@ -8,9 +8,13 @@ import pandas as pd
 
 USD = "USD"
 #: Base-currency amounts the Portfolio reports again in USD.
+#: The decay of a converted Greek, and weighted vega, convert the same way.
 USD_COLUMNS = (("mtm_base", "mtm_usd"), ("pnl_base", "pnl_usd"),
                ("vega", "vega_usd"), ("vanna", "vanna_usd"), ("volga", "volga_usd"),
-               ("rega", "rega_usd"), ("sega", "sega_usd"))
+               ("rega", "rega_usd"), ("sega", "sega_usd"),
+               *((f"{greek}_decay", f"{greek}_decay_usd")
+                 for greek in ("vega", "vanna", "volga", "rega", "sega")),
+               ("weighted_vega", "weighted_vega_usd"))
 
 
 def latest_snapshot(valuation_date=None, store=None):

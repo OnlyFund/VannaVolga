@@ -71,3 +71,50 @@ def test_line_results_show_the_chosen_greek_columns_only():
     assert added == [*SUMMARY_RESULT_COLUMNS, "fixed_delta", "delta",
                      "fixed_gamma_vol", "gamma_vol"]
     assert display.loc[0, "delta"] == "1,234" and pd.isna(display.loc[0, "gamma_vol"])
+
+
+# -- Portfolio ---------------------------------------------------------------------
+
+def test_columns_map_to_their_greek():
+    assert catalog.greek_of("fixed_vega_decay") == "vega_decay"
+    assert catalog.greek_of("vega_decay_usd") == "vega_decay"
+    assert catalog.greek_of("weighted_vega_usd") == "weighted_vega"
+    assert catalog.greek_of("vega") == "vega"
+    assert catalog.greek_of("pnl_usd") is None and catalog.greek_of("spot") is None
+
+
+def test_portfolio_prices_only_the_extras_its_columns_need():
+    from app.ui.trades_block import DEFAULT_COLUMNS, chosen_extras, extra_columns
+    assert chosen_extras(DEFAULT_COLUMNS) == []
+    assert chosen_extras(["pnl_usd", "vega_decay_usd", "fixed_gamma_vol"]) == [
+        "vega_decay", "gamma_vol"]
+    columns = extra_columns()
+    assert "vega_decay_usd" in columns and "weighted_vega_usd" in columns
+    assert "delta_decay_usd" not in columns            # delta is not converted to USD
+    assert {"fixed_gamma_vol", "gamma_vol"} <= set(columns)
+
+
+def test_portfolio_totals_carry_priced_extras_and_convert_them():
+    from app.ui.trades_block import pair_totals, usd_totals
+    priced = [result("EURUSD", 1, 100.0, (*catalog.BASE_GREEKS, "vega_decay")),
+              result("USDJPY", 2, 50.0)]
+    totals = pair_totals(priced, [])
+    assert "vega_decay" in totals and "gamma_vol" not in totals
+    frame, usd = usd_totals(totals, {"EURUSD": 1.10, "USDJPY": 150.0})
+    eur = frame[frame["currency_pair"] == "EURUSD"].iloc[0]
+    assert eur["vega_decay_usd"] == pytest.approx(110.0)
+    assert "vega_decay_usd" in usd
+
+
+def test_portfolio_column_options_do_not_depend_on_what_was_priced():
+    """Streamlit resets a multiselect whose options change."""
+    from app.ui.trades_block import DEFAULT_COLUMNS, column_options, pair_totals, usd_totals
+    plain, _ = usd_totals(pair_totals([result("EURUSD", 1, 1.0)], []), {"EURUSD": 1.1})
+    rich, _ = usd_totals(pair_totals(
+        [result("EURUSD", 1, 1.0, (*catalog.BASE_GREEKS, *catalog.EXTRA_GREEKS))], []),
+        {"EURUSD": 1.1})
+    assert column_options(plain.columns) == column_options(rich.columns)
+    options = column_options(rich.columns)
+    assert options[:len(DEFAULT_COLUMNS)] == list(DEFAULT_COLUMNS)
+    assert set(rich.columns) - {"currency_pair", "spot"} <= set(options)
+    assert column_options(["surprise"])[-1] == "surprise"     # never hidden

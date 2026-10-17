@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from app import pricer, usd_spots
+from pricing import greek_catalog
 from app.premium_side import SIDES, premium_currency, premium_side
 from app.trades import service
 from app.trades.model import AMENDABLE, CANCELLED, FX_FORWARD, FX_OPTION, LIVE
@@ -259,8 +260,9 @@ PORTFOLIO_VIEWS = (BY_PAIR, LINE_ITEMS)
 
 
 def pair_totals(results, forwards):
-    """Totals per currency pair with the number of options and forwards in each."""
-    totals = pricer.aggregate_by_pair(results, forwards)
+    """Totals per currency pair with the number of options and forwards in each,
+    and every Greek the results carry (extras only when priced)."""
+    totals = pricer.aggregate_by_pair(results, forwards, greeks=list(greek_catalog.CATALOG))
     count = lambda rows, pair: sum(row["currency_pair"] == pair for row in rows)  # noqa: E731
     totals.insert(1, "options", [count(results, pair) for pair in totals["currency_pair"]])
     totals.insert(2, "forwards", [count(forwards, pair) for pair in totals["currency_pair"]])
@@ -351,8 +353,10 @@ def render_portfolio(tab, market_set, mods, premium_quote):
         # A moved or refreshed spot reprices the selection already priced.
         respot = bool(cached) and cached[0] == ids and cached[1] != overrides
         if clicked or respot:
+            extras = chosen_extras(st.session_state.get(_PAIR_COLUMNS, DEFAULT_COLUMNS))
             results, forwards, errors = service.price_trades(
-                market_set.with_spots(overrides), selected, mods, premium_quote)
+                market_set.with_spots(overrides), selected, mods, premium_quote,
+                extras=extras)
             cached = (ids, overrides, results, forwards, errors)
             st.session_state["_portfolio_book_result"] = cached
         if not cached:
@@ -363,6 +367,10 @@ def render_portfolio(tab, market_set, mods, premium_quote):
             return
         for error in errors:
             st.error("Not priced — " + error)
+        problems = {name: reason for result in results
+                    for name, reason in result.get("greek_problems", {}).items()}
+        for name, reason in problems.items():
+            st.warning(f"{greek_catalog.CATALOG[name].label} not available: {reason}")
         if not (results or forwards):
             return
         pair_tab, items_tab = st.tabs(list(PORTFOLIO_VIEWS))
@@ -395,6 +403,36 @@ DEFAULT_COLUMNS = ("pnl_usd", "delta", "fixed_delta", "gamma", "vega_usd", "vann
 _PAIR_COLUMNS = "_portfolio_pair_columns_choice"
 
 
+def _greek_columns(names):
+    usd = {source: target for source, target in usd_spots.USD_COLUMNS}
+    return [column for name in names
+            for column in (f"fixed_{name}", name, *([usd[name]] if name in usd else []))]
+
+
+def extra_columns():
+    """By-pair columns of the extra Greeks: fixed, smile and USD where converted."""
+    return _greek_columns(greek_catalog.EXTRA_GREEKS)
+
+
+def column_options(present=()):
+    """Every by-pair column the picker offers, in one fixed order.
+
+    The list must not depend on what has been priced: Streamlit resets a
+    multiselect whose options change. Columns outside it that a pricing
+    still produced (``present``) are appended, so none is ever hidden.
+    """
+    canonical = ["options", "forwards", "market_spot", "mtm_base", "pnl_base", "mtm_usd",
+                 "pnl_usd", *_greek_columns(greek_catalog.CATALOG)]
+    ordered = [*DEFAULT_COLUMNS, *(c for c in canonical if c not in DEFAULT_COLUMNS)]
+    return ordered + [c for c in present if c not in ordered and c not in FIXED_COLUMNS]
+
+
+def chosen_extras(columns):
+    """The extra Greeks the chosen by-pair ``columns`` need priced."""
+    return greek_catalog.extras(greek_catalog.greek_of(column) for column in columns
+                                if greek_catalog.greek_of(column))
+
+
 def _table_height(rows):
     """Pixel height that shows every row and the header without scrolling."""
     return 35 * (rows + 1) + 3
@@ -412,9 +450,9 @@ def _pair_view(totals, market, overrides, valuation_date=None):
                   [market.get(pair, float("nan")) for pair in totals["currency_pair"]])
     is_pair = totals["currency_pair"] != TOTAL_ROW
     pairs = list(totals["currency_pair"][is_pair])
-    optional = [*DEFAULT_COLUMNS, *(c for c in totals.columns
-                                    if c not in FIXED_COLUMNS and c not in DEFAULT_COLUMNS)]
-    optional = [c for c in optional if c in totals]
+    # A fixed list: extra Greeks can be chosen before they are priced (computed
+    # on the next pricing), and the choice survives the pricing.
+    optional = column_options(totals.columns)
     # Kept outside the widget too: Streamlit drops a widget's state on runs
     # that do not draw it (an unpriced selection).
     if "portfolio_pair_columns" not in st.session_state:
@@ -427,6 +465,9 @@ def _pair_view(totals, market, overrides, valuation_date=None):
             label_visibility="collapsed",
             help="Add or remove output columns; pair and spot are always shown.")
     st.session_state[_PAIR_COLUMNS] = list(chosen)
+    unpriced = [c for c in chosen if c not in totals]
+    if unpriced:
+        st.caption("Price selection to compute: " + ", ".join(unpriced))
     unconverted = list(totals["currency_pair"][is_pair & totals[usd[0]].isna()])
     if unconverted:
         st.warning("No USD spot for " + ", ".join(unconverted) + ": USD columns left blank"
@@ -441,7 +482,7 @@ def _pair_view(totals, market, overrides, valuation_date=None):
     with note_col:
         if moved:
             st.info("Priced at Portfolio spots: " + ", ".join(moved) + ".")
-    shown = [*FIXED_COLUMNS, *(c for c in optional if c in chosen)]
+    shown = [*FIXED_COLUMNS, *(c for c in optional if c in chosen and c in totals)]
     # Spot is a text cell so the total row stays blank; edits are parsed back.
     frame = _display(totals[shown].to_dict("records"), first=shown,
                      rates=("spot", "market_spot"),
@@ -474,9 +515,11 @@ def _line_items(results, forwards):
     hedges = [row for row in forwards if row["currency_pair"] == pair]
     if options:
         st.markdown("**Options**")
+        # Smile Greeks: the standard ones and any extras the pricing carried.
+        greeks = [name for name in greek_catalog.CATALOG if name in options[0]]
         columns = ["trade_id", "buy_sell", "call_put", "strike", "expiry", "notional",
-                   "vol_pct", "mtm_base", "pnl_base", *pricer.GREEK_NAMES, "smile_status"]
-        frame = _display(options, amounts=("mtm_base", "pnl_base", *pricer.GREEK_NAMES))
+                   "vol_pct", "mtm_base", "pnl_base", *greeks, "smile_status"]
+        frame = _display(options, amounts=("mtm_base", "pnl_base", *greeks))
         frame["vol_pct"] = frame["vol_pct"].map(lambda v: f"{float(v):.4f}")
         frame["strike"] = [pricer.format_strike_for_pair(pair, k) for k in results_strikes(options)]
         st.dataframe(frame[[c for c in columns if c in frame]], use_container_width=True,
