@@ -174,3 +174,68 @@ def test_a_stale_engine_without_extras_still_prices(markets, monkeypatch):
     monkeypatch.setattr(engine.Pricable, "price", old_price)
     results, errors = pricer.price_lines(markets, pd.DataFrame([line()]), MODS)
     assert errors == [] and results[0]["vega"] is not None
+
+
+# -- Risk ------------------------------------------------------------------------
+
+def _ladder(markets, rows, spots, mode, extras):
+    from app.reports.spot_ladder import calculate_spot_ladder
+    context = pricer.market_for_pair(markets, "EURUSD")
+    s = context.settings
+    return calculate_spot_ladder(
+        list(rows.iterrows()), spots, markets.valuation_date, context.market_for_expiry,
+        context.resolve_market_expiry, s.pricing_model, s.atm_type, s.delta_base, MODS,
+        mode=mode, extras=extras)
+
+
+def test_ladder_extras_at_spot_match_the_pricer(markets):
+    rows = pd.DataFrame([line(), line(strike="1.12", call_put="PUT", buy_sell="SELL")])
+    resolved, _, _ = pricer.resolve_line_inputs(markets, rows, "EURUSD")
+    extras = ["vega_decay", "gamma_vol", "weighted_vega"]
+    priced, errors = pricer.price_lines(markets, resolved, MODS, extras=extras)
+    assert errors == []
+    spot = float(pricer.market_for_pair(markets, "EURUSD").spot)
+    levels, errors = _ladder(markets, resolved, [spot * 0.99, spot, spot * 1.01], "reference",
+                             extras)
+    assert errors == []
+    at_spot = levels[1]
+    for column in catalog.columns(extras):
+        assert at_spot[column] == pytest.approx(sum(r[column] for r in priced), rel=1e-6), column
+    assert levels[0]["gamma_vol"] != at_spot["gamma_vol"]          # moves with spot
+
+
+def test_ladder_modes_agree_with_extras(markets):
+    rows = pd.DataFrame([line()])
+    resolved, _, _ = pricer.resolve_line_inputs(markets, rows, "EURUSD")
+    spot = float(pricer.market_for_pair(markets, "EURUSD").spot)
+    spots = [spot * 0.995, spot, spot * 1.005]
+    reference, ref_errors = _ladder(markets, resolved, spots, "reference", ["delta_decay"])
+    shadow, shadow_errors = _ladder(markets, resolved, spots, "shadow", ["delta_decay"])
+    assert ref_errors == [] and shadow_errors == []          # no shadow-validation fallback
+    for ref, other in zip(reference, shadow):
+        assert other["delta_decay"] == pytest.approx(ref["delta_decay"], rel=1e-8)
+
+
+def test_a_plain_ladder_has_no_extra_columns(markets):
+    rows = pd.DataFrame([line()])
+    resolved, _, _ = pricer.resolve_line_inputs(markets, rows, "EURUSD")
+    spot = float(pricer.market_for_pair(markets, "EURUSD").spot)
+    levels, _ = _ladder(markets, resolved, [spot], "optimized", ())
+    assert not set(catalog.columns(ALL_EXTRAS)) & set(levels[0])
+
+
+def test_risk_lines_carry_the_chosen_greeks(markets, priced):
+    from app.reports import risk_grid
+    from app.trades.model import FX_OPTION, Trade
+    result = dict(priced[1][0], trade_id="TR-1")
+    trade = Trade(product_type=FX_OPTION, currency_pair="EURUSD", trade_date=VALUATION,
+                  expiry=date(2026, 12, 17), buy_sell="BUY", notional=10e6, strike=1.18,
+                  call_put="CALL", premium=0.0, premium_ccy="USD", trade_id="TR-1")
+    lines, errors = risk_grid.risk_lines(markets, "EURUSD", [trade], [result], [],
+                                         greeks=["vega", "vega_decay", "sega"], fixed=True)
+    assert errors == []
+    assert lines[0].values["vega_decay"] == result["fixed_vega_decay"]
+    assert lines[0].values["sega"] == result["fixed_sega"]
+    table = risk_grid.greek_buckets(lines, ["3M"], [date(2027, 1, 15)], ["vega_decay"])
+    assert table.loc["vega_decay", "Total"] == pytest.approx(result["fixed_vega_decay"])
+    assert "gamma_vol" in risk_grid.MEASURES and list(risk_grid.MEASURES)[1] == "vega"

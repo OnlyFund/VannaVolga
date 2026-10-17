@@ -7,7 +7,10 @@ import numpy as np
 import pandas as pd
 
 from app.curve_roll import next_business_day
-from pricing.greeks import calculate_greeks, calculate_forward_theta, forward_delta_factor
+from pricing.greek_catalog import columns as greek_columns
+from pricing.greeks import (
+    calculate_extra_greeks, calculate_greeks, calculate_forward_theta, forward_delta_factor,
+)
 from pricing.pricing import price_option_with_vol
 from pricing.fx_forward import FxForwardPosition
 from helper_functions.cashflows import signed_premium_cashflow
@@ -82,15 +85,34 @@ def _solve_smile_vol(
     return vol
 
 
-def _empty_level(spot):
+def _empty_level(spot, extras=()):
     level = {
         "spot": spot,
         "pnl_base": 0.0,
     }
-    for greek_name in GREEK_NAMES:
-        level[f"fixed_{greek_name}"] = 0.0
-        level[greek_name] = 0.0
+    for column in greek_columns([*GREEK_NAMES, *extras]):
+        level[column] = 0.0
     return level
+
+
+def _add_option_greeks(level, greeks, market, row, extras, pricing_model, atm_type,
+                       delta_base, mods, next_market, next_valuation):
+    """Add one option's Greeks, and the requested extras, to a ladder level.
+
+    An extra that cannot be computed makes that level's cell blank (NaN)
+    rather than failing the level.
+    """
+    for greek_name in GREEK_NAMES:
+        level[f"fixed_{greek_name}"] += greeks[f"fixed_{greek_name}"]
+        level[greek_name] += greeks[greek_name]
+    if not extras:
+        return
+    values, _ = calculate_extra_greeks(
+        market, row, extras, greeks, pricing_model, atm_type, delta_base, mods,
+        next_market=next_market, next_valuation=next_valuation,
+    )
+    for column, value in values.items():
+        level[column] += np.nan if value is None else float(value)
 
 
 def _scenario_worker_count(scenario_workers, scenario_count):
@@ -156,7 +178,7 @@ def _add_forward_pnl(level, position, market, valuation_date,
 def _calculate_reference_ladder(
     rows, ladder_spots, valuation_date, market_for_expiry, resolve_expiry,
     pricing_model, atm_type, delta_base, mods, forward_positions=(),
-    scenario_workers=None,
+    scenario_workers=None, extras=(),
 ):
     """Run the original scalar ladder path without prepared-row shortcuts."""
     errors = []
@@ -219,7 +241,7 @@ def _calculate_reference_ladder(
         ladder_spot, option_markets, next_markets, forward_markets, setup_error = scenario
         if setup_error is not None:
             return None, f"Spot {ladder_spot:.6f}: {setup_error}"
-        level = _empty_level(ladder_spot)
+        level = _empty_level(ladder_spot, extras)
         try:
             for index, prepared_row in specs:
                 row = copy(prepared_row)
@@ -238,9 +260,9 @@ def _calculate_reference_ladder(
                     next_valuation=next_valuation,
                     option_value_term=mtm,
                 )
-                for greek_name in GREEK_NAMES:
-                    level[f"fixed_{greek_name}"] += greeks[f"fixed_{greek_name}"]
-                    level[greek_name] += greeks[greek_name]
+                _add_option_greeks(level, greeks, market, row, extras, pricing_model,
+                                   atm_type, delta_base, mods, next_markets[index],
+                                   next_valuation)
             for position, market, next_market in forward_markets:
                 _add_forward_pnl(
                     level, position, market, valuation_date,
@@ -264,7 +286,7 @@ def _calculate_reference_ladder(
 def _calculate_optimized_ladder(
     rows, ladder_spots, valuation_date, market_for_expiry, resolve_expiry,
     pricing_model, atm_type, delta_base, mods, forward_positions=(),
-    scenario_workers=None,
+    scenario_workers=None, extras=(),
 ):
     """Calculate the cached-volatility ladder with scalar fallback."""
     # Keep forward valuation on the reference path until the optimized option
@@ -273,7 +295,7 @@ def _calculate_optimized_ladder(
         return _calculate_reference_ladder(
             rows, ladder_spots, valuation_date, market_for_expiry, resolve_expiry,
             pricing_model, atm_type, delta_base, mods, forward_positions,
-            scenario_workers,
+            scenario_workers, extras=extras,
         )
     specs, errors = _prepare_specs(
         rows, valuation_date, resolve_expiry, market_for_expiry, atm_type, delta_base
@@ -282,6 +304,7 @@ def _calculate_optimized_ladder(
         return _calculate_reference_ladder(
             rows, ladder_spots, valuation_date, market_for_expiry, resolve_expiry,
             pricing_model, atm_type, delta_base, mods, scenario_workers=scenario_workers,
+            extras=extras,
         )
     markets = {}
     vols = {}
@@ -324,6 +347,7 @@ def _calculate_optimized_ladder(
         return _calculate_reference_ladder(
             rows, ladder_spots, valuation_date, market_for_expiry, resolve_expiry,
             pricing_model, atm_type, delta_base, mods, scenario_workers=scenario_workers,
+            extras=extras,
         )
 
     next_valuation = _next_valuation(specs, valuation_date)
@@ -344,7 +368,7 @@ def _calculate_optimized_ladder(
 
     def calculate_scenario(scenario):
         ladder_spot, option_markets, next_markets = scenario
-        level = _empty_level(ladder_spot)
+        level = _empty_level(ladder_spot, extras)
         try:
             for index, prepared_row in specs:
                 row = copy(prepared_row)
@@ -360,9 +384,9 @@ def _calculate_optimized_ladder(
                     option_value_term=mtm,
                 )
                 _add_option_pnl(level, row, mtm, float(ladder_spot))
-                for greek_name in GREEK_NAMES:
-                    level[f"fixed_{greek_name}"] += greeks[f"fixed_{greek_name}"]
-                    level[greek_name] += greeks[greek_name]
+                _add_option_greeks(level, greeks, market, row, extras, pricing_model,
+                                   atm_type, delta_base, mods, next_markets[index],
+                                   next_valuation)
             return level, None
         except Exception as exc:
             return None, f"Spot {ladder_spot:.6f}: {exc}"
@@ -405,9 +429,12 @@ def _compare_ladder_results(reference, candidate, atol=1e-8, rtol=1e-8):
 def calculate_spot_ladder(
     rows, ladder_spots, valuation_date, market_for_expiry, resolve_expiry,
     pricing_model, atm_type, delta_base, mods, mode="shadow",
-    forward_positions=(), scenario_workers=None,
+    forward_positions=(), scenario_workers=None, extras=(),
 ):
-    """Calculate a ladder in reference, shadow, or optimized mode."""
+    """Calculate a ladder in reference, shadow, or optimized mode.
+
+    ``extras`` adds on-demand Greeks (``pricing.greek_catalog``) to every level.
+    """
     if mode not in {"reference", "shadow", "optimized"}:
         raise ValueError("Spot-ladder mode must be reference, shadow, or optimized")
 
@@ -415,13 +442,13 @@ def calculate_spot_ladder(
         return _calculate_reference_ladder(
             rows, ladder_spots, valuation_date, market_for_expiry, resolve_expiry,
             pricing_model, atm_type, delta_base, mods, forward_positions,
-            scenario_workers,
+            scenario_workers, extras=extras,
         )
 
     optimized_results, optimized_errors = _calculate_optimized_ladder(
         rows, ladder_spots, valuation_date, market_for_expiry, resolve_expiry,
         pricing_model, atm_type, delta_base, mods, forward_positions,
-        scenario_workers,
+        scenario_workers, extras=extras,
     )
     if mode == "optimized":
         return optimized_results, optimized_errors
@@ -429,7 +456,7 @@ def calculate_spot_ladder(
     reference_results, reference_errors = _calculate_reference_ladder(
         rows, ladder_spots, valuation_date, market_for_expiry, resolve_expiry,
         pricing_model, atm_type, delta_base, mods, forward_positions,
-        scenario_workers,
+        scenario_workers, extras=extras,
     )
     if reference_errors or optimized_errors or not _compare_ladder_results(
         reference_results, optimized_results
@@ -440,8 +467,12 @@ def calculate_spot_ladder(
     return optimized_results, optimized_errors
 
 
-def render_spot_ladder(tab, results, errors, current_spot):
-    """Render calculated spot-ladder results into a Streamlit tab."""
+def render_spot_ladder(tab, results, errors, current_spot, greeks=GREEK_NAMES):
+    """Render calculated spot-ladder results into a Streamlit tab.
+
+    ``greeks`` picks the Greek columns; ones the results lack are left out.
+    """
+    from pricing.greek_catalog import label as greek_label
     import streamlit as st
 
     with tab:
@@ -452,19 +483,17 @@ def render_spot_ladder(tab, results, errors, current_spot):
         ladder_df = pd.DataFrame(results).sort_values(
             "spot", ascending=False
         ).reset_index(drop=True)
-        columns = ["spot", "pnl_base"]
-        for greek_name in GREEK_NAMES:
-            columns.extend([f"fixed_{greek_name}", greek_name])
+        shown = [column for column in greek_columns(greeks) if column in ladder_df]
+        columns = ["spot", "pnl_base", *shown]
         config = {
             "spot": st.column_config.NumberColumn("Spot", format="%.6f"),
             "pnl_base": st.column_config.NumberColumn("P&L (base)", format="%.0f"),
         }
-        for greek_name in GREEK_NAMES:
-            for column in (f"fixed_{greek_name}", greek_name):
-                label = column.replace("_", " ").title()
-                if greek_name == "theta":
-                    label += " (prem ccy)"
-                config[column] = st.column_config.NumberColumn(label, format="%.0f")
+        for column in shown:
+            label = greek_label(column)
+            if column in ("theta", "fixed_theta"):
+                label += " (prem ccy)"
+            config[column] = st.column_config.NumberColumn(label, format="%.0f")
 
         def highlight_current(row):
             if np.isclose(float(row["spot"]), float(current_spot), rtol=0.0, atol=1e-12):
@@ -478,11 +507,7 @@ def render_spot_ladder(tab, results, errors, current_spot):
                     column: "{:,.0f}"
                     for column in ("pnl_base",)
                 },
-                **{
-                    column: "{:,.0f}"
-                    for greek_name in GREEK_NAMES
-                    for column in (f"fixed_{greek_name}", greek_name)
-                },
+                **{column: "{:,.0f}" for column in shown},
             }
         )
         st.subheader("Spot ladder results")

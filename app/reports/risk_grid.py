@@ -27,15 +27,19 @@ from typing import Optional, Sequence
 import numpy as np
 import pandas as pd
 
+from pricing.greek_catalog import CATALOG
+
 ATM = "ATM"
 TOTAL = "Total"
 DEFAULT_TENORS = ("1W", "1M", "2M", "3M", "6M", "9M", "1Y", "2Y")
 #: Measures a grid cell can show, by result field.
+#: The original measures first (Vega stays the default), then every other Greek.
 MEASURES = {
     "notional": "Notional (base, signed)",
     "vega": "Vega", "delta": "Delta", "gamma": "Gamma", "vanna": "Vanna",
     "volga": "Volga", "theta": "Theta", "mtm_base": "MTM (base)",
 }
+MEASURES.update({name: greek.label for name, greek in CATALOG.items() if name not in MEASURES})
 BUCKET_GREEKS = ("delta", "gamma", "vega", "vanna", "volga", "theta")
 
 
@@ -140,11 +144,14 @@ def greek_buckets(lines: Sequence[RiskLine], tenor_labels, tenor_dates, greeks=B
     return frame
 
 
-def risk_lines(markets, pair, trades, results, forwards, include_hedges=False, fixed=False):
+def risk_lines(markets, pair, trades, results, forwards, include_hedges=False, fixed=False,
+               greeks=BUCKET_GREEKS):
     """``RiskLine`` for each priced option of ``pair`` (and its forwards).
 
     ``results`` / ``forwards`` come from ``service.price_trades``; ``fixed``
-    uses the fixed-vol Greeks instead of the smile ones.
+    uses the fixed-vol Greeks instead of the smile ones. ``greeks`` are the
+    Greeks each line carries; one the results lack (or that failed) is 0.
+    Forwards carry delta and theta only.
     """
     valuation = pd.Timestamp(markets.valuation_date)
     context = markets.market(pair)
@@ -165,8 +172,8 @@ def risk_lines(markets, pair, trades, results, forwards, include_hedges=False, f
             continue
         sign = 1.0 if trade.buy_sell == "BUY" else -1.0
         values = {"notional": sign * trade.notional, "mtm_base": result["mtm_base"]}
-        for greek in BUCKET_GREEKS:
-            values[greek] = result.get(f"fixed_{greek}" if fixed else greek, 0.0)
+        for greek in greeks:
+            values[greek] = result.get(f"fixed_{greek}" if fixed else greek) or 0.0
         lines.append(RiskLine(trade.trade_id, pd.Timestamp(result["expiry"]).date(),
                               call_delta, values))
     if include_hedges:
