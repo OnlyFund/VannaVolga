@@ -11,6 +11,7 @@ from app.reports import risk_grid
 from app.reports.spot_ladder import calculate_spot_ladder, render_spot_ladder
 from app.trades import service
 from app.ui.greek_picker import render_greek_picker
+from app.ui.negatives import red_negatives
 from app.ui.trades_block import _store_banner, trade_store
 from pricing import greek_catalog
 from pricing.greek_catalog import CATALOG
@@ -106,7 +107,7 @@ def render_risk(tab, market_set, mods, premium_quote, ladder_mode):
             return
         with grid_tab:
             grid = risk_grid.strike_grid(lines, labels, dates, measure, step)
-            st.dataframe(_formatted(grid), use_container_width=True)
+            st.dataframe(red_negatives(_formatted(grid)), use_container_width=True)
             st.caption("Rows: expiry buckets; columns: strike buckets by call delta, low "
                        "strike to high. A position between two buckets is split between "
                        "them in proportion to its distance on each axis."
@@ -114,7 +115,7 @@ def render_risk(tab, market_set, mods, premium_quote, ladder_mode):
         with bucket_tab:
             buckets = risk_grid.greek_buckets(lines, labels, dates, bucket_greeks)
             buckets.index = [CATALOG[name].label for name in buckets.index]
-            st.dataframe(_formatted(buckets), use_container_width=True)
+            st.dataframe(red_negatives(_formatted(buckets)), use_container_width=True)
             st.caption("Greeks per expiry bucket (" + ("fixed-vol" if fixed else "smile")
                        + "), split between neighbouring buckets by expiry. Theta is in "
                          "the premium currency; the rest in the base currency.")

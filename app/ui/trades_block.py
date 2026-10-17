@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from app import pricer, usd_spots
+from app.ui.negatives import red_negatives
 from pricing import greek_catalog
 from app.premium_side import SIDES, premium_currency, premium_side
 from app.trades import service
@@ -492,7 +493,7 @@ def _pair_view(totals, market, overrides, valuation_date=None):
                      amounts=[c for c in shown if c not in RATE_COLUMNS])
     key = f"portfolio_spots_{st.session_state.get(_SPOT_EDITOR, 0)}"
     st.data_editor(
-        frame, key=key, use_container_width=True, hide_index=True,
+        red_negatives(frame, [c for c in frame.columns if c not in RATE_COLUMNS]), key=key, use_container_width=True, hide_index=True,
         height=_table_height(len(frame)),
         disabled=[c for c in frame.columns if c != "spot"],
         column_config={"spot": st.column_config.TextColumn(
@@ -525,12 +526,14 @@ def _line_items(results, forwards):
         frame = _display(options, amounts=("mtm_base", "pnl_base", *greeks))
         frame["vol_pct"] = frame["vol_pct"].map(lambda v: f"{float(v):.4f}")
         frame["strike"] = [pricer.format_strike_for_pair(pair, k) for k in results_strikes(options)]
-        st.dataframe(frame[[c for c in columns if c in frame]], use_container_width=True,
-                     hide_index=True)
+        st.dataframe(red_negatives(frame[[c for c in columns if c in frame]],
+                                   ["mtm_base", "pnl_base", *greeks]),
+                     use_container_width=True, hide_index=True)
     if hedges:
         st.markdown("**Forwards**")
-        st.dataframe(_display(hedges, first=("trade_id", "expiry", "direction"),
-                              amounts=("base_amount", "delta_offset", "mtm_term", "mtm_base",
-                                       "pnl_term", "pnl_base", "theta"),
-                              rates=("forward_rate",)).drop(columns=["currency_pair"]),
+        amounts = ("base_amount", "delta_offset", "mtm_term", "mtm_base", "pnl_term",
+                   "pnl_base", "theta")
+        st.dataframe(red_negatives(_display(hedges, first=("trade_id", "expiry", "direction"),
+                                            amounts=amounts, rates=("forward_rate",))
+                                   .drop(columns=["currency_pair"]), amounts),
                      use_container_width=True, hide_index=True)

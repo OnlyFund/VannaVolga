@@ -6,6 +6,7 @@ import streamlit as st
 from app.premium_side import SIDES, TERM, premium_currency
 from app.pricer import GREEK_NAMES
 from app.ui.greek_picker import render_greek_picker
+from app.ui.negatives import red_negatives
 from pricing import greek_catalog as catalog
 
 
@@ -417,7 +418,7 @@ def render_portfolio_block(portfolio_tab, market_pair, quote_label="quote",
                 width="small",
             )
         edited_rows = st.data_editor(
-            editor_input,
+            red_negatives(editor_input, LINE_RESULT_COLUMNS),
             num_rows="dynamic",
             use_container_width=True,
             column_config=editor_column_config,

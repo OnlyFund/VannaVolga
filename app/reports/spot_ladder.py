@@ -511,7 +511,8 @@ def render_spot_ladder(tab, results, errors, current_spot, greeks=GREEK_NAMES):
             }
         )
         st.subheader("Spot ladder results")
+        from app.ui.negatives import red_negatives
         st.dataframe(
-            display, use_container_width=True, hide_index=True,
+            red_negatives(display, ["pnl_base", *shown]), use_container_width=True, hide_index=True,
             column_config=config,
         )

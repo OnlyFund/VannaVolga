@@ -21,6 +21,7 @@ from helper_functions.premium_quotes import PREMIUM_QUOTES, premium_quote_label
 from app.ui.market_block import render_market_block
 from app.premium_side import TERM, premium_side
 from app.ui.greek_picker import chosen_greeks, missing_extras
+from app.ui.negatives import red_negatives
 from pricing import greek_catalog
 from app.ui.portfolio_block import (
     BOOK_COLUMN, PRICER_GREEKS_KEY, TRADE_ID_COLUMN, render_portfolio_block,
@@ -563,7 +564,7 @@ def render_app():
                     width="small",
                 )
         st.dataframe(
-            aggregation_display,
+            red_negatives(aggregation_display),
             use_container_width=True,
             hide_index=True,
             column_config=aggregation_column_config,
@@ -571,7 +572,7 @@ def render_app():
         if hedge_trades:
             st.subheader("Delta hedge forward trades")
             st.dataframe(
-                pd.DataFrame(hedge_trades),
+                red_negatives(pd.DataFrame(hedge_trades)),
                 use_container_width=True,
                 hide_index=True,
                 column_config={
