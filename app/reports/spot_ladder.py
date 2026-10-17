@@ -539,6 +539,19 @@ def calculate_spot_ladder(
     return optimized_results, optimized_errors
 
 
+def spot_moves(spots, current_spot):
+    """Each ladder spot's move from ``current_spot``, in percent."""
+    return [(float(spot) / float(current_spot) - 1.0) * 100.0 for spot in spots]
+
+
+def format_move(move):
+    """A move in percent for display: signed, 0.00% at spot, more decimals
+    for moves below 0.01%."""
+    if abs(move) < 5e-7:
+        return "0.00%"
+    return f"{move:+.4f}%" if abs(move) < 0.01 else f"{move:+.2f}%"
+
+
 def render_spot_ladder(tab, results, errors, current_spot, greeks=GREEK_NAMES):
     """Render calculated spot-ladder results into a Streamlit tab.
 
@@ -556,9 +569,12 @@ def render_spot_ladder(tab, results, errors, current_spot, greeks=GREEK_NAMES):
             "spot", ascending=False
         ).reset_index(drop=True)
         shown = [column for column in greek_columns(greeks) if column in ladder_df]
-        columns = ["spot", "pnl_base", *shown]
+        ladder_df["move_pct"] = spot_moves(ladder_df["spot"], current_spot)
+        columns = ["spot", "move_pct", "pnl_base", *shown]
         config = {
             "spot": st.column_config.NumberColumn("Spot", format="%.6f"),
+            "move_pct": st.column_config.TextColumn(
+                "Move", help="Move from the current spot, in percent."),
             "pnl_base": st.column_config.NumberColumn("P&L (base)", format="%.0f"),
         }
         for column in shown:
@@ -575,6 +591,7 @@ def render_spot_ladder(tab, results, errors, current_spot, greeks=GREEK_NAMES):
         display = ladder_df[columns].style.apply(highlight_current, axis=1).format(
             {
                 "spot": "{:.6f}",
+                "move_pct": format_move,
                 **{
                     column: "{:,.0f}"
                     for column in ("pnl_base",)

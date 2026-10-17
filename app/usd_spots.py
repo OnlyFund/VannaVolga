@@ -15,6 +15,17 @@ USD_COLUMNS = (("mtm_base", "mtm_usd"), ("pnl_base", "pnl_usd"),
                *((f"{greek}_decay", f"{greek}_decay_usd")
                  for greek in ("vega", "vanna", "volga", "rega", "sega")),
                ("weighted_vega", "weighted_vega_usd"))
+#: Theta is in the pair's premium currency (USD when USD is the term currency,
+#: else the base currency; ``pricing.greeks.theta_currency``), so these
+#: convert from that currency, not from base.
+THETA_USD_COLUMNS = (("theta", "theta_usd"), ("fixed_theta", "fixed_theta_usd"))
+ALL_USD_COLUMNS = USD_COLUMNS + THETA_USD_COLUMNS
+
+
+def theta_ccy(pair):
+    """The currency theta is reported in for ``pair`` (its premium currency)."""
+    from helper_functions.premium_quotes import conventional_premium_ccy
+    return conventional_premium_ccy(pair) or str(pair)[:3]
 
 
 def latest_snapshot(valuation_date=None, store=None):
@@ -46,7 +57,8 @@ def pair_spot(pair, spots):
 
 
 def add_usd_columns(totals, spots):
-    """``totals`` with the pair's ``spot`` and its base-currency amounts in USD.
+    """``totals`` with the pair's ``spot``, its base-currency amounts in USD,
+    and theta in USD from the pair's premium currency.
 
     Pairs the snapshot cannot convert get ``nan`` in the new columns.
     """
@@ -58,4 +70,9 @@ def add_usd_columns(totals, spots):
     for source, target in USD_COLUMNS:
         if source in frame:
             frame[target] = frame[source].astype(float) * rates
+    theta_rates = pd.Series([usd_rate(theta_ccy(pair), spots) for pair in frame["currency_pair"]],
+                            index=frame.index)
+    for source, target in THETA_USD_COLUMNS:
+        if source in frame:
+            frame[target] = frame[source].astype(float) * theta_rates
     return frame

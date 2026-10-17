@@ -2,7 +2,15 @@ import pandas as pd
 import pytest
 from pandas.io.formats.style import Styler
 
+from app.reports.spot_ladder import format_move, spot_moves
 from app.ui.negatives import NEGATIVE_STYLE, is_negative, red_negatives
+
+
+def test_spot_ladder_shows_each_spots_move_from_spot():
+    moves = spot_moves([0.98, 0.99, 1.0, 1.015, 1.02], 1.0)
+    assert moves == pytest.approx([-2.0, -1.0, 0.0, 1.5, 2.0])
+    assert [format_move(m) for m in moves] == ["-2.00%", "-1.00%", "0.00%", "+1.50%", "+2.00%"]
+    assert format_move(spot_moves([1.00005], 1.0)[0]) == "+0.0050%"
 
 
 @pytest.mark.parametrize("value", [-1, -0.5, -1e-9, "-1,234", "-0.5", " -12", "−3",

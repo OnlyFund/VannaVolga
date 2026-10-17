@@ -388,7 +388,7 @@ def render_portfolio(tab, market_set, mods, premium_quote):
 def usd_totals(totals, spots):
     """Pair totals with spot and USD columns, plus a USD total row across pairs."""
     frame = usd_spots.add_usd_columns(totals, spots)
-    usd = [target for _, target in usd_spots.USD_COLUMNS if target in frame]
+    usd = [target for _, target in usd_spots.ALL_USD_COLUMNS if target in frame]
     counts = [c for c in ("options", "forwards") if c in frame]
     total = {"currency_pair": TOTAL_ROW, **frame[counts + usd].sum(min_count=1).to_dict()}
     return pd.concat([frame, pd.DataFrame([total])], ignore_index=True), usd
@@ -408,9 +408,11 @@ _PAIR_COLUMNS = "_portfolio_pair_columns_choice"
 
 
 def _greek_columns(names):
-    usd = {source: target for source, target in usd_spots.USD_COLUMNS}
+    """Fixed and smile columns of each Greek, then those converted to USD."""
+    usd = dict(usd_spots.ALL_USD_COLUMNS)
     return [column for name in names
-            for column in (f"fixed_{name}", name, *([usd[name]] if name in usd else []))]
+            for column in (f"fixed_{name}", name,
+                           *(usd[c] for c in (f"fixed_{name}", name) if c in usd))]
 
 
 def extra_columns():
@@ -502,7 +504,8 @@ def _pair_view(totals, market, overrides, valuation_date=None):
         on_change=_on_spot_edit, args=(key, pairs, market))
     st.caption("One row per currency pair, hedge forwards included. Edit spot to reprice "
                "the portfolio at it; market_spot and the Markets tab keep the market data "
-               "spot. Columns ending _usd are converted from the pair's base currency at "
+               "spot. Columns ending _usd are converted from the pair's base currency "
+               "(theta from its premium currency) at "
                "the Portfolio spots (other currencies at the USD spot snapshot) and summed "
                "in the Total row; the other MTM, P&L and Greek columns, added from "
                "Columns, stay in the pair's base currency (theta in its premium currency).")

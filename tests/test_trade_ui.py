@@ -133,7 +133,7 @@ def test_portfolio_reports_spot_and_usd_columns(store, markets, tmp_path):
     totals = pair_totals(results, forwards)
     frame, usd = usd_totals(totals, spots)
     assert usd == ["mtm_usd", "pnl_usd", "vega_usd", "vanna_usd", "volga_usd",
-                   "rega_usd", "sega_usd"]
+                   "rega_usd", "sega_usd", "theta_usd", "fixed_theta_usd"]
     assert list(frame["currency_pair"]) == ["EURUSD", "USDJPY", "Total (USD)"]
     assert list(frame["spot"][:2]) == [1.12, 158.0]
     # EUR base converts at EURUSD; USD base is already USD.
@@ -141,6 +141,34 @@ def test_portfolio_reports_spot_and_usd_columns(store, markets, tmp_path):
     assert frame.at[1, "mtm_usd"] == pytest.approx(totals.at[1, "mtm_base"])
     assert frame.at[2, "pnl_usd"] == pytest.approx(frame["pnl_usd"][:2].sum())
     assert usd_spots.add_usd_columns(totals, {"USDJPY": 158.0})["vega_usd"].isna()[0]
+    # Theta is already in USD for both (premium currency USD): not converted.
+    for row in (0, 1):
+        assert frame.at[row, "theta_usd"] == pytest.approx(totals.at[row, "theta"])
+        assert frame.at[row, "fixed_theta_usd"] == pytest.approx(totals.at[row, "fixed_theta"])
+    assert frame.at[2, "theta_usd"] == pytest.approx(frame["theta_usd"][:2].sum())
+
+
+def test_theta_converts_to_usd_from_the_premium_currency():
+    from app import usd_spots
+    totals = pd.DataFrame({"currency_pair": ["EURUSD", "USDJPY", "EURGBP", "GBPJPY"],
+                           "theta": [-100.0, -200.0, -300.0, -400.0],
+                           "fixed_theta": [-10.0, -20.0, -30.0, -40.0],
+                           "vega": [1.0, 1.0, 1.0, 1.0]})
+    spots = {"EURUSD": 1.10, "USDJPY": 150.0, "GBPUSD": 1.30}
+    frame = usd_spots.add_usd_columns(totals, spots)
+    # EURUSD: USD term, theta in USD. USDJPY: USD base, theta in USD.
+    # EURGBP: theta in EUR (base), at EURUSD. GBPJPY: theta in GBP, at GBPUSD.
+    assert list(frame["theta_usd"]) == pytest.approx([-100.0, -200.0, -330.0, -520.0])
+    assert list(frame["fixed_theta_usd"]) == pytest.approx([-10.0, -20.0, -33.0, -52.0])
+    # Base-currency columns still convert from base (EURUSD vega at 1.10).
+    assert frame.at[0, "vega_usd"] == pytest.approx(1.10)
+
+
+def test_theta_usd_columns_are_offered_in_the_column_picker():
+    from app.ui.trades_block import column_options
+    options = column_options()
+    assert options.index("fixed_theta_usd") == options.index("theta") + 1
+    assert options.index("theta_usd") == options.index("fixed_theta_usd") + 1
 
 
 def test_portfolio_spot_reprices_without_moving_the_market(store, markets):
