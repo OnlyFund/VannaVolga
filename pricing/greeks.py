@@ -83,6 +83,110 @@ def _report_delta(raw_delta, value, market, expiry, valuation, premium_adjusted)
     return spot_delta
 
 
+#: Relative spot step of the gamma price grid S * (1 + k * GAMMA_BUMP), k = -2..2.
+GAMMA_BUMP = 1e-4
+
+
+def _base_premium(row):
+    """True when the line's premium is paid in the base currency (legacy
+    delta reporting nets it out); validates the pair and premium currency."""
+    premium_ccy = row.get("premium_ccy")
+    if premium_ccy is None:
+        return False
+    pair = str(row.get("currency_pair", "")).strip().upper()
+    premium_ccy = str(premium_ccy).strip().upper()
+    if len(pair) != 6 or not pair.isalpha():
+        raise ValueError("Currency pair must contain two 3-letter ISO codes")
+    if premium_ccy not in (pair[:3], pair[3:]):
+        raise ValueError("Premium currency must match the pair's base or term currency")
+    return premium_ccy == pair[:3]
+
+
+def _display_delta(raw_delta, value, market, row, expiry, valuation, base_premium):
+    """The delta the app reports, from a raw price derivative ``dV/dS``
+    (forward points fixed) and the option value ``value`` (term currency)."""
+    if market.delta_reporting is not None:
+        from helper_functions.fx_conventions import get_pair
+        premium_adjusted = get_pair(_pair_code(row, market)).premium_adjusted
+        return _report_delta(raw_delta, value, market, expiry, valuation, premium_adjusted)
+    if base_premium:
+        return raw_delta - convert_premium_quote(value, "base_cash", market.s)
+    return raw_delta
+
+
+def _path_delta_gamma(price_at, market, row, expiry, valuation, base_premium,
+                      eps=GAMMA_BUMP):
+    """``(delta, gamma)`` at ``market.s`` along one spot path, as reported.
+
+    ``price_at(spot)`` prices the option along the path: the unchanged smile
+    quotes (fixed) or the smile dynamics (smile). Gamma is the change in the
+    reported delta for a 1% relative spot move: the derivative of the very
+    delta reported on that path, in its spot/forward and premium conventions,
+    so a spot ladder's P&L curvature matches it. (Differentiating the
+    analytic Black-Scholes delta at the bumped vol, as before, missed the
+    vol's own move with spot.) ``market`` gives the spot and the reporting
+    conventions.
+    """
+    spot = market.s
+    prices = {k: price_at(spot * (1 + k * eps)) for k in (-2, -1, 0, 1, 2)}
+
+    def reported(center, step):
+        raw = (prices[center + step] - prices[center - step]) / (2 * spot * eps * step)
+        return _display_delta(raw, prices[center],
+                              market.copy_with(s=spot * (1 + center * eps)),
+                              row, expiry, valuation, base_premium)
+    delta = reported(0, 1)
+    gamma = (reported(1, 1) - reported(-1, 1)) / (2 * eps) * 0.01
+    return delta, gamma
+
+
+def _path_gamma(price_at, market, row, expiry, valuation, base_premium, eps=GAMMA_BUMP):
+    """Gamma at ``market.s`` along one spot path (see ``_path_delta_gamma``)."""
+    return _path_delta_gamma(price_at, market, row, expiry, valuation, base_premium, eps)[1]
+
+
+def _smile_path_pricer(anchor, common, mods):
+    """``price(spot)`` on the smile dynamics anchored at ``anchor``'s spot
+    and quotes: the path the smile delta and a spot ladder's P&L follow."""
+    smile = SmileGreeks(mods=mods, **dict(common, market=anchor))
+    path = smile._get_pm()
+
+    def price(spot):
+        return BlackScholes(
+            S=spot, K=smile.k, fwd_pts=anchor.fwd_pts, v=path.shift_spot(new_spot=spot),
+            expiry_date=smile.expiry_date, valuation_date=smile.valuation_date,
+            CallPut=smile.CallPut, BuySell=smile.BuySell, Notional=smile.notional,
+            deltaBase=smile.deltaBase, fwd_divisor=anchor.forward_divisor,
+            term_discount=anchor.term_discount, **smile._discount_kwargs(),
+        ).price()
+    return price
+
+
+def _consistent_gammas(market, row, common, mods, base_premium):
+    """``(fixed gamma, smile gamma)`` on the fixed-quote and smile-dynamics paths."""
+    expiry, valuation = common["expiry_date"], common["valuation_date"]
+    fixed_pricer = FixedDelta(**common)
+
+    def fixed_price(spot):
+        return fixed_pricer._price_given_market(market.copy_with(s=spot))
+
+    return (_path_gamma(fixed_price, market, row, expiry, valuation, base_premium),
+            _path_gamma(_smile_path_pricer(market, common, mods), market, row, expiry,
+                        valuation, base_premium))
+
+
+def smile_path_delta_gamma(anchor, market, row, mods, pricing_model, atm_type, delta_base):
+    """Smile ``(delta, gamma)`` at ``market.s`` along the smile dynamics
+    anchored at ``anchor`` (today's market): the path a spot ladder prices
+    its P&L on, so the deltas shown at each ladder spot add up to its P&L.
+    ``market`` (the scenario market at the ladder spot) sets the reporting.
+    """
+    common = _greek_inputs(anchor, row, pricing_model, atm_type, delta_base)
+    return _path_delta_gamma(_smile_path_pricer(anchor, common, mods), market, row,
+                             common["expiry_date"], common["valuation_date"],
+                             _base_premium(row))
+
+
 def _rolled_smile_theta(market, next_market, common, mods, next_valuation):
     """Reprice the fixed strike on the rolled date, forward and smile.
 
@@ -169,16 +273,7 @@ def calculate_greeks(
     """
     expiry = _date_text(row["expiry"])
     valuation = _date_text(row["valuation"])
-    premium_ccy = row.get("premium_ccy")
-    base_premium = False
-    if premium_ccy is not None:
-        pair = str(row.get("currency_pair", "")).strip().upper()
-        premium_ccy = str(premium_ccy).strip().upper()
-        if len(pair) != 6 or not pair.isalpha():
-            raise ValueError("Currency pair must contain two 3-letter ISO codes")
-        if premium_ccy not in (pair[:3], pair[3:]):
-            raise ValueError("Premium currency must match the pair's base or term currency")
-        base_premium = premium_ccy == pair[:3]
+    base_premium = _base_premium(row)
     if year_fraction(expiry, valuation) == 0.0:
         return {
             key: 0.0
@@ -240,24 +335,19 @@ def calculate_greeks(
         "rega": smile_calculator.rega(),
         "sega": smile_calculator.sega(),
     }
-    if market.delta_reporting is not None:
-        from helper_functions.fx_conventions import get_pair
-        premium_adjusted = get_pair(_pair_code(row, market)).premium_adjusted
+    if market.delta_reporting is not None or base_premium:
         if option_value_term is None:
             option_value_term = smile_calculator._price_given_market(market)
         for values in (fixed, smile):
-            values["delta"] = _report_delta(
-                values["delta"], option_value_term, market,
-                expiry, valuation, premium_adjusted,
-            )
-    elif base_premium:
-        if option_value_term is None:
-            option_value_term = smile_calculator._price_given_market(market)
-        premium_exposure = convert_premium_quote(
-            option_value_term, "base_cash", market.s
-        )
-        fixed["delta"] -= premium_exposure
-        smile["delta"] -= premium_exposure
+            values["delta"] = _display_delta(values["delta"], option_value_term, market,
+                                             row, expiry, valuation, base_premium)
+    # Gamma is the derivative of the reported delta on each path. Should that
+    # fail, the calculators' gammas (analytic delta at the bumped vol) stay.
+    try:
+        fixed["gamma"], smile["gamma"] = _consistent_gammas(
+            market, row, common, mods, base_premium)
+    except Exception:
+        pass
     # Theta is a P&L amount, so it is reported in the pair's conventional
     # premium currency (see ``theta_currency``); the calculators return base.
     if theta_currency(row, market) == _pair_code(row, market)[3:]:
@@ -332,12 +422,13 @@ def calculate_extra_greeks(
                 common = _greek_inputs(market, row, pricing_model, atm_type, delta_base)
                 cross = CrossGreeks(mods=mods, **common)
                 eps = 0.01
-
-                def fixed_gamma(bumped):
-                    return FixedGamma(**dict(common, market=bumped)).calculate()
-                values["fixed_gamma_vol"] = (fixed_gamma(cross._scaled_market(eps))
-                                             - fixed_gamma(cross._scaled_market(-eps))) / (2 * eps)
-                values["gamma_vol"] = cross.dGammaDvol(eps)
+                base_premium = _base_premium(row)
+                # Same gamma definition as calculate_greeks, on scaled vols.
+                up, dn = (_consistent_gammas(bumped, row, dict(common, market=bumped), mods,
+                                             base_premium)
+                          for bumped in (cross._scaled_market(eps), cross._scaled_market(-eps)))
+                values["fixed_gamma_vol"] = (up[0] - dn[0]) / (2 * eps)
+                values["gamma_vol"] = (up[1] - dn[1]) / (2 * eps)
             except Exception as exc:
                 failed("gamma_vol", f"gamma per vol failed: {exc}")
 

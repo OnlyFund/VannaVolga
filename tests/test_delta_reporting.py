@@ -48,6 +48,18 @@ def test_flat_smile_matches_analytic_pair_delta(pair, spot, call_put, buy_sell):
     for name in results["forward"]:
         if name in ("fixed_delta", "delta"):
             assert results["spot"][name] == pytest.approx(results["forward"][name] * factor)
+        elif name in ("fixed_gamma", "gamma"):
+            # Gamma is the derivative of the reported delta: spot delta =
+            # forward delta x factor, and the factor (DF * F / S, forward
+            # points fixed) itself moves with spot.
+            def factor_at(bump):
+                return forward_delta_factor(market.copy_with(
+                    s=spot * (1 + bump), delta_reporting="spot"), row.expiry, row.valuation)
+            factor_gamma = (factor_at(1e-4) - factor_at(-1e-4)) / 2e-4 * 0.01
+            delta = name.replace("gamma", "delta")
+            assert results["spot"][name] == pytest.approx(
+                results["forward"][name] * factor + results["forward"][delta] * factor_gamma,
+                rel=1e-5)
         else:
             assert results["spot"][name] == results["forward"][name]
     alternate_row = row.copy()

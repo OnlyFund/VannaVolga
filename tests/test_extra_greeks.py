@@ -108,14 +108,19 @@ def test_decay_is_tomorrows_greek_minus_todays(markets, priced):
                 expected, rel=1e-9, abs=1e-6), key
 
 
-def test_gamma_per_vol_matches_the_cross_greeks_module(markets, priced):
+def test_gamma_per_vol_is_the_reported_gamma_on_scaled_vols(markets, priced):
     settings, market, _, _, row = unit_inputs(markets)
     cross = cross_module.CrossGreeks(
         market=market, mods=MODS, k=1.18, expiry_date="2026-12-17",
         valuation_date=str(markets.valuation_date), CallPut="CALL", BuySell="BUY", Notional=1.0,
         atm_type=settings.atm_type, pricing_model=settings.pricing_model,
         deltaBase=settings.delta_base)
-    assert priced[1][0]["gamma_vol"] == pytest.approx(cross.dGammaDvol() * 10e6, rel=1e-9)
+    up, dn = (calculate_greeks(cross._scaled_market(eps), row, None, settings.pricing_model,
+                               settings.atm_type, settings.delta_base, MODS)
+              for eps in (0.01, -0.01))
+    for prefix in ("fixed_", ""):
+        expected = (up[f"{prefix}gamma"] - dn[f"{prefix}gamma"]) / 0.02 * 10e6
+        assert priced[1][0][f"{prefix}gamma_vol"] == pytest.approx(expected, rel=1e-9)
 
 
 def test_weighted_greeks_are_the_greek_times_the_expiry_weight(priced):
@@ -130,7 +135,7 @@ def test_weighted_greeks_are_the_greek_times_the_expiry_weight(priced):
 def test_a_failing_greek_is_blank_and_isolated(markets, priced, monkeypatch):
     def broken(self, eps=0.01):
         raise RuntimeError("boom")
-    monkeypatch.setattr(cross_module.CrossGreeks, "dGammaDvol", broken)
+    monkeypatch.setattr(cross_module.CrossGreeks, "_scaled_market", broken)
     results, errors = pricer.price_lines(markets, pd.DataFrame([line()]), MODS,
                                          extras=["gamma_vol", "vega_decay"])
     assert errors == []

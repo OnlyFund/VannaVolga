@@ -52,7 +52,13 @@ def test_trade_premium_adjusts_both_deltas_only(model, call_put, buy_sell):
     assert term == raw
     for name, result in raw.items():
         expected = result - value / m.s if name in ("delta", "fixed_delta") else result
-        if expected is None:
+        if name in ("gamma", "fixed_gamma"):
+            # Gamma is the derivative of the reported delta, raw - V/S:
+            # d(V/S)/dS per 1% spot is 1% x (raw delta - V/S).
+            delta = name.replace("gamma", "delta")
+            expected = result - 0.01 * (raw[delta] - value / m.s)
+            assert base[name] == pytest.approx(expected, rel=1e-4)
+        elif expected is None:
             assert base[name] is None
         else:
             assert base[name] == pytest.approx(expected)
@@ -118,8 +124,13 @@ def test_ladder_adjustment_uses_scenario_option_value(mode):
             assert term_level[name] - base_level[name] == pytest.approx(
                 base_level["pnl_base"]
             )
+        for name in ("gamma", "fixed_gamma"):
+            # Gamma follows the reported (premium-adjusted) delta.
+            assert base_level[name] == pytest.approx(
+                term_level[name] - 0.01 * base_level[name.replace("gamma", "delta")],
+                rel=1e-4)
         for name in base_level:
-            if name not in ("delta", "fixed_delta"):
+            if name not in ("delta", "fixed_delta", "gamma", "fixed_gamma"):
                 assert base_level[name] == pytest.approx(term_level[name])
 
 

@@ -1,6 +1,7 @@
 """Spot-ladder risk report calculation and rendering."""
 
-from copy import copy
+import logging
+from copy import copy, deepcopy
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -9,7 +10,8 @@ import pandas as pd
 from app.curve_roll import next_business_day
 from pricing.greek_catalog import columns as greek_columns
 from pricing.greeks import (
-    calculate_extra_greeks, calculate_greeks, calculate_forward_theta, forward_delta_factor,
+    _greek_inputs, calculate_extra_greeks, calculate_greeks, calculate_forward_theta,
+    forward_delta_factor, smile_path_delta_gamma,
 )
 from pricing.pricing import price_option_with_vol
 from pricing.fx_forward import FxForwardPosition
@@ -19,6 +21,80 @@ from smile_perturbed_market import PerturbedMarket
 
 
 GREEK_NAMES = ["delta", "gamma", "vega", "vanna", "volga", "theta", "rega", "sega"]
+QUOTES = ("v_atm", "rr_25", "rr_10", "bf_25", "bf_10")
+logger = logging.getLogger(__name__)
+
+
+def _has_dynamics(mods):
+    if mods is None:
+        return False
+    get = mods.get if isinstance(mods, dict) else (lambda name, default: getattr(mods, name, default))
+    return any(float(get(name, 0.0) or 0.0) != 0.0 for name in ("beta_atm", "beta_rr", "beta_bf"))
+
+
+def _option_greeks(base_market, market, next_market, row, pricing_model, atm_type, delta_base,
+                   mods, next_valuation, mtm):
+    """An option's Greeks at one ladder spot, and the market they were taken on.
+
+    Greeks use the smile the betas imply at that spot (``_smile_moved_markets``),
+    except smile delta and gamma, which are derivatives along the ladder's own
+    smile path from today's spot: the deltas shown at each spot then add up
+    to the P&L between spots. Either step falls back to the plain scenario
+    market should it fail.
+    """
+    greek_market, greek_next = _smile_moved_markets(
+        base_market, market, next_market, row, mods, pricing_model, atm_type, delta_base)
+    greeks = calculate_greeks(
+        greek_market, row, None, pricing_model, atm_type, delta_base, mods,
+        next_market=greek_next, next_valuation=next_valuation, option_value_term=mtm,
+    )
+    if _has_dynamics(mods) and float(market.s) != float(base_market.s):
+        try:
+            greeks["delta"], greeks["gamma"] = smile_path_delta_gamma(
+                base_market, market, row, mods, pricing_model, atm_type, delta_base)
+        except Exception as exc:
+            logger.warning("Ladder smile-path delta failed at spot %s: %s", market.s, exc)
+    return greeks, greek_market, greek_next
+
+
+def _smile_moved_markets(base_market, market, next_market, row, mods, pricing_model,
+                         atm_type, delta_base):
+    """The scenario's markets with their vol quotes moved by the smile dynamics.
+
+    A level's P&L is priced on the smile the betas imply at its spot
+    (``_solve_smile_vol``); its Greeks use that same smile, so the delta and
+    gamma shown at each spot follow the P&L. The next-day market (theta) moves
+    by the same quote change. At the base spot, without dynamics, or if the
+    dynamics fail, the quotes stay as quoted.
+    """
+    if not _has_dynamics(mods) or float(market.s) == float(base_market.s):
+        return market, next_market
+    try:
+        from surface_models.smile_extension import SmileExtension
+        common = _greek_inputs(base_market, row, pricing_model, atm_type, delta_base)
+        shifted = deepcopy(mods)
+        if isinstance(shifted, dict):
+            shifted["shifted_spot"] = float(market.s)
+        else:
+            setattr(shifted, "shifted_spot", float(market.s))
+        extension = SmileExtension(
+            market=base_market, K=common["k"], expiry_date=common["expiry_date"],
+            valuation_date=common["valuation_date"], CallPut=common["CallPut"], mods=shifted,
+            pricing_model=pricing_model, atm_conv=common["atm_type"],
+            deltaBase=common["deltaBase"], reference_spot=float(base_market.s),
+        )
+        skews = extension.get_local_skews()
+        quotes = extension.extend_wings_convexity(extension.get_new_pillar_vols(skews), skews)
+        change = {name: float(quotes[name]) - float(getattr(base_market, name)) for name in QUOTES}
+        moved = market.copy_with(**{name: getattr(market, name) + change[name] for name in QUOTES})
+        if next_market is not None:
+            next_market = next_market.copy_with(
+                **{name: getattr(next_market, name) + change[name] for name in QUOTES})
+        return moved, next_market
+    except Exception as exc:
+        logger.warning("Ladder smile dynamics failed at spot %s; Greeks on quoted smile: %s",
+                       market.s, exc)
+        return market, next_market
 
 
 def _prepare_specs(rows, valuation_date, resolve_expiry, market_for_expiry,
@@ -254,14 +330,12 @@ def _calculate_reference_ladder(
                     market, row, vol, atm_type, delta_base
                 )
                 _add_option_pnl(level, row, mtm, float(ladder_spot))
-                greeks = calculate_greeks(
-                    market, row, None, pricing_model, atm_type, delta_base,
-                    mods, next_market=next_markets[index],
-                    next_valuation=next_valuation,
-                    option_value_term=mtm,
+                greeks, greek_market, greek_next = _option_greeks(
+                    base_markets[index], market, next_markets[index], row, pricing_model,
+                    atm_type, delta_base, mods, next_valuation, mtm,
                 )
-                _add_option_greeks(level, greeks, market, row, extras, pricing_model,
-                                   atm_type, delta_base, mods, next_markets[index],
+                _add_option_greeks(level, greeks, greek_market, row, extras, pricing_model,
+                                   atm_type, delta_base, mods, greek_next,
                                    next_valuation)
             for position, market, next_market in forward_markets:
                 _add_forward_pnl(
@@ -377,15 +451,13 @@ def _calculate_optimized_ladder(
                     market, row, vols[(float(ladder_spot), index)],
                     atm_type, delta_base
                 )
-                greeks = calculate_greeks(
-                    market, row, None, pricing_model, atm_type, delta_base,
-                    mods, next_market=next_markets[index],
-                    next_valuation=next_valuation,
-                    option_value_term=mtm,
+                greeks, greek_market, greek_next = _option_greeks(
+                    base_markets[index], market, next_markets[index], row, pricing_model,
+                    atm_type, delta_base, mods, next_valuation, mtm,
                 )
                 _add_option_pnl(level, row, mtm, float(ladder_spot))
-                _add_option_greeks(level, greeks, market, row, extras, pricing_model,
-                                   atm_type, delta_base, mods, next_markets[index],
+                _add_option_greeks(level, greeks, greek_market, row, extras, pricing_model,
+                                   atm_type, delta_base, mods, greek_next,
                                    next_valuation)
             return level, None
         except Exception as exc:
