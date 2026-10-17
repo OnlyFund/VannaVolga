@@ -174,13 +174,13 @@ def render_app():
             pair[:3] if currency == "BASE" else pair[3:6] if currency == "TERM" else currency
             for pair, currency in zip(pair_values, old_premium_ccy)
         ]
-    if st.session_state.get("_portfolio_editor_schema") != 5:
+    if st.session_state.get("_portfolio_editor_schema") != 6:
         st.session_state.pop("portfolio_editor_v2", None)
         st.session_state.pop("portfolio_editor_v3", None)
-        st.session_state._portfolio_editor_schema = 5
+        st.session_state._portfolio_editor_schema = 6
 
     portfolio_columns = [
-        "currency_pair", "strike", "expiry", "call_put", "buy_sell",
+        "currency_pair", "expiry", "call_put", "strike", "buy_sell",
         "notional", "premium", "premium_ccy", "book", "counterparty", TRADE_ID_COLUMN,
     ]
     portfolio_columns += [
