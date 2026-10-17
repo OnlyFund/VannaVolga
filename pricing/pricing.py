@@ -181,10 +181,14 @@ class Pricable:
 
     def price(
         self, market, pricing_model, atm_type, delta_base, mods=None,
-        next_market=None, next_valuation=None,
+        next_market=None, next_valuation=None, extras=(),
     ):
-        """Return the line's MTM, P&L, implied vol, and complete Greek vector."""
-        from pricing.greeks import calculate_greeks, theta_currency
+        """Return the line's MTM, P&L, implied vol, and complete Greek vector.
+
+        ``extras`` names on-demand Greeks (``pricing.greek_catalog``) to add;
+        any that fail are ``None`` with the reason in ``greek_problems``.
+        """
+        from pricing.greeks import calculate_extra_greeks, calculate_greeks, theta_currency
 
         row = self.row.copy()
         notional = float(row["notional"])
@@ -212,6 +216,13 @@ class Pricable:
             next_market=next_market, next_valuation=next_valuation,
             option_value_term=unit_mtm,
         )
+        greek_problems = {}
+        if extras:
+            unit_extras, greek_problems = calculate_extra_greeks(
+                market, row, extras, unit_greeks, pricing_model, atm_type, delta_base, mods,
+                next_market=next_market, next_valuation=next_valuation,
+            )
+            unit_greeks = {**unit_greeks, **unit_extras}
         conversion = 1.0 / float(market.s) if premium_ccy == base_ccy else 1.0
         mtm = float(unit_mtm) * notional * conversion
         mtm_base = float(unit_mtm) * notional / float(market.s)
@@ -239,7 +250,10 @@ class Pricable:
                 None if pnl_term_quote is None or premium_quote is None
                 else pnl_term_quote + premium_quote
             )
+        # Only with extras requested: results without them stay exactly as before.
+        problems = {"greek_problems": greek_problems} if extras else {}
         return {
+            **problems,
             "currency_pair": pair,
             "strike": float(strike),
             "expiry": row["expiry"],

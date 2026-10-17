@@ -130,6 +130,27 @@ def _rolled_smile_theta(market, next_market, common, mods, next_valuation):
     return term_theta / market.s
 
 
+def _greek_inputs(market, row, pricing_model, atm_type, delta_base):
+    """The Greek calculators' common keyword arguments for one line.
+
+    A wrapped smile uses its own ATM and delta conventions.
+    """
+    if getattr(market, "wrapped_smile", False) and not market.force_legacy_smile:
+        atm_type, delta_base = market.atm_conv, market.deltaBase
+    return dict(
+        market=market,
+        k=resolve_strike(market, row, atm_type, delta_base),
+        expiry_date=_date_text(row["expiry"]),
+        valuation_date=_date_text(row["valuation"]),
+        CallPut=row["call_put"],
+        BuySell=row["buy_sell"],
+        Notional=float(row["notional"]),
+        atm_type=atm_type,
+        pricing_model=pricing_model,
+        deltaBase=delta_base,
+    )
+
+
 def calculate_greeks(
     market, row, mode, pricing_model, atm_type, delta_base, mods,
     next_market=None, next_valuation=None, option_value_term=None,
@@ -158,26 +179,14 @@ def calculate_greeks(
         if premium_ccy not in (pair[:3], pair[3:]):
             raise ValueError("Premium currency must match the pair's base or term currency")
         base_premium = premium_ccy == pair[:3]
-    if getattr(market, "wrapped_smile", False) and not market.force_legacy_smile:
-        atm_type, delta_base = market.atm_conv, market.deltaBase
     if year_fraction(expiry, valuation) == 0.0:
         return {
             key: 0.0
             for name in ("delta", "gamma", "vega", "vanna", "volga", "theta", "rega", "sega")
             for key in (f"fixed_{name}", name)
         }
-    common = dict(
-        market=market,
-        k=resolve_strike(market, row, atm_type, delta_base),
-        expiry_date=expiry,
-        valuation_date=valuation,
-        CallPut=row["call_put"],
-        BuySell=row["buy_sell"],
-        Notional=float(row["notional"]),
-        atm_type=atm_type,
-        pricing_model=pricing_model,
-        deltaBase=delta_base,
-    )
+    common = _greek_inputs(market, row, pricing_model, atm_type, delta_base)
+    atm_type, delta_base = common["atm_type"], common["deltaBase"]
     calculators = {
         "delta": FixedDelta,
         "gamma": FixedGamma,
@@ -262,3 +271,88 @@ def calculate_greeks(
         # fixed/smile pair adjacent in the portfolio output.
         result[name] = smile[name]
     return result
+
+
+def calculate_extra_greeks(
+    market, row, names, base_greeks, pricing_model, atm_type, delta_base, mods,
+    next_market=None, next_valuation=None,
+):
+    """``(values, problems)`` for the extra Greeks in ``names``
+    (``pricing.greek_catalog.EXTRA_GREEKS``), at the row's notional.
+
+    ``base_greeks`` is the row's ``calculate_greeks`` result (reused, never
+    recomputed). ``values`` has ``fixed_<name>`` and ``<name>`` for each
+    Greek; one that cannot be computed is ``None`` in both, with the reason in
+    ``problems[name]``, and never affects the others or the base Greeks.
+    """
+    from Greeks.cross_greeks import CrossGreeks
+    from Greeks.weighted_greeks import scale_t
+    from pricing.greek_catalog import DECAY_GREEKS, WEIGHTED_GREEKS, extras
+
+    wanted = extras(names)
+    values, problems = {}, {}
+
+    def failed(name, reason):
+        values[f"fixed_{name}"] = values[name] = None
+        problems[name] = reason
+
+    expiry, valuation = _date_text(row["expiry"]), _date_text(row["valuation"])
+    expired = year_fraction(expiry, valuation) == 0.0
+
+    decays = [name for name in wanted if name in DECAY_GREEKS]
+    if decays:
+        tomorrow, reason = None, None
+        if next_market is None or next_valuation is None:
+            reason = "no next-business-day market"
+        elif expired or _date_text(next_valuation) >= expiry:
+            tomorrow = {key: 0.0 for key in base_greeks}     # expires before tomorrow
+        else:
+            try:
+                rolled = row.copy()
+                rolled["valuation"] = next_valuation
+                tomorrow = calculate_greeks(next_market, rolled, None, pricing_model,
+                                            atm_type, delta_base, mods)
+            except Exception as exc:
+                reason = f"next-day Greeks failed: {exc}"
+        for name in decays:
+            greek = name[:-len("_decay")]
+            if tomorrow is None:
+                failed(name, reason)
+                continue
+            for key, out in ((f"fixed_{greek}", f"fixed_{name}"), (greek, name)):
+                today, later = base_greeks.get(key), tomorrow.get(key)
+                values[out] = (None if today is None or later is None
+                               else float(later) - float(today))
+
+    if "gamma_vol" in wanted:
+        if expired:
+            values["fixed_gamma_vol"] = values["gamma_vol"] = 0.0
+        else:
+            try:
+                common = _greek_inputs(market, row, pricing_model, atm_type, delta_base)
+                cross = CrossGreeks(mods=mods, **common)
+                eps = 0.01
+
+                def fixed_gamma(bumped):
+                    return FixedGamma(**dict(common, market=bumped)).calculate()
+                values["fixed_gamma_vol"] = (fixed_gamma(cross._scaled_market(eps))
+                                             - fixed_gamma(cross._scaled_market(-eps))) / (2 * eps)
+                values["gamma_vol"] = cross.dGammaDvol(eps)
+            except Exception as exc:
+                failed("gamma_vol", f"gamma per vol failed: {exc}")
+
+    weighted = [name for name in wanted if name in WEIGHTED_GREEKS]
+    if weighted:
+        try:
+            weight = 0.0 if expired else scale_t(expiry, valuation)
+        except Exception as exc:
+            weight, reason = None, f"expiry weight failed: {exc}"
+        for name in weighted:
+            greek = name[len("weighted_"):]
+            if weight is None:
+                failed(name, reason)
+                continue
+            for key, out in ((f"fixed_{greek}", f"fixed_{name}"), (greek, name)):
+                base = base_greeks.get(key)
+                values[out] = None if base is None else float(base) * weight
+    return values, problems

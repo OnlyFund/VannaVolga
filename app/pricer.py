@@ -83,7 +83,7 @@ def market_for_pair(markets, pair, mismatch=None):
     return markets
 
 
-def price_line(markets, line_number, source_row, mods, premium_quote="term_cash"):
+def price_line(markets, line_number, source_row, mods, premium_quote="term_cash", extras=()):
     """Price one trade line.
 
     Returns ``(line_number, result, error, resolved_strike)``: exactly one of
@@ -128,7 +128,7 @@ def price_line(markets, line_number, source_row, mods, premium_quote="term_cash"
             row=row, premium=float(premium), premium_ccy=premium_ccy,
         ).price(
             market, settings.pricing_model, settings.atm_type, settings.delta_base, mods,
-            next_market=next_market, next_valuation=next_valuation,
+            next_market=next_market, next_valuation=next_valuation, extras=extras,
         )
         forward_rate = market.s + market.fwd_pts / market.forward_divisor
         # Map the chosen quote onto stable column names so the display layer
@@ -174,10 +174,14 @@ def _numbered(rows):
             for number, row in enumerate(rows, start=1)]
 
 
-def price_lines(markets, rows, mods, premium_quote="term_cash"):
-    """Price every line; returns ``(results, errors)`` in line order."""
+def price_lines(markets, rows, mods, premium_quote="term_cash", extras=()):
+    """Price every line; returns ``(results, errors)`` in line order.
+
+    ``extras`` adds on-demand Greeks (``pricing.greek_catalog.EXTRA_GREEKS``).
+    """
     calculated = sorted(
-        (price_line(markets, number, row, mods, premium_quote) for number, row in _numbered(rows)),
+        (price_line(markets, number, row, mods, premium_quote, extras)
+         for number, row in _numbered(rows)),
         key=lambda item: item[0],
     )
     results = [item[1] for item in calculated if item[1] is not None]
