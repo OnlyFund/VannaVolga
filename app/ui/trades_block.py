@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from app import pricer, usd_spots
+from app.premium_side import SIDES, premium_currency, premium_side
 from app.trades import service
 from app.trades.model import AMENDABLE, CANCELLED, FX_FORWARD, FX_OPTION, LIVE
 from app.trades.store import TradeStoreError, open_trade_store
@@ -168,11 +169,24 @@ def _trade_detail(store, shown):
                     if (trade.is_option and name != "contract_rate")
                     or (trade.is_forward and name not in ("strike", "call_put", "premium",
                                                           "premium_ccy"))]
-        values = {name: st.text_input(name.replace("_", " ").title(),
-                                      "" if getattr(trade, name) is None else str(getattr(trade, name)))
-                  for name in editable}
+        values = {}
+        for name in editable:
+            current = "" if getattr(trade, name) is None else str(getattr(trade, name))
+            if name == "premium_ccy":
+                # Base or term of the pair only; a wrong currency cannot be chosen.
+                side, _ = premium_side(trade.currency_pair, current)
+                values[name] = st.selectbox(
+                    "Premium in", SIDES, index=SIDES.index(side),
+                    format_func=lambda s: f"{s.title()} ({premium_currency(trade.currency_pair, s)})",
+                    help="Base or term currency of the trade's pair (of the new pair "
+                         "when the amendment changes it).")
+            else:
+                values[name] = st.text_input(name.replace("_", " ").title(), current)
         reason = st.text_input("Reason", key=f"amend_reason_{trade.trade_id}")
         if st.form_submit_button("Save amendment"):
+            if "premium_ccy" in values:
+                pair = values.get("currency_pair") or trade.currency_pair
+                values["premium_ccy"] = premium_currency(pair, values["premium_ccy"])
             changes = {name: value for name, value in values.items()
                        if value != ("" if getattr(trade, name) is None else str(getattr(trade, name)))}
             if not changes:

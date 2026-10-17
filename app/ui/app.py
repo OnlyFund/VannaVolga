@@ -19,6 +19,7 @@ from app.smile_service import (
 )
 from helper_functions.premium_quotes import PREMIUM_QUOTES, premium_quote_label
 from app.ui.market_block import render_market_block
+from app.premium_side import TERM, premium_side
 from app.ui.portfolio_block import (
     BOOK_COLUMN, GREEK_NAMES, TRADE_ID_COLUMN, render_portfolio_block, same_priced_inputs,
 )
@@ -151,7 +152,7 @@ def render_app():
             "buy_sell": "BUY",
             "notional": "1m",
             "premium": 0.0,
-            "premium_ccy": str(st.session_state.currency_pair).upper()[3:6],
+            "premium_ccy": TERM,
         }])
 
     if "option_rows" not in st.session_state:
@@ -164,16 +165,19 @@ def render_app():
         ).upper()
     if "premium" not in st.session_state.option_rows:
         st.session_state.option_rows["premium"] = 0.0
+    # The grid holds the premium currency as BASE/TERM; lines from before
+    # (currency codes) convert, and a code outside the line's pair falls
+    # back to TERM with a note.
     if "premium_ccy" not in st.session_state.option_rows:
-        pair_values = st.session_state.option_rows["currency_pair"].astype(str).str.upper()
-        st.session_state.option_rows["premium_ccy"] = pair_values.str[3:6]
-    else:
-        pair_values = st.session_state.option_rows["currency_pair"].astype(str).str.upper()
-        old_premium_ccy = st.session_state.option_rows["premium_ccy"].astype(str).str.upper()
-        st.session_state.option_rows["premium_ccy"] = [
-            pair[:3] if currency == "BASE" else pair[3:6] if currency == "TERM" else currency
-            for pair, currency in zip(pair_values, old_premium_ccy)
-        ]
+        st.session_state.option_rows["premium_ccy"] = TERM
+    sides = [premium_side(pair, value) for pair, value in zip(
+        st.session_state.option_rows["currency_pair"],
+        st.session_state.option_rows["premium_ccy"])]
+    st.session_state.option_rows["premium_ccy"] = [side for side, _ in sides]
+    premium_notes = [f"Line {number}: {note}"
+                     for number, (_, note) in enumerate(sides, start=1) if note]
+    if premium_notes:
+        st.session_state["_premium_notes"] = premium_notes
     if st.session_state.get("_portfolio_editor_schema") != 6:
         st.session_state.pop("portfolio_editor_v2", None)
         st.session_state.pop("portfolio_editor_v3", None)

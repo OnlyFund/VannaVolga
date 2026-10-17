@@ -3,6 +3,7 @@
 import pandas as pd
 import streamlit as st
 
+from app.premium_side import SIDES, TERM, premium_currency
 from app.pricer import GREEK_NAMES
 
 
@@ -10,6 +11,8 @@ REMOVE_COLUMN = "_remove"
 #: Tick box choosing the lines "Book ticked lines" books.
 BOOK_COLUMN = "_book"
 TRADE_ID_COLUMN = "trade_id"
+#: Read-only display of the premium currency a line's BASE/TERM stands for.
+PREMIUM_CODE_COLUMN = "_premium_code"
 BOOKING_COLUMNS = ("book", "counterparty")
 LINE_RESULT_COLUMNS = (
     "vol_pct",
@@ -128,7 +131,7 @@ def _apply_editor_state(rows, editor_state):
         {
             column: value
             for column, value in row.items()
-            if column != REMOVE_COLUMN
+            if column not in (REMOVE_COLUMN, PREMIUM_CODE_COLUMN)
         }
         for row in editor_state.get("added_rows", [])
     ]
@@ -184,33 +187,31 @@ def _apply_editor_state(rows, editor_state):
     return updated
 
 
-def _is_pair_code(pair):
-    return len(pair) == 6 and pair.isascii() and pair.isalpha()
-
-
-def premium_currency_options(market_pair, pairs=()):
-    """Premium currencies offered in the grid: every loaded pair's two.
-
-    The active pair's currencies come first and its term currency is the
-    default for new lines.
-    """
-    codes = [str(pair).upper() for pair in (market_pair, *pairs)]
-    options = list(dict.fromkeys(
-        currency for pair in codes if _is_pair_code(pair) for currency in (pair[:3], pair[3:])
-    ))
-    active = codes[0]
-    default = active[3:] if _is_pair_code(active) else None
-    return (options, default) if options else (["BASE", "TERM"], "TERM")
+def with_premium_codes(rows, market_pair):
+    """``rows`` with ``PREMIUM_CODE_COLUMN`` (the currency each line's
+    BASE/TERM stands for) right after ``premium_ccy``; a blank pair uses
+    ``market_pair``, as pricing does."""
+    shown = rows.drop(columns=[PREMIUM_CODE_COLUMN], errors="ignore").copy()
+    pairs = shown["currency_pair"] if "currency_pair" in shown else [market_pair] * len(shown)
+    sides = shown["premium_ccy"] if "premium_ccy" in shown else [TERM] * len(shown)
+    codes = []
+    for pair, side in zip(pairs, sides):
+        text = "" if pair is None or (not isinstance(pair, str) and pd.isna(pair)) else str(pair)
+        codes.append(premium_currency(text.strip() or market_pair, side))
+    columns = list(shown.columns)
+    at = columns.index("premium_ccy") + 1 if "premium_ccy" in columns else len(columns)
+    shown.insert(at, PREMIUM_CODE_COLUMN, codes)
+    return shown
 
 
 def render_portfolio_block(portfolio_tab, market_pair, quote_label="quote",
                            pairs=()):
     """Render the Pricer lines and the hedge choice.
 
-    ``pairs`` are the loaded markets: the grid offers their currencies.
+    The premium currency is chosen as BASE or TERM of the line's pair
+    (``app.premium_side``), shown with the currency it stands for.
     """
     market_pair = str(market_pair).upper()
-    premium_currencies, premium_default = premium_currency_options(market_pair, pairs)
 
     def resolve_strikes_after_edit():
         """Request input resolution after an edit to a resolvable cell.
@@ -295,6 +296,9 @@ def render_portfolio_block(portfolio_tab, market_pair, quote_label="quote",
             columns=[REMOVE_COLUMN], errors="ignore"
         )
         editor_input[REMOVE_COLUMN] = False
+        editor_input = with_premium_codes(editor_input, market_pair)
+        for note in st.session_state.pop("_premium_notes", []):
+            st.warning(note)
         ticks = editor_input[BOOK_COLUMN] if BOOK_COLUMN in editor_input else False
         editor_input[BOOK_COLUMN] = pd.Series(ticks, index=editor_input.index).map(
             lambda value: value is True or value == 1)
@@ -328,10 +332,14 @@ def render_portfolio_block(portfolio_tab, market_pair, quote_label="quote",
                     min_value=0.0, format="%.2f", width="small",
                 ),
                 "premium_ccy": st.column_config.SelectboxColumn(
-                    "Premium currency",
-                    help="Currency in which the premium is paid or received.",
-                    options=premium_currencies,
-                    default=premium_default,
+                    "Premium in",
+                    help="Premium paid or received in the pair's base or term currency.",
+                    options=list(SIDES),
+                    default=TERM,
+                    width="small",
+                ),
+                PREMIUM_CODE_COLUMN: st.column_config.TextColumn(
+                    "Premium ccy", help="The currency BASE or TERM stands for on this line.",
                     width="small",
                 ),
                 "book": st.column_config.TextColumn(
@@ -409,14 +417,15 @@ def render_portfolio_block(portfolio_tab, market_pair, quote_label="quote",
             use_container_width=True,
             column_config=editor_column_config,
             hide_index=True,
-            disabled=[*LINE_RESULT_COLUMNS, TRADE_ID_COLUMN],
+            disabled=[*LINE_RESULT_COLUMNS, TRADE_ID_COLUMN, PREMIUM_CODE_COLUMN],
             key="portfolio_editor_v3",
             on_change=resolve_strikes_after_edit,
         )
         ticked = [position for position, value in enumerate(edited_rows[BOOK_COLUMN])
                   if value is True or value == 1] if BOOK_COLUMN in edited_rows else []
         edited_rows = edited_rows.drop(
-            columns=[REMOVE_COLUMN, BOOK_COLUMN, *LINE_RESULT_COLUMNS], errors="ignore"
+            columns=[REMOVE_COLUMN, BOOK_COLUMN, PREMIUM_CODE_COLUMN, *LINE_RESULT_COLUMNS],
+            errors="ignore"
         )
         delta_hedge = st.checkbox(
             "Add forward hedge",

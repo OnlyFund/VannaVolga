@@ -14,6 +14,7 @@ import pandas as pd
 
 from app.curve_roll import next_business_day
 from app.market_set import MarketSet
+from app.premium_side import premium_currency
 from app.smile_service import market_diagnostics
 from helper_functions.input_resolvers import parse_notional, resolve_strike
 from helper_functions.premium_quotes import PREMIUM_QUOTES, format_premium_quote
@@ -106,7 +107,8 @@ def price_line(markets, line_number, source_row, mods, premium_quote="term_cash"
         premium = 0.0 if _blank(premium_cell) else pd.to_numeric(premium_cell, errors="coerce")
         if pd.isna(premium) or not np.isfinite(float(premium)) or premium < 0:
             raise ValueError("Premium must be a finite non-negative amount")
-        premium_ccy = str(row.get("premium_ccy", currency_pair[3:])).strip().upper()
+        # BASE/TERM (the grid) or a code (files, older lines) -> the code.
+        premium_ccy = premium_currency(currency_pair, row.get("premium_ccy"))
         if premium_ccy not in {currency_pair[:3], currency_pair[3:]}:
             raise ValueError(
                 f"Premium currency must be {currency_pair[:3]} or {currency_pair[3:]}"

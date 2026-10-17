@@ -143,15 +143,6 @@ def test_strike_aliases_resolve_on_each_rows_own_pair(markets):
     assert float(resolved.at[0, "strike"]) > 100 > 2 > float(resolved.at[1, "strike"])
 
 
-def test_grid_offers_every_loaded_pairs_premium_currencies():
-    from app.ui.portfolio_block import premium_currency_options
-    options, default = premium_currency_options("EURUSD", ["USDJPY", "EURUSD", "USDMXN"])
-    assert options == ["EUR", "USD", "JPY", "MXN"]
-    assert default == "USD"
-    assert premium_currency_options("EUR", []) == (["BASE", "TERM"], "TERM")
-    assert premium_currency_options("EUR", ["USDJPY"]) == (["USD", "JPY"], None)
-
-
 def test_switching_pairs_keeps_the_valuation_date(payloads, monkeypatch):
     import app.ui.market_block as block
     queued = []

@@ -23,6 +23,7 @@ from typing import List, Optional
 import pandas as pd
 
 from app import pricer
+from app.premium_side import premium_currency
 from app.trades.model import (
     FX_FORWARD, FX_OPTION, LIVE, Booking, HedgeAllocation, Trade, TradeValidationError,
     as_date,
@@ -82,7 +83,8 @@ def booking_from_lines(markets, rows, mods, trade_date=None, book="", counterpar
                 trade_date=trade_date, expiry=result["expiry"], buy_sell=_text(line["buy_sell"]),
                 notional=pricer.parse_notional(line["notional"]), strike=result["strike"],
                 call_put=_text(line["call_put"]), premium=_amount(line.get("premium")),
-                premium_ccy=_text(line.get("premium_ccy")) or None,
+                premium_ccy=premium_currency(result["currency_pair"],
+                                             line.get("premium_ccy")) or None,
                 book=_text(line.get("book")) or book,
                 counterparty=_text(line.get("counterparty")) or counterparty,
             ).normalized()
