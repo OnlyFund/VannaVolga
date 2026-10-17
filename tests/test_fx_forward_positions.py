@@ -25,7 +25,7 @@ from app.ui.app import (
 from app.ui.app import interpolate_delivery_curve
 from helper_functions.cashflows import signed_premium_cashflow
 from market_data import MarketData
-from pricing.fx_forward import FxForwardPosition
+from pricing.fx_forward import FxForwardPosition, term_discount_factor
 
 
 def _market_for_expiry(expiry, as_of=None, allow_short_end=False, spot_value=None):
@@ -40,19 +40,74 @@ def _market_for_expiry(expiry, as_of=None, allow_short_end=False, spot_value=Non
     )
 
 
-def test_forward_position_uses_undiscounted_term_and_base_mtm():
+def test_forward_position_mtm_is_discounted_at_the_term_rate():
     position = FxForwardPosition(
         currency_pair="EURUSD",
         expiry=date(2025, 9, 12),
         base_amount=-2_000_000.0,
         contract_rate=1.30,
     )
+    market = _market_for_expiry(None)
 
-    value = position.value(_market_for_expiry(None), date(2025, 8, 29))
+    value = position.value(market, date(2025, 8, 29))
 
-    assert value["mtm_term"] == pytest.approx(-100_000.0)
-    assert value["mtm_base"] == pytest.approx(-100_000.0 / 1.20)
+    discount = term_discount_factor(market, date(2025, 9, 12), date(2025, 8, 29))
+    assert 0.99 < discount < 1.0          # 5% term rate over two weeks
+    assert value["discount_factor"] == pytest.approx(discount)
+    assert value["mtm_term"] == pytest.approx(-100_000.0 * discount)
+    assert value["mtm_base"] == pytest.approx(-100_000.0 * discount / 1.20)
     assert value["delta_term"] == pytest.approx(-2_000_000.0)
+
+
+def test_term_discount_factor_falls_back_to_undiscounted():
+    assert term_discount_factor(object(), "not a date", date(2025, 8, 29)) == 1.0
+    assert term_discount_factor(_market_for_expiry(None).copy_with(term_discount=0.0),
+                                date(2027, 1, 15), date(2026, 10, 9)) == pytest.approx(1.0)
+
+
+def test_hedged_option_ladder_is_flat_at_spot():
+    """A smile-delta-hedged option has no spot P&L slope on the ladder: the
+    hedge forward is valued on the options' discounting (it was once
+    undiscounted, leaving a phantom delta of (1 - DF) x hedge)."""
+    from app.market_set import MarketSet
+    from app.trades import service
+    from app.trades.store import SqliteTradeStore
+    from golden.app_harness import load_markets
+    from market_data import Modifications
+    import tempfile
+
+    mods = Modifications(beta_atm=0.7, beta_rr=1.2, beta_bf=0.0)
+    markets = MarketSet.from_payloads(load_markets("MARKETS_20261015.json"), date(2026, 10, 15))
+    context = markets.market("EURUSD")
+    with tempfile.TemporaryDirectory() as folder:
+        store = SqliteTradeStore(os.path.join(folder, "t.sqlite"))
+        service.book_lines(store, markets, [dict(
+            currency_pair="EURUSD", strike="25d", expiry="1Y", call_put="PUT", buy_sell="BUY",
+            notional="100m", premium=0.0, premium_ccy="USD")], mods, with_hedges=True)
+        trades = store.trades()
+        store.close()
+    options = [t for t in trades if t.is_option]
+    hedges = [t for t in trades if t.is_forward]
+    assert len(hedges) == 1
+    spot = float(context.spot)
+    bump = 1e-5
+    settings = context.settings
+    levels, errors = calculate_spot_ladder(
+        list(pd.DataFrame([t.to_pricer_row() for t in options]).iterrows()),
+        [spot * (1 - bump), spot * (1 + bump)], markets.valuation_date,
+        context.market_for_expiry, context.resolve_market_expiry, settings.pricing_model,
+        settings.atm_type, settings.delta_base, mods, mode="reference",
+        forward_positions=[{"currency_pair": h.currency_pair, "expiry": h.expiry,
+                            "base_amount": h.signed_base_amount(),
+                            "contract_rate": h.contract_rate} for h in hedges])
+    assert errors == []
+    low, high = sorted(levels, key=lambda level: level["spot"])
+    slope = ((high["pnl_base"] * high["spot"] - low["pnl_base"] * low["spot"])
+             / (high["spot"] - low["spot"]))
+    hedge = abs(hedges[0].signed_base_amount())
+    assert hedge > 10_000_000
+    # Undiscounted, the slope was about (1 - DF) x hedge (~2-4% of it at 1Y).
+    assert abs(slope) < 0.002 * hedge
 
 
 def test_delta_hedge_notional_offsets_smile_delta():
@@ -76,7 +131,10 @@ def test_forward_theta_keeps_contract_rate_and_uses_pair_theta_currency(pair):
     theta = calculate_forward_theta(
         position, today, tomorrow, date(2026, 10, 9), date(2026, 10, 12)
     )
-    term_theta = -2_000_000. * ((1_490. - 1_500.) / 10_000.)
+    expiry = date(2027, 1, 15)
+    df_today = term_discount_factor(today, expiry, date(2026, 10, 9))
+    df_tomorrow = term_discount_factor(tomorrow, expiry, date(2026, 10, 12))
+    term_theta = -2_000_000. * ((1.349 - 1.30) * df_tomorrow - (1.35 - 1.30) * df_today)
     expected = term_theta if pair == "EURUSD" else term_theta / today.s
     assert theta == pytest.approx(expected)
     assert theta > 0.0
@@ -287,7 +345,8 @@ def test_spot_ladder_includes_forward_pnl_and_both_delta_totals():
 
     assert errors == []
     level = levels[0]
-    assert level["pnl_base"] == pytest.approx(-100_000.0 / 1.20)
+    discount = term_discount_factor(_market_for_expiry(None), date(2025, 9, 12), date(2025, 8, 29))
+    assert level["pnl_base"] == pytest.approx(-100_000.0 * discount / 1.20)
     assert "mtm" not in level
     assert "option_pnl_base" not in level
     assert "hedge_pnl_base" not in level
@@ -316,7 +375,10 @@ def test_spot_ladder_includes_weekend_forward_roll_theta(mode):
     )
     assert errors == []
     assert date(2026, 10, 12) in calls
-    assert levels[0]["theta"] == pytest.approx(2_000.)
+    # Forward at the contract rate today (MTM 0); 10 points lower tomorrow.
+    discount = term_discount_factor(_market_for_expiry(None), date(2027, 1, 15),
+                                    date(2026, 10, 12))
+    assert levels[0]["theta"] == pytest.approx(2_000. * discount)
     assert levels[0]["fixed_theta"] == 0.0
 
 
