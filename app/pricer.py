@@ -128,7 +128,10 @@ def price_line(markets, line_number, source_row, mods, premium_quote="term_cash"
             row=row, premium=float(premium), premium_ccy=premium_ccy,
         ).price(
             market, settings.pricing_model, settings.atm_type, settings.delta_base, mods,
-            next_market=next_market, next_valuation=next_valuation, extras=extras,
+            next_market=next_market, next_valuation=next_valuation,
+            # Only when asked: a Streamlit session that reloaded app/ but not
+            # pricing/ (outside the watched folder) keeps pricing without extras.
+            **({"extras": tuple(extras)} if extras else {}),
         )
         forward_rate = market.s + market.fwd_pts / market.forward_divisor
         # Map the chosen quote onto stable column names so the display layer

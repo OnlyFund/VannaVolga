@@ -159,3 +159,18 @@ def test_an_option_expiring_before_tomorrow_decays_to_zero(markets):
         market, row, ["vega_decay"], base, settings.pricing_model, settings.atm_type,
         settings.delta_base, MODS, next_market=next_market, next_valuation="2026-10-16")
     assert problems == {} and (values["fixed_vega_decay"], values["vega_decay"]) == (-5.0, -6.0)
+
+
+def test_a_stale_engine_without_extras_still_prices(markets, monkeypatch):
+    """Streamlit reloads app/ but not pricing/: without extras requested the
+    pricer must not pass the new argument to an engine that lacks it."""
+    import pricing.pricing as engine
+    current = engine.Pricable.price
+
+    def old_price(self, market, pricing_model, atm_type, delta_base, mods=None,
+                  next_market=None, next_valuation=None):
+        return current(self, market, pricing_model, atm_type, delta_base, mods,
+                       next_market=next_market, next_valuation=next_valuation)
+    monkeypatch.setattr(engine.Pricable, "price", old_price)
+    results, errors = pricer.price_lines(markets, pd.DataFrame([line()]), MODS)
+    assert errors == [] and results[0]["vega"] is not None
