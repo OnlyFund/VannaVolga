@@ -227,3 +227,27 @@ def test_a_tick_after_pricing_is_kept():
     edited = _apply_editor_state(rows, {"edited_rows": {1: {"_book": True}}})
     assert list(edited["_book"]) == [False, True]
     assert list(edited[TRADE_ID_COLUMN]) == ["", ""]
+
+
+def test_portfolio_filters_have_no_counterparty(monkeypatch):
+    from contextlib import nullcontext
+    import app.ui.trades_block as block
+    from app.trades.model import FX_OPTION, Trade
+    labels = []
+    state = {"portfolio_counterparty": "ACME"}            # chosen before the filter went away
+
+    def selectbox(label, options, key):
+        labels.append(label)
+        return state.get(key, options[0])
+    monkeypatch.setattr(block, "st", SimpleNamespace(
+        columns=lambda n: [nullcontext() for _ in range(n)], selectbox=selectbox,
+        session_state=state))
+    trades = [Trade(product_type=FX_OPTION, currency_pair="EURUSD", trade_date=VALUATION,
+                    expiry=date(2026, 12, 17), buy_sell="BUY", notional=1e6, strike=1.1,
+                    call_put="CALL", premium=0.0, premium_ccy="USD", counterparty=name)
+              for name in ("ACME", "OTHER")]
+    assert len(block._filters(trades, "portfolio", by_counterparty=False)) == 2
+    assert labels == ["Currency pair", "Book", "Product"]
+    labels.clear()
+    assert len(block._filters(trades, "portfolio")) == 1         # the Blotter keeps it
+    assert labels == ["Currency pair", "Book", "Counterparty", "Product"]

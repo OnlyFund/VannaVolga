@@ -98,16 +98,19 @@ def _choice(label, values, key):
     return None if choice == ALL else choice
 
 
-def _filters(trades, prefix):
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
+def _filters(trades, prefix, by_counterparty=True):
+    """Pair, book, counterparty (optional) and product filters; the trades matching."""
+    columns = iter(st.columns(4 if by_counterparty else 3))
+    with next(columns):
         pair = _choice("Currency pair", [t.currency_pair for t in trades], f"{prefix}_pair")
-    with col2:
+    with next(columns):
         book = _choice("Book", [t.book for t in trades], f"{prefix}_book")
-    with col3:
-        counterparty = _choice("Counterparty", [t.counterparty for t in trades],
-                               f"{prefix}_counterparty")
-    with col4:
+    counterparty = None             # without the filter, a choice made earlier is ignored
+    if by_counterparty:
+        with next(columns):
+            counterparty = _choice("Counterparty", [t.counterparty for t in trades],
+                                   f"{prefix}_counterparty")
+    with next(columns):
         product = _choice("Product", [FX_OPTION, FX_FORWARD], f"{prefix}_product")
     return [t for t in trades
             if (pair is None or t.currency_pair == pair) and (book is None or t.book == book)
@@ -336,7 +339,7 @@ def render_portfolio(tab, market_set, mods, premium_quote):
         if not _store_banner(store, problem):
             return
         live = store.trades(status=LIVE)
-        selected = _filters(live, "portfolio")
+        selected = _filters(live, "portfolio", by_counterparty=False)
         # The Risk tab reports on this same selection.
         st.session_state["_portfolio_selection"] = [t.trade_id for t in selected]
         st.caption(f"{len(selected)} live trades selected "
