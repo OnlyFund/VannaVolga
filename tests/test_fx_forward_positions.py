@@ -179,7 +179,11 @@ def test_line_results_attach_to_matching_pricer_rows():
 
     display = _with_line_results(rows, [first_result])
 
-    assert set(LINE_RESULT_COLUMNS).issubset(display.columns)
+    from pricing.greek_catalog import BASE_GREEKS, EXTRA_GREEKS, columns
+    from app.ui.portfolio_block import SUMMARY_RESULT_COLUMNS
+    assert {*SUMMARY_RESULT_COLUMNS, *columns(BASE_GREEKS)}.issubset(display.columns)
+    assert not set(columns(EXTRA_GREEKS)) & set(display.columns)   # only chosen Greeks show
+    assert set(display.columns) - set(rows.columns) <= set(LINE_RESULT_COLUMNS)
     assert display.loc[0, "vol_pct"] == "8.2500"
     assert display.loc[0, "mtm_base"] == "125"
     assert pd.isna(display.loc[1, "vol_pct"])

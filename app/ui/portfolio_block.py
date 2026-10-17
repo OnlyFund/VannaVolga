@@ -5,6 +5,8 @@ import streamlit as st
 
 from app.premium_side import SIDES, TERM, premium_currency
 from app.pricer import GREEK_NAMES
+from app.ui.greek_picker import render_greek_picker
+from pricing import greek_catalog as catalog
 
 
 REMOVE_COLUMN = "_remove"
@@ -14,14 +16,11 @@ TRADE_ID_COLUMN = "trade_id"
 #: Read-only display of the premium currency a line's BASE/TERM stands for.
 PREMIUM_CODE_COLUMN = "_premium_code"
 BOOKING_COLUMNS = ("book", "counterparty")
-LINE_RESULT_COLUMNS = (
-    "vol_pct",
-    "mtm_base",
-    "pnl_base",
-    "mtm_quote",
-    "pnl_quote",
-    *(column for greek in GREEK_NAMES for column in (f"fixed_{greek}", greek)),
-)
+#: Always shown after pricing; the Greek columns follow the Greek picker.
+SUMMARY_RESULT_COLUMNS = ("vol_pct", "mtm_base", "pnl_base", "mtm_quote", "pnl_quote")
+#: Every read-only result column a line can carry (all catalogue Greeks).
+LINE_RESULT_COLUMNS = (*SUMMARY_RESULT_COLUMNS, *catalog.columns(catalog.CATALOG))
+PRICER_GREEKS_KEY = "pricer_greeks"
 
 #: Input cells whose edits can change a resolved pair, expiry or strike.
 RESOLVED_INPUT_COLUMNS = ("currency_pair", "expiry", "call_put", "strike")
@@ -30,17 +29,21 @@ RESOLVED_INPUT_COLUMNS = ("currency_pair", "expiry", "call_put", "strike")
 PREFORMATTED_RESULT_COLUMNS = ("mtm_quote", "pnl_quote")
 
 
-def _with_line_results(rows, results):
-    """Add read-only pricing outputs to their matching visible input rows."""
+def _with_line_results(rows, results, greek_columns=None):
+    """Add read-only pricing outputs to their matching visible input rows:
+    the summary columns and ``greek_columns`` (the base Greeks by default)."""
+    if greek_columns is None:
+        greek_columns = catalog.columns(catalog.BASE_GREEKS)
+    shown = (*SUMMARY_RESULT_COLUMNS, *greek_columns)
     display = rows.drop(columns=LINE_RESULT_COLUMNS, errors="ignore").copy()
-    for column in LINE_RESULT_COLUMNS:
+    for column in shown:
         display[column] = pd.NA
     for result in results:
         row_number = result.get("row")
         if not isinstance(row_number, int) or not 1 <= row_number <= len(display):
             continue
         row_index = row_number - 1
-        for column in LINE_RESULT_COLUMNS:
+        for column in shown:
             if column in result:
                 value = result[column]
                 if column in PREFORMATTED_RESULT_COLUMNS:
@@ -48,7 +51,7 @@ def _with_line_results(rows, results):
                     display.at[row_index, column] = (
                         pd.NA if value is None else str(value)
                     )
-                elif pd.isna(value):
+                elif value is None or pd.isna(value):
                     display.at[row_index, column] = pd.NA
                 elif column == "vol_pct":
                     display.at[row_index, column] = f"{float(value):.4f}"
@@ -255,6 +258,7 @@ def render_portfolio_block(portfolio_tab, market_pair, quote_label="quote",
             "Add a line with the + control or the blank row at the bottom. "
             "Tick Remove to delete a line."
         )
+        greeks = render_greek_picker(PRICER_GREEKS_KEY)
         pending_resolved_rows = st.session_state.pop(
             "_pending_resolved_portfolio_rows", None
         )
@@ -287,7 +291,8 @@ def render_portfolio_block(portfolio_tab, market_pair, quote_label="quote",
             and same_priced_inputs(st.session_state.option_rows, line_results["rows"])
         ):
             editor_input = _with_line_results(
-                st.session_state.option_rows, line_results["results"]
+                st.session_state.option_rows, line_results["results"],
+                catalog.columns(greeks),
             )
         else:
             st.session_state.pop("_portfolio_line_results", None)
@@ -388,8 +393,7 @@ def render_portfolio_block(portfolio_tab, market_pair, quote_label="quote",
                     width="small",
                 ),
         }
-        for greek_name in GREEK_NAMES:
-            title = greek_name.title()
+        for greek_name in greeks:
             # Theta is a P&L amount in the pair's premium currency; the other
             # Greeks are in the base currency.
             unit = (
@@ -399,16 +403,17 @@ def render_portfolio_block(portfolio_tab, market_pair, quote_label="quote",
                 " In the premium currency: USD when USD is the term currency, "
                 "otherwise the base currency." if greek_name == "theta" else ""
             )
+            greek = catalog.CATALOG[greek_name]
             editor_column_config[f"fixed_{greek_name}"] = (
                 st.column_config.TextColumn(
-                    f"Fixed {title}{unit}",
-                    help=f"Fixed-volatility {greek_name}.{unit_help}",
+                    catalog.label(f"fixed_{greek_name}") + unit,
+                    help=f"Fixed-volatility {greek.label.lower()} ({greek.unit}).{unit_help}",
                     width="small",
                 )
             )
             editor_column_config[greek_name] = st.column_config.TextColumn(
-                f"Smile {title}{unit}",
-                help=f"Smile-adjusted {greek_name}.{unit_help}",
+                catalog.label(greek_name) + unit,
+                help=f"Smile-adjusted {greek.label.lower()} ({greek.unit}).{unit_help}",
                 width="small",
             )
         edited_rows = st.data_editor(

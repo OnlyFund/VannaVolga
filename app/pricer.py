@@ -440,14 +440,19 @@ def resolve_strike_aliases(markets, rows, default_pair=None):
     return resolve_line_inputs(markets, rows, default_pair)
 
 
-def aggregate_by_pair(results, hedge_trades=()):
-    """Aggregate base-currency line results and hedge risks by currency pair."""
-    columns = [
-        "currency_pair",
-        "mtm_base",
-        "pnl_base",
-        *(column for greek in GREEK_NAMES for column in (f"fixed_{greek}", greek)),
-    ]
+def aggregate_by_pair(results, hedge_trades=(), greeks=GREEK_NAMES):
+    """Aggregate base-currency line results and hedge risks by currency pair.
+
+    ``greeks`` picks the Greek columns; one the results do not carry (an
+    extra not priced yet) is left out. Forward hedges add to MTM, P&L,
+    delta and theta only.
+    """
+    from pricing.greek_catalog import columns as greek_columns
+    wanted = greek_columns(greeks)
+    if results:
+        carried = set().union(*(result.keys() for result in results))
+        wanted = [column for column in wanted if column in carried]
+    columns = ["currency_pair", "mtm_base", "pnl_base", *wanted]
     if results:
         aggregation = (
             pd.DataFrame(results)[columns]
@@ -474,7 +479,9 @@ def aggregate_by_pair(results, hedge_trades=()):
             matches = aggregation["currency_pair"] == pair
         aggregation.loc[matches, "mtm_base"] += float(trade["mtm_base"])
         aggregation.loc[matches, "pnl_base"] += float(trade["pnl_base"])
-        aggregation.loc[matches, "fixed_delta"] += float(trade["delta_offset"])
-        aggregation.loc[matches, "delta"] += float(trade["delta_offset"])
-        aggregation.loc[matches, "theta"] += float(trade.get("theta", 0.0))
+        for column, amount in (("fixed_delta", trade["delta_offset"]),
+                               ("delta", trade["delta_offset"]),
+                               ("theta", trade.get("theta", 0.0))):
+            if column in aggregation:
+                aggregation.loc[matches, column] += float(amount)
     return aggregation

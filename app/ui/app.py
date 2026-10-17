@@ -20,8 +20,11 @@ from app.smile_service import (
 from helper_functions.premium_quotes import PREMIUM_QUOTES, premium_quote_label
 from app.ui.market_block import render_market_block
 from app.premium_side import TERM, premium_side
+from app.ui.greek_picker import chosen_greeks, missing_extras
+from pricing import greek_catalog
 from app.ui.portfolio_block import (
-    BOOK_COLUMN, GREEK_NAMES, TRADE_ID_COLUMN, render_portfolio_block, same_priced_inputs,
+    BOOK_COLUMN, PRICER_GREEKS_KEY, TRADE_ID_COLUMN, render_portfolio_block,
+    same_priced_inputs,
 )
 from app.ui.trades_block import render_blotter, render_portfolio, trade_store
 from app.ui.risk_block import render_risk
@@ -474,7 +477,9 @@ def render_app():
         )
         # Pricing reads no session state, but stays on the script thread so
         # progress and diagnostics belong to this run.
-        results, errors = pricer.price_lines(market_set, edited_rows, mods, premium_quote)
+        results, errors = pricer.price_lines(
+            market_set, edited_rows, mods, premium_quote,
+            extras=greek_catalog.extras(chosen_greeks(PRICER_GREEKS_KEY)))
         hedge_trades = []
         if delta_hedge:
             hedge_trades, hedge_errors = pricer.hedge_trades_for(market_set, results)
@@ -524,8 +529,17 @@ def render_app():
     for error in errors:
         st.error("Not priced — " + error)
 
+    pricer_greeks = chosen_greeks(PRICER_GREEKS_KEY)
     if results:
-        aggregation = aggregate_pricer_results_by_pair(results, hedge_trades)
+        to_compute = missing_extras(pricer_greeks, results)
+        if to_compute:
+            st.caption("Price portfolio to compute: " + ", ".join(
+                greek_catalog.CATALOG[name].label for name in to_compute))
+        problems = {name: reason for result in results
+                    for name, reason in result.get("greek_problems", {}).items()}
+        for name, reason in problems.items():
+            st.warning(f"{greek_catalog.CATALOG[name].label} not available: {reason}")
+        aggregation = aggregate_pricer_results_by_pair(results, hedge_trades, pricer_greeks)
         aggregation_display = format_pricer_aggregation(aggregation)
         st.subheader("By pair")
         aggregation_column_config = {
@@ -541,18 +555,13 @@ def render_app():
                 width="small",
             ),
         }
-        for greek_name in GREEK_NAMES:
-            title = greek_name.title()
-            aggregation_column_config[f"fixed_{greek_name}"] = (
-                st.column_config.TextColumn(
-                    f"Fixed {title}", help=f"Aggregate fixed-volatility {greek_name}.",
+        for greek_name in pricer_greeks:
+            for column in (f"fixed_{greek_name}", greek_name):
+                aggregation_column_config[column] = st.column_config.TextColumn(
+                    greek_catalog.label(column),
+                    help=f"Aggregate {greek_catalog.label(column).lower()}.",
                     width="small",
                 )
-            )
-            aggregation_column_config[greek_name] = st.column_config.TextColumn(
-                f"Smile {title}", help=f"Aggregate smile-adjusted {greek_name}.",
-                width="small",
-            )
         st.dataframe(
             aggregation_display,
             use_container_width=True,
