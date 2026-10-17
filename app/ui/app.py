@@ -20,7 +20,7 @@ from app.smile_service import (
 from helper_functions.premium_quotes import PREMIUM_QUOTES, premium_quote_label
 from app.ui.market_block import render_market_block
 from app.ui.portfolio_block import (
-    BOOK_COLUMN, GREEK_NAMES, TRADE_ID_COLUMN, render_portfolio_block,
+    BOOK_COLUMN, GREEK_NAMES, TRADE_ID_COLUMN, render_portfolio_block, same_priced_inputs,
 )
 from app.ui.trades_block import render_blotter, render_portfolio, trade_store
 from app.ui.risk_block import render_risk
@@ -83,6 +83,12 @@ def book_ticked_lines(store, markets, rows, ticked, mods, book, counterparty, wi
             if column in updated:
                 updated.at[index, column] = value
     st.session_state._pending_resolved_portfolio_rows = updated
+    # Booking writes back the booked values (strike 1.18 -> 1.1800, the trade
+    # id) without changing a price: the results follow the rewritten lines.
+    for key in ("_portfolio_line_results", "_portfolio_result_cache"):
+        held = getattr(st.session_state, key, None)
+        if held is not None and same_priced_inputs(held["rows"], rows):
+            setattr(st.session_state, key, dict(held, rows=updated.copy()))
     options = [t.trade_id for t in result.booked if t.is_option]
     hedges = [t.trade_id for t in result.booked if t.is_forward]
     messages.append(("success", "Booked {}{}.".format(
@@ -374,6 +380,14 @@ def render_app():
 
 
     mods = Modifications(beta_atm=beta_atm, beta_rr=beta_rr, beta_bf=beta_bf)
+    # Pricer results are kept across reruns only while the markets, settings
+    # and smile dynamics they were priced with are unchanged.
+    pricing_state = repr((sorted(st.session_state.get("_surface_fingerprints", {}).items()),
+                          repr(mods), premium_quote))
+    for key in ("_portfolio_line_results", "_portfolio_result_cache"):
+        held = st.session_state.get(key)
+        if held is not None and held.get("state") != pricing_state:
+            st.session_state.pop(key, None)
     edited_rows, delta_hedge, ticked_lines = render_portfolio_block(
         portfolio_tab,
         market_pair=str(st.session_state.currency_pair).strip().upper(),
@@ -465,7 +479,7 @@ def render_app():
         st.session_state._portfolio_result_cache = {
             "rows": edited_rows.copy(), "results": results, "errors": errors,
             "hedge_trades": hedge_trades,
-            "diagnostics": diagnostics.records(),
+            "diagnostics": diagnostics.records(), "state": pricing_state,
         }
         # Dynamic data-editor rows live in widget state until explicitly
         # committed. Preserve the complete frame before this rerun so pricing
@@ -473,12 +487,18 @@ def render_app():
         st.session_state._pending_priced_portfolio_rows = edited_rows.copy()
         st.session_state._pending_portfolio_line_results = {
             "rows": edited_rows.copy(),
-            "results": results,
+            "results": results, "state": pricing_state,
         }
         st.experimental_rerun()
 
-    cached_calculation = st.session_state.pop("_portfolio_result_cache", None)
-    if cached_calculation is not None and edited_rows.equals(cached_calculation["rows"]):
+    # Kept while the priced inputs are unchanged, so ticking or booking a
+    # line does not lose the results; dropped once a priced input changes.
+    cached_calculation = st.session_state.get("_portfolio_result_cache")
+    if cached_calculation is not None and not same_priced_inputs(
+            edited_rows, cached_calculation["rows"]):
+        st.session_state.pop("_portfolio_result_cache", None)
+        cached_calculation = None
+    if cached_calculation is not None:
         for diagnostic in cached_calculation.get("diagnostics", ()):
             diagnostics.append(diagnostic)
         calculation_matches_inputs = True

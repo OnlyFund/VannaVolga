@@ -368,7 +368,9 @@ class SqliteTradeStore:
         Returns the booked trades, in order, with their new ids.
         """
         self._writable()
-        if not isinstance(booking, Booking):
+        # Duck-typed: after Streamlit reloads a changed module, a Booking made by
+        # the new code is not an instance of this store's (older) Booking class.
+        if not hasattr(booking, "trades"):
             booking = Booking(tuple(booking))
         trades = [trade.normalized() for trade in booking.trades]
         if not trades:

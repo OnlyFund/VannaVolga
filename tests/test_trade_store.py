@@ -300,3 +300,17 @@ def test_failure_midway_through_a_booking_writes_nothing(store, monkeypatch):
     monkeypatch.undo()
     assert store.trades(status=None) == []
     assert store.book([option()])[0].trade_id == "TR-000001"
+
+
+def test_book_accepts_a_booking_from_reloaded_code(store):
+    """Streamlit reloads changed modules while the session keeps its store, so
+    a Booking from the new code is not an instance of the store's class."""
+    from dataclasses import dataclass, field as dc_field
+
+    @dataclass(frozen=True)
+    class ReloadedBooking:                 # same shape, different class identity
+        trades: tuple
+        hedges: dict = dc_field(default_factory=dict)
+
+    booked = store.book(ReloadedBooking((option(),)))
+    assert len(booked) == 1 and booked[0].trade_id

@@ -184,3 +184,46 @@ def test_forwards_alone_still_total_per_pair(store, markets):
     assert float(totals.at[0, "mtm_base"]) == pytest.approx(forwards[0]["mtm_base"])
     assert float(totals.at[0, "delta"]) == pytest.approx(forwards[0]["delta_offset"])
     assert float(totals.at[0, "vega"]) == 0.0
+
+
+def test_priced_inputs_ignore_ticks_booking_columns_and_dtypes():
+    from app.ui.portfolio_block import same_priced_inputs
+    rows = grid({"strike": "1.18", "notional": "1m"})
+    same = rows.assign(_book=True, trade_id="TR-000001", book="FXO", counterparty="ACME")
+    assert same_priced_inputs(rows, same)
+    assert same_priced_inputs(rows.assign(premium=0), rows.assign(premium=0.0))
+    assert same_priced_inputs(rows.assign(strike=" 1.18 "), rows)
+    for column, value in (("strike", "1.19"), ("expiry", "2M"), ("call_put", "PUT"),
+                          ("buy_sell", "SELL"), ("notional", "2m"), ("premium", 5.0),
+                          ("premium_ccy", "EUR"), ("currency_pair", "USDJPY")):
+        assert not same_priced_inputs(rows, rows.assign(**{column: value})), column
+    assert not same_priced_inputs(rows, grid({}, {}))
+    assert not same_priced_inputs(rows, None)
+
+
+def test_booking_keeps_the_pricing_results_on_the_rewritten_lines(session, store, markets):
+    rows = grid({"strike": "1.18", "expiry": "2026-11-17"})
+    session._portfolio_line_results = {"rows": rows.copy(), "results": [{"row": 1}], "state": "s"}
+    session._portfolio_result_cache = {"rows": rows.copy(), "results": [{"row": 1}], "state": "s"}
+    ui.book_ticked_lines(store, markets, rows, [0], MODS, "FXO", "", False, "EURUSD")
+    written = session._pending_resolved_portfolio_rows
+    for key in ("_portfolio_line_results", "_portfolio_result_cache"):
+        held = getattr(session, key)
+        assert held["rows"].equals(written) and held["results"] == [{"row": 1}]
+        assert held["state"] == "s"
+
+
+def test_booking_does_not_adopt_results_of_other_inputs(session, store, markets):
+    rows = grid({"strike": "1.18", "expiry": "2026-11-17"})
+    stale = rows.assign(notional="5m")
+    session._portfolio_line_results = {"rows": stale, "results": [{"row": 1}], "state": "s"}
+    ui.book_ticked_lines(store, markets, rows, [0], MODS, "", "", False, "EURUSD")
+    assert session._portfolio_line_results["rows"] is stale
+
+
+def test_a_tick_after_pricing_is_kept():
+    """Pricing saves the lines without the tick column; ticking must still count."""
+    rows = grid({}, {})                              # as saved by pricing: no _book
+    edited = _apply_editor_state(rows, {"edited_rows": {1: {"_book": True}}})
+    assert list(edited["_book"]) == [False, True]
+    assert list(edited[TRADE_ID_COLUMN]) == ["", ""]

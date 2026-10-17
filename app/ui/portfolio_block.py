@@ -60,6 +60,35 @@ LINE_INPUT_COLUMNS = (
 )
 
 
+#: Cells pricing reads: a line's results stay valid while these are unchanged
+#: (ticks, book, counterparty and trade id do not change a price).
+PRICED_INPUT_COLUMNS = (*LINE_INPUT_COLUMNS, "premium_ccy")
+
+
+def _comparable(value):
+    if value is None or (not isinstance(value, str) and pd.isna(value)):
+        return None
+    if isinstance(value, str):
+        return value.strip()
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def same_priced_inputs(rows, other):
+    """True when ``rows`` and ``other`` have the same lines with the same
+    priced inputs, whatever their dtypes or other columns."""
+    if rows is None or other is None or len(rows) != len(other):
+        return False
+    columns = [c for c in PRICED_INPUT_COLUMNS if c in rows.columns or c in other.columns]
+
+    def cells(frame):
+        frame = frame.reindex(columns=columns)
+        return [[_comparable(value) for value in row] for row in frame.itertuples(index=False)]
+    return cells(rows) == cells(other)
+
+
 def _has_value(value):
     if value is None:
         return False
@@ -81,10 +110,6 @@ def _only_placeholder_rows_added(editor_state):
         and not any(_has_value(row.get(column)) for row in added
                     for column in LINE_INPUT_COLUMNS)
     )
-
-
-def _without_ticks(rows):
-    return rows.drop(columns=[BOOK_COLUMN], errors="ignore")
 
 
 def _marked_row_indices(editor_state):
@@ -123,6 +148,12 @@ def _apply_editor_state(rows, editor_state):
 
     # Streamlit indexes edits and deletions against the full displayed table,
     # including dynamically added rows. Apply them after appending additions.
+    # Rows saved after pricing carry no tick column: a tick made afterwards
+    # must not be dropped as an edit to an unknown column.
+    if (BOOK_COLUMN not in updated.columns
+            and any(BOOK_COLUMN in changes
+                    for changes in editor_state.get("edited_rows", {}).values())):
+        updated[BOOK_COLUMN] = False
     for raw_index, changes in editor_state.get("edited_rows", {}).items():
         index = int(raw_index)
         if 0 <= index < len(updated):
@@ -203,7 +234,7 @@ def render_portfolio_block(portfolio_tab, market_pair, quote_label="quote",
         st.session_state._pending_editor_portfolio_rows = _apply_editor_state(
             st.session_state.option_rows, editor_state
         )
-        st.session_state.pop("_portfolio_line_results", None)
+        # Results are dropped at render time only if a priced input changed.
         edited_rows = editor_state.get("edited_rows", {})
         input_was_edited = any(
             column in RESOLVED_INPUT_COLUMNS
@@ -248,11 +279,11 @@ def render_portfolio_block(portfolio_tab, market_pair, quote_label="quote",
         if pending_line_results is not None:
             st.session_state._portfolio_line_results = pending_line_results
         line_results = st.session_state.get("_portfolio_line_results")
-        # Ticking lines to book does not change them, so results stay shown.
+        # Ticking, booking or naming a book does not change a price, so
+        # results stay shown until a priced input changes.
         if (
             line_results is not None
-            and _without_ticks(st.session_state.option_rows).equals(
-                _without_ticks(line_results["rows"]))
+            and same_priced_inputs(st.session_state.option_rows, line_results["rows"])
         ):
             editor_input = _with_line_results(
                 st.session_state.option_rows, line_results["results"]
