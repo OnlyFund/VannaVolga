@@ -38,7 +38,8 @@ def sync_store_markets(valuation_date, apply_loaded_market, market_id=None):
               "market": None if snapshot is None else
               f"market {snapshot.market_id} ({snapshot.market_source}, "
               f"{snapshot.date_time.replace('T', ' ')})",
-              "unavailable": dict(result.unavailable)}
+              "unavailable": dict(result.unavailable),
+              "sample": snapshot is not None and snapshot.market_source == "sample"}
     library = st.session_state.setdefault("market_library", {})
     layers = st.session_state.setdefault(LAYERS, {})
     if snapshot is not None and (result.payloads or result.unavailable):
@@ -70,6 +71,10 @@ def render_store_status(status):
         st.warning("Market data: " + status["problem"])
     elif status.get("market"):
         st.caption("Market data: " + status["market"])
+    if status.get("sample"):
+        st.info("Illustrative sample market: made-up values, not market data. "
+                "Save it from the Markets tab (Save all markets), edit the JSON "
+                "and load it back.")
     notes = status.get("notes") or []
     if notes:
         with st.expander(f"Notes ({len(notes)})", expanded=False):

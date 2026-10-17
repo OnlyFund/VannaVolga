@@ -613,6 +613,15 @@ implied-minus-quoted moves more than 50bp (G10) / 200bp (EM).
   store** (`app/market_layers.py`); the Markets tab shows each pair's source.
   Changing the date reloads clean store pairs and keeps files and edits. With
   no market for the date, clean store pairs become unavailable.
+* **No store, sample market.** Without a store (no `VV_MARKET_STORE` and no
+  `data/local/market_data.sqlite`: a fresh checkout or the Streamlit Cloud
+  deploy) the app opens on an illustrative sample market for all 65 pairs,
+  dated on the valuation date and kept in a temporary folder
+  (`market_data/sample_market.py`). Its values are made up, not market data,
+  and the sidebar says so. Download it with **Save all markets** on the
+  Markets tab, edit the JSON and load it back with **Load market**.
+  `python -m market_data.sample_market [YYYY-MM-DD] [--store PATH]` writes one
+  into a store.
 * Only the pairs in use are calibrated up front (the active pair, the Pricer
   lines' pairs, the selected Portfolio trades' pairs), and a pair only when
   its market changed (`app/calibration_plan.py`). Store pairs go through a
@@ -634,6 +643,7 @@ market_data/                      Market data: model, stored snapshots and sourc
   discount_curves.py              SOFR / forward-implied rates with fallbacks
   implied_rates.py                Covered-interest-parity implied rates
   market_tables.py                App markets (vol, forward, events) from a snapshot
+  sample_market.py                Illustrative sample market (no store, cloud deploy)
   vol_data.py, event_calendar.py  CSV vol curves and event variance-day calendar
   samples/                        Example vol, event calendar and market files
 VannaVolga_ImpliedVol.py           Main Vanna-Volga implied-vol engine

@@ -28,10 +28,14 @@ def trade_store():
     one that cannot be read at all is ``None`` with the reason.
     """
     import os
-    if "_trade_store" not in st.session_state:
+    opened = st.session_state.get("_trade_store")
+    if opened is None:
         path = Path(os.environ.get("VV_TRADE_STORE", str(DEFAULT_STORE)))
-        st.session_state["_trade_store"] = open_trade_store(path)
-    return st.session_state["_trade_store"]
+        opened = open_trade_store(path)
+        # Returned from the local name: a session cleared mid-run (browser
+        # closed) must not turn this into a KeyError.
+        st.session_state["_trade_store"] = opened
+    return opened
 
 
 def _store_banner(store, problem):

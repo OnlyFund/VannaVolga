@@ -7,6 +7,11 @@ and the Markets tab use), with a reason for every pair it could not build.
 A market's data may be from the valuation date or earlier, never later:
 its ``date_time``'s date must be on or before the valuation date.
 
+Without a market data store (no ``$VV_MARKET_STORE`` and no file at the
+default path: a fresh checkout, the Streamlit Cloud deploy) the app uses an
+illustrative sample market instead (``market_data.sample_market``), kept in
+a temporary folder and dated on the valuation date.
+
 It never raises. Every failure is reported instead:
 
 * the store cannot be opened or read -> ``problem``, no markets;
@@ -41,18 +46,33 @@ def _failed(problem, snapshot=None, notes=()):
     return StoreMarkets(snapshot, {}, {}, list(notes), problem)
 
 
+def app_market_store(valuation_date):
+    """The app's market data store, or the sample store when there is none.
+
+    Opening a missing store would create an empty one, so the default path
+    is checked first; the sample store gets a sample market for the date.
+    """
+    import os
+    from market_data.store import DEFAULT_PATH, MarketDataStore, open_market_data_store
+    if os.environ.get("VV_MARKET_STORE") or DEFAULT_PATH.exists():
+        return open_market_data_store()
+    from market_data.sample_market import ensure_sample_market, sample_store_path
+    store = MarketDataStore(sample_store_path())
+    ensure_sample_market(store, valuation_date)
+    return store
+
+
 def load_store_markets(valuation_date, market_id=None, store=None, pairs=None):
     """The markets of one stored market snapshot for ``valuation_date``.
 
     By default the latest market with data on or before ``valuation_date``;
     ``market_id`` picks one explicitly. ``store`` defaults to the app's
-    market data store; ``pairs`` limits which pairs are built.
+    market data store (``app_market_store``); ``pairs`` limits which pairs are built.
     """
     valuation = pd.Timestamp(valuation_date).normalize()
     try:
         if store is None:
-            from market_data.store import open_market_data_store
-            store = open_market_data_store()
+            store = app_market_store(valuation)
         if market_id is not None:
             snapshot = store.load(market_id=market_id)
         else:
