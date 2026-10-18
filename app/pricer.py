@@ -101,11 +101,17 @@ def price_line(markets, line_number, source_row, mods, extras=()):
         row["currency_pair"] = currency_pair
         row["expiry"] = context.resolve_market_expiry(row["expiry"])
         row["notional"] = parse_notional(row["notional"])
-        # An empty premium cell (a new grid line) means no premium.
-        premium_cell = row.get("premium", 0.0)
-        premium = 0.0 if _blank(premium_cell) else pd.to_numeric(premium_cell, errors="coerce")
-        if pd.isna(premium) or not np.isfinite(float(premium)) or premium < 0:
-            raise ValueError("Premium must be a finite non-negative amount")
+        # A line the Pricer marks auto takes the premium that makes P&L zero.
+        # Otherwise (typed, and every stored trade) the premium cell is used;
+        # an empty cell means no premium.
+        if is_auto_premium(row.get(PREMIUM_MODE)):
+            premium = None
+        else:
+            premium_cell = row.get("premium", 0.0)
+            premium = (0.0 if _blank(premium_cell)
+                       else pd.to_numeric(premium_cell, errors="coerce"))
+            if pd.isna(premium) or not np.isfinite(float(premium)) or premium < 0:
+                raise ValueError("Premium must be a finite non-negative amount")
         # BASE/TERM (the grid) or a code (files, older lines) -> the code.
         premium_ccy = premium_currency(currency_pair, row.get("premium_ccy"))
         if premium_ccy not in {currency_pair[:3], currency_pair[3:]}:
@@ -124,7 +130,8 @@ def price_line(markets, line_number, source_row, mods, extras=()):
             row["expiry"], as_of=next_valuation, allow_short_end=True
         )
         pricing_result = Pricable(
-            row=row, premium=float(premium), premium_ccy=premium_ccy,
+            row=row, premium=None if premium is None else float(premium),
+            premium_ccy=premium_ccy,
         ).price(
             market, settings.pricing_model, settings.atm_type, settings.delta_base, mods,
             next_market=next_market, next_valuation=next_valuation,
@@ -157,6 +164,18 @@ def price_line(markets, line_number, source_row, mods, extras=()):
         }, None, resolved_strike
     except Exception as exc:
         return line_number, None, "Line {}: {}".format(line_number, exc), resolved_strike
+
+
+#: Pricer grid column: ``"auto"`` (the premium making P&L zero, refilled on
+#: pricing) or ``"typed"`` (the premium entered). Lines without it, such as
+#: stored trades, use their premium cell.
+PREMIUM_MODE = "premium_mode"
+AUTO, TYPED = "auto", "typed"
+
+
+def is_auto_premium(mode):
+    """True only for a line explicitly marked auto."""
+    return isinstance(mode, str) and mode.strip().lower() == AUTO
 
 
 def _blank_id(value):

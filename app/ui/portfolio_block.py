@@ -4,7 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from app.premium_side import SIDES, TERM, premium_currency
-from app.pricer import GREEK_NAMES
+from app.pricer import AUTO, GREEK_NAMES, PREMIUM_MODE, TYPED
 from app.ui.greek_picker import render_greek_picker
 from app.ui.negatives import red_negatives
 from pricing import greek_catalog as catalog
@@ -67,7 +67,50 @@ LINE_INPUT_COLUMNS = (
 
 #: Cells pricing reads: a line's results stay valid while these are unchanged
 #: (ticks, book, counterparty and trade id do not change a price).
-PRICED_INPUT_COLUMNS = (*LINE_INPUT_COLUMNS, "premium_ccy")
+PRICED_INPUT_COLUMNS = (*LINE_INPUT_COLUMNS, "premium_ccy", PREMIUM_MODE)
+#: A line's terms: changing any of them resets its premium to auto.
+TERM_COLUMNS = ("currency_pair", "expiry", "call_put", "strike", "buy_sell", "notional",
+                "premium_ccy")
+
+
+def _premium_entered(value):
+    """True for a premium cell holding a positive amount."""
+    try:
+        return _has_value(value) and float(value) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def premium_mode_of(mode, premium):
+    """A line's premium mode: its own when valid, else auto for an empty or
+    zero premium and typed for an entered one."""
+    if isinstance(mode, str) and mode.strip().lower() in (AUTO, TYPED):
+        return mode.strip().lower()
+    return TYPED if _premium_entered(premium) else AUTO
+
+
+def with_premium_modes(rows):
+    """``rows`` with a valid premium mode on every line (see ``premium_mode_of``)."""
+    rows = rows.copy()
+    modes = rows[PREMIUM_MODE] if PREMIUM_MODE in rows else pd.Series([None] * len(rows),
+                                                                     index=rows.index)
+    premiums = rows["premium"] if "premium" in rows else pd.Series([None] * len(rows),
+                                                                  index=rows.index)
+    rows[PREMIUM_MODE] = [premium_mode_of(mode, premium)
+                          for mode, premium in zip(modes, premiums)]
+    return rows
+
+
+def apply_auto_premiums(rows, results):
+    """``rows`` with each auto line's premium set to the one its pricing
+    found (``auto_premium``); other lines unchanged."""
+    rows = rows.copy()
+    for result in results:
+        number = result.get("row")
+        if (result.get("premium_auto") and isinstance(number, int)
+                and 1 <= number <= len(rows) and "premium" in rows):
+            rows.iat[number - 1, rows.columns.get_loc("premium")] = float(result["auto_premium"])
+    return rows
 
 
 def _comparable(value):
@@ -170,6 +213,17 @@ def _apply_editor_state(rows, editor_state):
             if (TRADE_ID_COLUMN in updated.columns
                     and any(column in (*LINE_INPUT_COLUMNS, *BOOKING_COLUMNS) for column in changes)):
                 updated.iat[index, updated.columns.get_loc(TRADE_ID_COLUMN)] = ""
+            # Typing a premium makes it the line's (clearing it returns to
+            # auto); any other change to the terms resets it to auto.
+            if PREMIUM_MODE in updated.columns:
+                mode = updated.columns.get_loc(PREMIUM_MODE)
+                if "premium" in changes:
+                    updated.iat[index, mode] = (TYPED if _premium_entered(changes["premium"])
+                                                else AUTO)
+                elif any(column in TERM_COLUMNS for column in changes):
+                    updated.iat[index, mode] = AUTO
+                    if "premium" in updated.columns:
+                        updated.iat[index, updated.columns.get_loc("premium")] = float("nan")
 
     deleted_indices = sorted(
         (int(index) for index in editor_state.get("deleted_rows", [])),
@@ -180,6 +234,9 @@ def _apply_editor_state(rows, editor_state):
             updated = updated.drop(updated.index[index])
 
     updated = updated.reset_index(drop=True)
+    if PREMIUM_MODE in updated.columns or added_rows:
+        # Added lines: typed when they carry a premium, auto otherwise.
+        updated = with_premium_modes(updated)
     if "currency_pair" in updated.columns:
         updated["currency_pair"] = updated["currency_pair"].map(
             lambda value: (
@@ -334,6 +391,12 @@ def render_portfolio_block(portfolio_tab, market_pair, pairs=()):
                     "Premium", help="Absolute premium amount. Its cashflow sign follows Side.",
                     min_value=0.0, format="%.2f", width="small",
                 ),
+                PREMIUM_MODE: st.column_config.TextColumn(
+                    "Premium src", width="small",
+                    help="auto: pricing fills the premium that makes P&L zero (the "
+                         "option's value), and books it. typed: the premium you entered. "
+                         "Typing a premium makes it typed; clearing it or changing any "
+                         "other term returns the line to auto."),
                 "premium_ccy": st.column_config.SelectboxColumn(
                     "Premium in",
                     help="Premium paid or received in the pair's base or term currency.",
@@ -422,7 +485,8 @@ def render_portfolio_block(portfolio_tab, market_pair, pairs=()):
             use_container_width=True,
             column_config=editor_column_config,
             hide_index=True,
-            disabled=[*LINE_RESULT_COLUMNS, TRADE_ID_COLUMN, PREMIUM_CODE_COLUMN],
+            disabled=[*LINE_RESULT_COLUMNS, TRADE_ID_COLUMN, PREMIUM_CODE_COLUMN,
+                      PREMIUM_MODE],
             key="portfolio_editor_v3",
             on_change=resolve_strikes_after_edit,
         )

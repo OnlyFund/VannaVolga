@@ -1,6 +1,7 @@
 """Reusable option pricing functions and the portfolio-line ``Pricable`` API."""
 
 from dataclasses import dataclass
+from typing import Optional
 from math import exp, isfinite, sqrt
 
 import sys
@@ -172,11 +173,14 @@ class Pricable:
 
     ``premium`` is the absolute cash amount entered by the user. Its sign is
     derived from BUY/SELL, and it is never scaled by the option notional.
-    MTM and Greeks are calculated for one unit and then multiplied by notional.
+    ``None`` asks for the auto premium: the option's value in the premium
+    currency, so P&L is zero (the result then carries ``premium_auto`` and
+    ``auto_premium``). MTM and Greeks are calculated for one unit and then
+    multiplied by notional; the premium changes neither.
     """
 
     row: object
-    premium: float
+    premium: Optional[float]
     premium_ccy: str
 
     def price(
@@ -202,7 +206,9 @@ class Pricable:
         if premium_ccy not in (base_ccy, term_ccy):
             raise ValueError("Premium currency must match the pair's base or term currency")
         buy_sell = str(row["buy_sell"]).strip().upper()
-        signed_premium = signed_premium_cashflow(self.premium, buy_sell)
+        auto_premium = self.premium is None
+        # Validates the side (and an entered premium) before any pricing.
+        signed_premium = signed_premium_cashflow(0.0 if auto_premium else self.premium, buy_sell)
 
         # Existing pricing and Greek calculators apply notional internally.
         # Request unit values here so this API owns the one scaling step.
@@ -225,6 +231,10 @@ class Pricable:
             unit_greeks = {**unit_greeks, **unit_extras}
         conversion = 1.0 / float(market.s) if premium_ccy == base_ccy else 1.0
         mtm = float(unit_mtm) * notional * conversion
+        if auto_premium:
+            # The option's value in the premium currency: paid on a buy,
+            # received on a sale, so premium + MTM is zero.
+            signed_premium = signed_premium_cashflow(abs(mtm), buy_sell)
         mtm_base = float(unit_mtm) * notional / float(market.s)
         mtm_term = float(unit_mtm) * notional
         premium_base = signed_premium if premium_ccy == base_ccy else signed_premium / float(market.s)
@@ -252,8 +262,10 @@ class Pricable:
             )
         # Only with extras requested: results without them stay exactly as before.
         problems = {"greek_problems": greek_problems} if extras else {}
+        auto = {"premium_auto": True, "auto_premium": abs(signed_premium)} if auto_premium else {}
         return {
             **problems,
+            **auto,
             "currency_pair": pair,
             "strike": float(strike),
             "expiry": row["expiry"],

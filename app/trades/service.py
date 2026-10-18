@@ -82,7 +82,9 @@ def booking_from_lines(markets, rows, mods, trade_date=None, book="", counterpar
                 product_type=FX_OPTION, currency_pair=result["currency_pair"],
                 trade_date=trade_date, expiry=result["expiry"], buy_sell=_text(line["buy_sell"]),
                 notional=pricer.parse_notional(line["notional"]), strike=result["strike"],
-                call_put=_text(line["call_put"]), premium=_amount(line.get("premium")),
+                call_put=_text(line["call_put"]),
+                premium=(result["auto_premium"] if result.get("premium_auto")
+                         else _amount(line.get("premium"))),
                 premium_ccy=premium_currency(result["currency_pair"],
                                              line.get("premium_ccy")) or None,
                 book=_text(line.get("book")) or book,

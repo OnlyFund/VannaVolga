@@ -24,8 +24,8 @@ from app.ui.greek_picker import chosen_greeks, missing_extras
 from app.ui.negatives import red_negatives
 from pricing import greek_catalog
 from app.ui.portfolio_block import (
-    BOOK_COLUMN, PRICER_GREEKS_KEY, TRADE_ID_COLUMN, render_portfolio_block,
-    same_priced_inputs,
+    BOOK_COLUMN, PREMIUM_MODE, PRICER_GREEKS_KEY, TRADE_ID_COLUMN, apply_auto_premiums,
+    render_portfolio_block, same_priced_inputs, with_premium_modes,
 )
 from app.ui.trades_block import render_blotter, render_portfolio, trade_store
 from app.ui.risk_block import render_risk
@@ -84,7 +84,9 @@ def book_ticked_lines(store, markets, rows, ticked, mods, book, counterparty, wi
                 ("currency_pair", trade.currency_pair),
                 ("strike", pricer.format_strike_for_pair(trade.currency_pair, trade.strike)),
                 ("expiry", trade.expiry.isoformat()), ("book", trade.book),
-                ("counterparty", trade.counterparty), (TRADE_ID_COLUMN, trade_id)):
+                ("counterparty", trade.counterparty), (TRADE_ID_COLUMN, trade_id),
+                # The booked premium is the trade's from now on.
+                ("premium", trade.premium), (PREMIUM_MODE, "typed")):
             if column in updated:
                 updated.at[index, column] = value
     st.session_state._pending_resolved_portfolio_rows = updated
@@ -184,14 +186,17 @@ def render_app():
                      for number, (_, note) in enumerate(sides, start=1) if note]
     if premium_notes:
         st.session_state["_premium_notes"] = premium_notes
-    if st.session_state.get("_portfolio_editor_schema") != 6:
+    # Every line has a premium mode: auto (pricing fills the premium) or typed.
+    st.session_state.option_rows = with_premium_modes(st.session_state.option_rows)
+    if st.session_state.get("_portfolio_editor_schema") != 7:
         st.session_state.pop("portfolio_editor_v2", None)
         st.session_state.pop("portfolio_editor_v3", None)
-        st.session_state._portfolio_editor_schema = 6
+        st.session_state._portfolio_editor_schema = 7
 
     portfolio_columns = [
         "currency_pair", "expiry", "call_put", "strike", "buy_sell",
-        "notional", "premium", "premium_ccy", "book", "counterparty", TRADE_ID_COLUMN,
+        "notional", "premium", PREMIUM_MODE, "premium_ccy", "book", "counterparty",
+        TRADE_ID_COLUMN,
     ]
     portfolio_columns += [
         column for column in st.session_state.option_rows.columns
@@ -455,6 +460,8 @@ def render_app():
         results, errors = pricer.price_lines(
             market_set, edited_rows, mods,
             extras=greek_catalog.extras(chosen_greeks(PRICER_GREEKS_KEY)))
+        # Auto lines show the premium their pricing found (P&L zero).
+        edited_rows = apply_auto_premiums(edited_rows, results)
         hedge_trades = []
         if delta_hedge:
             hedge_trades, hedge_errors = pricer.hedge_trades_for(market_set, results)
