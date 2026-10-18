@@ -26,6 +26,19 @@ VOL_COLUMNS = ("atm", "rr_25", "bf_25", "rr_10", "bf_10")
 FORWARD_COLUMNS = ("fwd_pts", "term_discount")
 #: Simple term rate used for files saved before ``term_discount`` existed.
 DEFAULT_TERM_DISCOUNT = 0.05
+#: BF quote convention when a pair's own convention cannot be read.
+DEFAULT_BROKER_STRANGLE = True
+
+
+def pair_broker_strangle(pair):
+    """Whether ``pair``'s quoted butterflies are broker strangles, by its
+    convention (G10 broker strangles, EM smile strangles); the global default
+    when the convention cannot be read."""
+    try:
+        from market_data.universe import broker_strangle
+        return bool(broker_strangle(normalize_pair(pair)))
+    except Exception:
+        return DEFAULT_BROKER_STRANGLE
 
 _REQUIRED = ("currency_pair", "valuation_date", "spot",
              "vol_data", "forward_points", "event_calendar")
@@ -137,11 +150,15 @@ def validate_market(payload):
         raise ValueError("Spot must be finite and positive")
     if not np.isfinite(divisor_value) or divisor_value <= 0:
         raise ValueError("Forward divisor must be finite and positive")
-    if not isinstance(payload.get("broker_strangle", True), bool):
+    # A file's own flag wins; a file without one follows the pair convention.
+    broker = payload.get("broker_strangle")
+    if broker is None:
+        broker = pair_broker_strangle(pair)
+    if not isinstance(broker, bool):
         raise ValueError("broker_strangle must be a boolean")
     return {
         "currency_pair": pair,
-        "broker_strangle": bool(payload.get("broker_strangle", True)),
+        "broker_strangle": broker,
         "valuation_date": pd.Timestamp(payload["valuation_date"]).date(),
         "spot": spot_value,
         "forward_divisor": divisor_value,

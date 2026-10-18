@@ -90,3 +90,26 @@ def test_newer_bundle_version_is_refused():
 def test_active_pair_prefers_the_current_one():
     assert choose_active_pair(["EURUSD", "USDJPY"], "usd/jpy") == "USDJPY"
     assert choose_active_pair(["EURUSD", "USDJPY"], "GBPUSD") == "EURUSD"
+
+
+def test_bf_convention_follows_the_file_then_the_pair_convention():
+    # A file's own flag wins, whatever the pair.
+    assert validate_market(market("USDMXN", broker_strangle=True))["broker_strangle"] is True
+    assert validate_market(market("EURUSD", broker_strangle=False))["broker_strangle"] is False
+    # Without one: G10 flies are broker strangles, EM flies smile strangles.
+    assert validate_market(market("EURUSD"))["broker_strangle"] is True
+    assert validate_market(market("USDMXN"))["broker_strangle"] is False
+    assert validate_market(market("USDMXN", broker_strangle=None))["broker_strangle"] is False
+    with pytest.raises(ValueError, match="broker_strangle"):
+        validate_market(market(broker_strangle="yes"))
+
+
+def test_bf_convention_falls_back_to_the_global_default(monkeypatch):
+    import market_data.universe as universe
+    from app.market_store import DEFAULT_BROKER_STRANGLE, pair_broker_strangle
+
+    def broken(pair):
+        raise RuntimeError("no conventions")
+    monkeypatch.setattr(universe, "broker_strangle", broken)
+    assert pair_broker_strangle("USDMXN") is DEFAULT_BROKER_STRANGLE is True
+    assert validate_market(market("USDMXN"))["broker_strangle"] is True

@@ -9,7 +9,7 @@ from pandas.tseries.offsets import BDay
 from app.market_service import pair_delivery, pair_divisor
 from app.market_store import (
     bundle_payload, choose_active_pair, is_pair, market_payload as build_market_payload,
-    read_market_file, validate_market,
+    pair_broker_strangle, read_market_file, validate_market,
 )
 from app.smile_service import DiagnosticsCollector
 
@@ -129,6 +129,29 @@ def _persist_editor_changes(data_key, editor_key):
     st.session_state[previous_key] = copy.deepcopy(editor_state)
 
 
+def _render_bf_convention(currency_pair):
+    """The active pair's BF quote convention, editable for already converted
+    two-vol butterflies.
+
+    A loaded market brings its own flag; a pair typed without one starts at
+    its convention. Anything unreadable falls back to the pair convention.
+    """
+    convention = pair_broker_strangle(currency_pair)
+    if st.session_state.get("_broker_strangle_pair") != currency_pair:
+        st.session_state["broker_strangle"] = convention
+        st.session_state["_broker_strangle_pair"] = currency_pair
+    if not isinstance(st.session_state.get("broker_strangle"), bool):
+        st.session_state["broker_strangle"] = convention
+    st.checkbox(
+        f"{currency_pair} BF quotes are broker strangles", key="broker_strangle",
+        help="Follows the pair convention (G10 broker strangles, EM smile strangles). "
+             "Untick only for already converted two-vol butterflies.",
+    )
+    if st.session_state.get("broker_strangle", True) != convention:
+        st.caption("Differs from the {} convention ({}).".format(
+            currency_pair, "broker strangles" if convention else "smile strangles"))
+
+
 def render_market_block(markets_tab, valuation_date, apply_loaded_market):
     """Render market inputs and return the current market tables and spot."""
     with markets_tab:
@@ -162,6 +185,7 @@ def render_market_block(markets_tab, valuation_date, apply_loaded_market):
                 convention.fwd_delta_beyond, convention.spot_lag))
         except (ImportError, KeyError, ValueError, RuntimeError) as exc:
             st.warning("Unsupported pair {}: using default conventions.".format(currency_pair))
+        _render_bf_convention(currency_pair)
     
         vol_tab, forwards_tab, events_tab = st.tabs(
             ["Vol data", "Forward points", "Event calendar"]

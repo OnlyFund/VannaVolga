@@ -126,6 +126,8 @@ def render_app():
         """Validate one market dict and queue it as the active market."""
         loaded = validate_market(payload)
         loaded["_active_market_pair"] = loaded["currency_pair"]
+        # The market's own BF flag, not the pair default, for this pair.
+        loaded["_broker_strangle_pair"] = loaded["currency_pair"]
         st.session_state._pending_market_load = loaded
 
     pending_market = st.session_state.pop("_pending_market_load", None)
@@ -230,13 +232,6 @@ def render_app():
             help="Applies to reported deltas and hedges only. Premium adjustment "
                  "uses the FX pair convention; smile pillars remain unchanged.",
         )
-        # Loading a market sets this key; a widget default as well would make
-        # Streamlit warn, so the default is applied only when the key is new.
-        st.session_state.setdefault("broker_strangle", True)
-        broker_strangle = st.checkbox(
-            "BF quotes are broker strangles", key="broker_strangle",
-            help="Disable only for already converted two-vol butterflies.",
-        )
         st.header("Smile dynamics")
         beta_atm = st.slider("beta_atm", 0.0, 5.0, 0.7, 0.05, key="beta_atm")
         beta_rr = st.slider("beta_rr", 0.0, 2.0, 1.2, 0.05, key="beta_rr")
@@ -258,6 +253,8 @@ def render_app():
     spot, forward_divisor, currency_pair, vol_rows, forward_rows, event_rows = render_market_block(
         markets_tab, valuation_date, apply_loaded_market
     )
+    # The active pair's BF convention (Markets tab); other pairs keep their own.
+    broker_strangle = bool(st.session_state.get("broker_strangle", True))
     diagnostics = DiagnosticsCollector()
     # Calibrated surfaces live for the whole session, so reruns and pricing
     # reuse them instead of recalibrating per option or per strike.
