@@ -226,12 +226,9 @@ def render_app():
         st.header("Conventions")
         pricing_model = st.selectbox("Pricing model", ["vv", "vv-sabr"], key="pricing_model")
         atm_type, delta_base = "dn", True
-        delta_reporting = st.selectbox(
-            "Delta convention", ["forward", "spot"], index=0, key="delta_reporting",
-            format_func=lambda value: "Forward delta" if value == "forward" else "Spot delta",
-            help="Applies to reported deltas and hedges only. Premium adjustment "
-                 "uses the FX pair convention; smile pillars remain unchanged.",
-        )
+        # Deltas are computed spot-equivalent, so totals add up; each line
+        # shows its pair's convention. Hedge amounts are forward deltas.
+        delta_reporting = "spot"
         st.header("Smile dynamics")
         beta_atm = st.slider("beta_atm", 0.0, 5.0, 0.7, 0.05, key="beta_atm")
         beta_rr = st.slider("beta_rr", 0.0, 2.0, 1.2, 0.05, key="beta_rr")
@@ -584,7 +581,10 @@ def render_app():
             "fixed-volatility risks; unprefixed columns are smile-adjusted risks. "
             "Premium is negative for buys and positive for sells. MTM and P&L are "
             "shown in base currency. "
-            "Gamma is quote-delta sensitivity per 1% spot move. "
+            "Line deltas are in the pair's convention for the expiry (Delta conv.: "
+            "S spot, F forward); the By pair totals add spot-equivalent delta and "
+            "gamma. Hedge forwards are sized by forward delta. "
+            "Gamma is spot-equivalent delta sensitivity per 1% spot move. "
             f"Smile theta is a {theta_days}-calendar-day roll to {theta_date}, "
             "re-interpolating volatility and forward curves and re-solving the "
             "fixed strike on the rolled skew. Pair totals include forward-hedge "

@@ -12,6 +12,11 @@ the ``EXTRA_GREEKS`` only when a report asks for them
   scaled together (``Greeks.cross_greeks``);
 * weighted (``weighted_gamma``, ``weighted_vega``): gamma and vega times the
   expiry weight ``0.25 / T**0.4`` (``Greeks.weighted_greeks.scale_t``).
+
+``CONVENTION_GREEKS`` (``spot_delta``, ``fwd_delta``) come with every priced
+line at no extra cost (``pricing.greeks.convention_deltas``) but are shown
+only when picked. ``delta`` itself is spot-equivalent in every total; a
+line table shows it in the pair's convention (spot or forward, marked S/F).
 """
 from collections import OrderedDict, namedtuple
 
@@ -19,6 +24,7 @@ Greek = namedtuple("Greek", "name label unit group")
 
 BASE_GREEKS = ("delta", "gamma", "vega", "vanna", "volga", "theta", "rega", "sega")
 DECAY_OF = ("delta", "gamma", "vega", "vanna", "volga", "rega", "sega")
+CONVENTION_GREEKS = ("spot_delta", "fwd_delta")
 
 _BASE = (
     Greek("delta", "Delta", "base ccy", "first order"),
@@ -29,6 +35,8 @@ _BASE = (
     Greek("theta", "Theta", "premium ccy per day", "first order"),
     Greek("rega", "Rega", "base ccy per 10bp RR", "first order"),
     Greek("sega", "Sega", "base ccy per 10bp BF", "first order"),
+    Greek("spot_delta", "Spot delta", "base ccy", "first order"),
+    Greek("fwd_delta", "Forward delta", "base ccy forward", "first order"),
 )
 _DECAY_LABELS = {"delta": "Delta decay (charm)", "gamma": "Gamma decay (color)",
                  "vega": "Vega decay (veta)", "vanna": "Vanna decay", "volga": "Volga decay",
@@ -40,7 +48,8 @@ _WEIGHTED = (Greek("weighted_gamma", "Weighted gamma", "gamma x 0.25/T^0.4", "we
              Greek("weighted_vega", "Weighted vega", "vega x 0.25/T^0.4", "weighted"))
 
 CATALOG = OrderedDict((greek.name, greek) for greek in (*_BASE, *_DECAY, *_CROSS, *_WEIGHTED))
-EXTRA_GREEKS = tuple(name for name in CATALOG if name not in BASE_GREEKS)
+EXTRA_GREEKS = tuple(name for name in CATALOG
+                     if name not in BASE_GREEKS and name not in CONVENTION_GREEKS)
 DECAY_GREEKS = tuple(greek.name for greek in _DECAY)
 WEIGHTED_GREEKS = tuple(greek.name for greek in _WEIGHTED)
 GROUPS = ("first order", "decay", "cross", "weighted")

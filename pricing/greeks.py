@@ -2,6 +2,8 @@
 
 import sys
 from math import exp
+
+import numpy as np
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -66,6 +68,69 @@ def forward_delta_factor(market, expiry, valuation):
         exp(-market.term_discount * year_fraction(_date_text(expiry), _date_text(valuation))),
     )
     return term_factor * forward / market.s
+
+
+#: Delta convention when the pair's own convention cannot be read (the app's
+#: reporting before deltas followed the pair).
+DEFAULT_DELTA_CONVENTION = "forward"
+
+
+def delta_convention(pair, expiry, valuation):
+    """``"spot"`` or ``"forward"``: the delta ``pair`` quotes at ``expiry``.
+
+    The rule the smile reads its delta pillars with
+    (``resolved_smile_inputs.resolve_conventions``): G10 spot delta up to the
+    pair's cutoff (1Y), forward beyond; EM forward at every tenor. Falls back
+    to ``DEFAULT_DELTA_CONVENTION`` when the convention cannot be read.
+    """
+    try:
+        import QuantLib as ql
+        from helper_functions import fx_conventions as conventions
+        from helper_functions.fx_discounting import _to_date, _to_ql
+        convention = conventions.get_pair(str(pair).replace("/", "").strip().upper())
+        kind = conventions.delta_type(convention.name, _to_ql(_to_date(expiry)),
+                                      _to_ql(_to_date(valuation)))
+        forward = (convention.fwd_delta_beyond == "0D"
+                   or kind in (ql.DeltaVolQuote.Fwd, ql.DeltaVolQuote.PaFwd))
+        return "forward" if forward else "spot"
+    except Exception:
+        return DEFAULT_DELTA_CONVENTION
+
+
+def convention_deltas(market, row, expiry, valuation, fixed_delta, delta):
+    """A line's fixed and smile deltas in spot, forward and the pair's
+    convention, from the deltas as reported on ``market``.
+
+    Spot delta is the spot-equivalent amount every total adds up; forward
+    delta is the forward amount (at the option's delivery) that hedges it;
+    the pair delta is the one the pair quotes at this expiry
+    (:func:`delta_convention`), marked ``"S"`` or ``"F"``. Returns ``{}``
+    when the deltas cannot be converted (legacy reporting, a bad factor), so
+    callers keep the reported deltas.
+    """
+    try:
+        mode = market.delta_reporting
+        if mode not in ("spot", "forward"):
+            return {}
+        factor = forward_delta_factor(market.copy_with(delta_reporting="spot"), expiry, valuation)
+        if not (factor > 0 and np.isfinite(factor)):
+            return {}
+        values = {}
+        for prefix, reported in (("fixed_", fixed_delta), ("", delta)):
+            reported = float(reported)
+            if not np.isfinite(reported):
+                return {}
+            spot = reported if mode == "spot" else reported * factor
+            values[f"{prefix}spot_delta"] = spot
+            values[f"{prefix}fwd_delta"] = spot / factor
+        convention = delta_convention(_pair_code(row, market), expiry, valuation)
+        key = "spot_delta" if convention == "spot" else "fwd_delta"
+        values["pair_delta"] = values[key]
+        values["fixed_pair_delta"] = values[f"fixed_{key}"]
+        values["delta_convention"] = "S" if convention == "spot" else "F"
+        return values
+    except Exception:
+        return {}
 
 
 def _report_delta(raw_delta, value, market, expiry, valuation, premium_adjusted):

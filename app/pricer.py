@@ -19,7 +19,9 @@ from app.smile_service import market_diagnostics
 from helper_functions.input_resolvers import parse_notional, resolve_strike
 from pricing import Pricable
 from pricing.fx_forward import FxForwardPosition
-from pricing.greeks import calculate_forward_theta, calculate_greeks, forward_delta_factor
+from pricing.greeks import (
+    calculate_forward_theta, calculate_greeks, convention_deltas, forward_delta_factor,
+)
 
 
 #: Greeks every priced line reports, fixed (``fixed_<name>``) and smile.
@@ -131,6 +133,11 @@ def price_line(markets, line_number, source_row, mods, extras=()):
             **({"extras": tuple(extras)} if extras else {}),
         )
         forward_rate = market.s + market.fwd_pts / market.forward_divisor
+        # Spot, forward and pair-convention deltas; none if they cannot be
+        # converted, and the line keeps its reported (spot-equivalent) delta.
+        conventions = convention_deltas(
+            market, row, row["expiry"], valuation_date,
+            pricing_result.get("fixed_delta"), pricing_result.get("delta"))
         status, reason = market_diagnostics(market, row["expiry"])
         # A booked trade keeps its id through pricing; typed lines have none.
         identity = ({"trade_id": source_row["trade_id"]}
@@ -143,6 +150,7 @@ def price_line(markets, line_number, source_row, mods, extras=()):
             "call_put": row["call_put"],
             "buy_sell": row["buy_sell"],
             "notional": format_notional(row["notional"]),
+            **conventions,
             "_forward_rate": forward_rate,
             "smile_status": status,
             "smile_reason": reason,
@@ -264,6 +272,10 @@ def value_forward(markets, pair, expiry, base_amount, contract_rate):
         "base_amount": base_amount,
         "forward_rate": contract_rate,
         "delta_offset": base_amount * delta_factor,
+        # A forward's forward delta is its amount; its spot delta the offset.
+        "spot_delta": base_amount * forward_delta_factor(
+            market.copy_with(delta_reporting="spot"), expiry, valuation_date),
+        "fwd_delta": base_amount,
         "mtm_term": value["mtm_term"],
         "mtm_base": value["mtm_base"],
         "pnl_term": value["mtm_term"],
@@ -474,7 +486,11 @@ def aggregate_by_pair(results, hedge_trades=(), greeks=GREEK_NAMES):
         aggregation.loc[matches, "pnl_base"] += float(trade["pnl_base"])
         for column, amount in (("fixed_delta", trade["delta_offset"]),
                                ("delta", trade["delta_offset"]),
+                               ("fixed_spot_delta", trade.get("spot_delta")),
+                               ("spot_delta", trade.get("spot_delta")),
+                               ("fixed_fwd_delta", trade.get("fwd_delta")),
+                               ("fwd_delta", trade.get("fwd_delta")),
                                ("theta", trade.get("theta", 0.0))):
-            if column in aggregation:
+            if column in aggregation and amount is not None:
                 aggregation.loc[matches, column] += float(amount)
     return aggregation

@@ -133,12 +133,19 @@ reads slightly lower, by the base discount factor.
 
 ### Premium quotation
 
-The app has a **Delta convention** selector, defaulting to **Forward delta**,
-with **Spot delta** as the alternative. `pricing.greeks.calculate_greeks` uses
-the pair helper's premium-adjustment convention and reports
-`spot delta = D_base * forward delta`. This reporting selector does not alter
-smile pillars, strike aliases, prices or other option Greeks. Trade premium
-currency still controls premium cashflows and quotation.
+The app has no delta selector. It computes every delta and gamma
+**spot-equivalent** (`delta_reporting="spot"`, `spot delta = D_base * forward
+delta`), so pair totals, risk buckets and spot-ladder rows add up across
+tenors and pairs. Each line also carries its **forward delta** (the forward
+amount at its delivery that hedges it; delta-hedge forwards are sized by it)
+and its delta in the **pair's quoted convention**
+(`pricing.greeks.delta_convention`: G10 spot delta up to 1Y, forward beyond;
+EM forward at every tenor), which the line tables show marked S or F. When
+the convention cannot be read the line falls back to forward delta; when the
+deltas cannot be converted it keeps the spot-equivalent delta. Premium
+adjustment follows the pair helper. None of this alters smile pillars, strike
+aliases, prices or the other Greeks. Trade premium currency still controls
+premium cashflows and quotation.
 
 Library callers opt in using `MarketData.delta_reporting`. With the default
 `None`, the earlier behavior remains: `dV/dS - V/S` for base-currency premium,

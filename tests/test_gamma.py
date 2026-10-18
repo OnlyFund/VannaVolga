@@ -85,8 +85,10 @@ def test_without_smile_dynamics_smile_gamma_is_fixed_gamma(markets):
 
 @pytest.mark.parametrize("strike", [1.12, 1.17, 1.22])
 def test_smile_gamma_matches_the_ladder_pnl_curvature(markets, strike):
-    """The ladder prices each spot on the smile dynamics path; its P&L
-    curvature, in forward-delta units, is the smile gamma."""
+    """The ladder prices each spot on the smile dynamics path (forward points
+    fixed); its P&L curvature, in spot-equivalent delta units, is the smile
+    gamma. Spot delta = dV/dS * F/S with F/S = 1 + c/S (c the points), so
+    gamma = (V'' F/S - V' c/S^2) * S * 1%."""
     context, market, row = line_inputs(markets, "EURUSD", strike)
     spot, step = float(market.s), 1e-3
     levels, errors = calculate_spot_ladder(
@@ -96,9 +98,31 @@ def test_smile_gamma_matches_the_ladder_pnl_curvature(markets, strike):
     assert errors == []
     low, mid, high = sorted(levels, key=lambda level: level["spot"])
     pnl = [level["pnl_base"] * level["spot"] for level in (low, mid, high)]   # term ccy
+    assert market.delta_reporting == "spot"
+    points = market.fwd_pts / market.forward_divisor
+    first = (pnl[2] - pnl[0]) / (2 * spot * step)
+    second = (pnl[0] + pnl[2] - 2 * pnl[1]) / (spot * step) ** 2
+    curvature = (second * (1 + points / spot) - first * points / spot ** 2) * spot * 0.01
+    assert mid["gamma"] == pytest.approx(curvature, rel=2e-3)
+
+
+@pytest.mark.parametrize("strike", [1.12, 1.17])
+def test_forward_reporting_gamma_still_matches_the_curvature(markets, strike):
+    """Forward reporting (kept for files and tests): gamma per forward delta."""
+    context, market, row = line_inputs(markets, "EURUSD", strike)
+    forward = market.copy_with(delta_reporting="forward")
+    spot, step = float(market.s), 1e-3
+    levels, errors = calculate_spot_ladder(
+        [(0, row.drop("valuation"))], [spot * (1 - step), spot, spot * (1 + step)], VALUATION,
+        context.market_for_expiry, context.resolve_market_expiry, "vv", "dn", True, BETAS,
+        mode="reference")
+    assert errors == []
+    low, mid, high = sorted(levels, key=lambda level: level["spot"])
+    pnl = [level["pnl_base"] * level["spot"] for level in (low, mid, high)]
     discount = term_discount_factor(market, pd.Timestamp(row.expiry), VALUATION)
     curvature = (pnl[0] + pnl[2] - 2 * pnl[1]) / (spot * step) ** 2 * spot * 0.01 / discount
-    assert mid["gamma"] == pytest.approx(curvature, rel=2e-3)
+    gamma = greeks_at(forward, row, BETAS)["gamma"]
+    assert gamma == pytest.approx(curvature, rel=2e-3)
 
 
 def test_gamma_falls_back_to_the_calculators_when_the_new_one_fails(markets, monkeypatch):

@@ -514,6 +514,13 @@ def _pair_view(totals, market, overrides, valuation_date=None):
                    f"{snapshot.date_time.replace('T', ' ')}).")
 
 
+def pair_convention_rows(results):
+    """``results`` with ``delta`` in each line's pair convention, when priced
+    with it; a line without keeps its spot-equivalent delta."""
+    return [dict(row, delta=row["pair_delta"]) if row.get("pair_delta") is not None else row
+            for row in results]
+
+
 def _line_items(results, forwards):
     """One pair's options and forwards, by trade id."""
     pairs = sorted({row["currency_pair"] for row in (*results, *forwards)})
@@ -525,13 +532,20 @@ def _line_items(results, forwards):
         # Smile Greeks: the standard ones and any extras the pricing carried.
         greeks = [name for name in greek_catalog.CATALOG if name in options[0]]
         columns = ["trade_id", "buy_sell", "call_put", "strike", "expiry", "notional",
-                   "vol_pct", "mtm_base", "pnl_base", *greeks, "smile_status"]
-        frame = _display(options, amounts=("mtm_base", "pnl_base", *greeks))
+                   "vol_pct", "mtm_base", "pnl_base", "delta_convention", *greeks,
+                   "smile_status"]
+        frame = _display(pair_convention_rows(options),
+                         amounts=("mtm_base", "pnl_base", *greeks))
         frame["vol_pct"] = frame["vol_pct"].map(lambda v: f"{float(v):.4f}")
         frame["strike"] = [pricer.format_strike_for_pair(pair, k) for k in results_strikes(options)]
         st.dataframe(red_negatives(frame[[c for c in columns if c in frame]],
                                    ["mtm_base", "pnl_base", *greeks]),
-                     use_container_width=True, hide_index=True)
+                     use_container_width=True, hide_index=True,
+                     column_config={"delta_convention": st.column_config.TextColumn(
+                         "Delta conv.", help="S spot delta, F forward delta: the pair's "
+                                             "convention for the expiry.")})
+        st.caption("Delta is each option's own convention (Delta conv.); the pair "
+                   "totals add spot-equivalent delta and gamma.")
     if hedges:
         st.markdown("**Forwards**")
         amounts = ("base_amount", "delta_offset", "mtm_term", "mtm_base", "pnl_term",

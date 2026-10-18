@@ -30,7 +30,7 @@ class AppHarness:
     """One pair's market as the app would hold it after loading the file."""
 
     def __init__(self, market_payload, pricing_model="vv",
-                 beta_atm=0.7, beta_rr=1.2, beta_bf=0.0, delta_reporting="forward"):
+                 beta_atm=0.7, beta_rr=1.2, beta_bf=0.0, delta_reporting="spot"):
         settings = PricingSettings(pricing_model=pricing_model, delta_reporting=delta_reporting)
         self.context = MarketContext.from_payload(market_payload, settings)
         self.pair = self.context.currency_pair

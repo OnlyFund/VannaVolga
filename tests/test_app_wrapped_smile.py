@@ -269,15 +269,11 @@ def test_save_load_defaults_and_removed_controls():
               and isinstance(n.func, ast.Attribute) and n.func.attr in ("selectbox", "checkbox")
               and n.args and isinstance(n.args[0], ast.Str)]
     assert "ATM convention" not in labels
-    assert "Delta convention" in labels
-    selector = next(
-        n for n in ast.walk(render)
-        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-        and n.func.attr == "selectbox" and n.args
-        and isinstance(n.args[0], ast.Str) and n.args[0].s == "Delta convention"
-    )
-    assert ast.literal_eval(selector.args[1]) == ["forward", "spot"]
-    assert next(ast.literal_eval(k.value) for k in selector.keywords if k.arg == "index") == 0
+    # Deltas follow each pair's convention, spot-equivalent in totals; no
+    # global setting.
+    assert "Delta convention" not in labels
+    from app.market_context import PricingSettings
+    assert PricingSettings().delta_reporting == "spot"
     assert "Use smooth 5-pillar interpolation" not in labels
     assert "Pricing model" in labels and "Premium quote" not in labels
     # The BF convention is per pair, on the Markets tab, not a global setting.

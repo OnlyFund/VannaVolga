@@ -88,7 +88,10 @@ class PricingSettings:
     atm_type: str = "dn"
     delta_base: bool = True
     smooth_pillar_interpolation: bool = True
-    delta_reporting: Optional[str] = "forward"
+    #: Spot-equivalent: every delta and gamma adds up across tenors and pairs.
+    #: Line tables convert each option's delta to its pair's convention
+    #: (``pricing.greeks.convention_deltas``).
+    delta_reporting: Optional[str] = "spot"
 
     def problems(self):
         found = []

@@ -46,17 +46,28 @@ def ladder(markets, mods, steps=(-2, -1, 0, 1, 2), step=0.005, strike=1.15, mode
 def test_row_deltas_add_up_to_the_ladder_pnl(markets, mode):
     context, row, levels = ladder(markets, BETAS, mode=mode)
     expiry = context.resolve_market_expiry(row.expiry)
-    discount = term_discount_factor(context.market_for_expiry(expiry), expiry, VALUATION)
+    market = context.market_for_expiry(expiry)
+    assert market.delta_reporting == "spot"
+    # Spot-equivalent delta is dV/dS * F/S (curves fixed); the ladder moves
+    # spot with forward points fixed, so the P&L slope is delta * S/F, with
+    # S/F = S/(S + c), c the points.
+    points = market.fwd_pts / market.forward_divisor
+
+    def raw(level):
+        return level["delta"] * level["spot"] / (level["spot"] + points)
+
+    def raw_slope(level):
+        spot = level["spot"]
+        return (level["gamma"] / (spot * 0.01) * spot / (spot + points)
+                + level["delta"] * points / (spot + points) ** 2)
     for low, high in zip(levels, levels[1:]):
         pnl = high["pnl_base"] * high["spot"] - low["pnl_base"] * low["spot"]     # USD
         # Trapezoid rule with its end correction (exact for a cubic P&L):
-        # integral of delta = h (d0 + d1) / 2 - h^2 / 12 (d1' - d0'),
-        # with d' = gamma per unit spot = gamma / (S * 1%).
+        # integral of d = h (d0 + d1) / 2 - h^2 / 12 (d1' - d0').
         width = high["spot"] - low["spot"]
-        slope = {id(level): level["gamma"] / (level["spot"] * 0.01) for level in (low, high)}
-        integral = (width * (low["delta"] + high["delta"]) / 2
-                    - width ** 2 / 12 * (slope[id(high)] - slope[id(low)]))
-        assert pnl == pytest.approx(integral * discount, rel=1e-3)
+        integral = (width * (raw(low) + raw(high)) / 2
+                    - width ** 2 / 12 * (raw_slope(high) - raw_slope(low)))
+        assert pnl == pytest.approx(integral, rel=1e-3)
 
 
 def test_base_spot_row_is_todays_greeks(markets):

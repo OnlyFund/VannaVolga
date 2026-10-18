@@ -18,10 +18,12 @@ TRADE_ID_COLUMN = "trade_id"
 PREMIUM_CODE_COLUMN = "_premium_code"
 BOOKING_COLUMNS = ("book", "counterparty")
 #: Always shown after pricing; the Greek columns follow the Greek picker.
-SUMMARY_RESULT_COLUMNS = ("vol_pct", "mtm_base", "pnl_base")
+SUMMARY_RESULT_COLUMNS = ("vol_pct", "mtm_base", "pnl_base", "delta_convention")
 #: Every read-only result column a line can carry (all catalogue Greeks).
 LINE_RESULT_COLUMNS = (*SUMMARY_RESULT_COLUMNS, *catalog.columns(catalog.CATALOG))
 PRICER_GREEKS_KEY = "pricer_greeks"
+#: A line shows its delta in its pair's convention, when the pricing has it.
+PAIR_DELTA_COLUMNS = {"delta": "pair_delta", "fixed_delta": "fixed_pair_delta"}
 
 #: Input cells whose edits can change a resolved pair, expiry or strike.
 RESOLVED_INPUT_COLUMNS = ("currency_pair", "expiry", "call_put", "strike")
@@ -42,10 +44,14 @@ def _with_line_results(rows, results, greek_columns=None):
             continue
         row_index = row_number - 1
         for column in shown:
-            if column in result:
-                value = result[column]
-                if value is None or pd.isna(value):
+            source = PAIR_DELTA_COLUMNS.get(column, column)
+            source = source if source in result else column
+            if source in result:
+                value = result[source]
+                if value is None or (not isinstance(value, str) and pd.isna(value)):
                     display.at[row_index, column] = pd.NA
+                elif column == "delta_convention":
+                    display.at[row_index, column] = str(value)
                 elif column == "vol_pct":
                     display.at[row_index, column] = f"{float(value):.4f}"
                 else:
@@ -374,6 +380,11 @@ def render_portfolio_block(portfolio_tab, market_pair, pairs=()):
                     "P&L (base)", help="P&L in base currency, including premium.",
                     width="small",
                 ),
+                "delta_convention": st.column_config.TextColumn(
+                    "Delta conv.", width="small",
+                    help="The line's delta convention, the pair's for this expiry: "
+                         "S spot delta, F forward delta (G10 spot up to 1Y, EM forward).",
+                ),
         }
         for greek_name in greeks:
             # Theta is a P&L amount in the pair's premium currency; the other
@@ -393,9 +404,16 @@ def render_portfolio_block(portfolio_tab, market_pair, pairs=()):
                     width="small",
                 )
             )
+            convention_help = (
+                " In the line's convention (Delta conv.); totals add spot-equivalent delta."
+                if greek_name == "delta" else "")
+            fixed_config = editor_column_config[f"fixed_{greek_name}"]
+            if convention_help and isinstance(fixed_config, dict):
+                fixed_config["help"] = (fixed_config.get("help") or "") + convention_help
             editor_column_config[greek_name] = st.column_config.TextColumn(
                 catalog.label(greek_name) + unit,
-                help=f"Smile-adjusted {greek.label.lower()} ({greek.unit}).{unit_help}",
+                help=f"Smile-adjusted {greek.label.lower()} ({greek.unit}).{unit_help}"
+                     f"{convention_help}",
                 width="small",
             )
         edited_rows = st.data_editor(
