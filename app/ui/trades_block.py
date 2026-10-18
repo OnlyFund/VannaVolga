@@ -408,7 +408,8 @@ _PAIR_COLUMNS = "_portfolio_pair_columns_choice"
 
 
 def _greek_columns(names):
-    """Fixed and smile columns of each Greek, then those converted to USD."""
+    """Sticky-delta (``fixed_``) and smile columns of each Greek, then those
+    converted to USD."""
     usd = dict(usd_spots.ALL_USD_COLUMNS)
     return [column for name in names
             for column in (f"fixed_{name}", name,
@@ -468,7 +469,7 @@ def _pair_view(totals, market, overrides, valuation_date=None):
     with picker_col, st.expander("Columns", expanded=False):
         chosen = st.multiselect(
             "Output columns", optional, key="portfolio_pair_columns",
-            label_visibility="collapsed",
+            label_visibility="collapsed", format_func=greek_catalog.label,
             help="Add or remove output columns; pair and spot are always shown.")
     st.session_state[_PAIR_COLUMNS] = list(chosen)
     unpriced = [c for c in chosen if c not in totals]
@@ -498,9 +499,13 @@ def _pair_view(totals, market, overrides, valuation_date=None):
         red_negatives(frame, [c for c in frame.columns if c not in RATE_COLUMNS]), key=key, use_container_width=True, hide_index=True,
         height=_table_height(len(frame)),
         disabled=[c for c in frame.columns if c != "spot"],
-        column_config={"spot": st.column_config.TextColumn(
-            "spot ✎",
-            help="Edit to reprice the portfolio at this spot; Refresh spot reverts.")},
+        column_config={
+            "spot": st.column_config.TextColumn(
+                "spot ✎",
+                help="Edit to reprice the portfolio at this spot; Refresh spot reverts."),
+            # Greek columns by name: (sticky) sticky-delta, (smile) the betas.
+            **{c: st.column_config.TextColumn(greek_catalog.label(c))
+               for c in frame.columns if greek_catalog.greek_of(c)}},
         on_change=_on_spot_edit, args=(key, pairs, market))
     st.caption("One row per currency pair, hedge forwards included. Edit spot to reprice "
                "the portfolio at it; market_spot and the Markets tab keep the market data "

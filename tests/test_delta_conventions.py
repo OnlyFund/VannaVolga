@@ -158,4 +158,4 @@ def test_spot_and_forward_delta_are_optional_picker_columns():
     assert "spot_delta" in greek_catalog.CATALOG and "fwd_delta" in greek_catalog.CATALOG
     assert "spot_delta" not in greek_catalog.BASE_GREEKS        # not shown by default
     assert "fwd_delta" not in greek_catalog.EXTRA_GREEKS        # no extra pricing
-    assert greek_catalog.label("fixed_fwd_delta") == "Fixed forward delta"
+    assert greek_catalog.label("fixed_fwd_delta") == "Forward delta (sticky)"

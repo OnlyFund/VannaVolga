@@ -31,7 +31,8 @@ def render_greek_picker(key, default=catalog.BASE_GREEKS, label="Greeks"):
         st.session_state[key] = catalog.known(default)
     chosen = st.multiselect(
         label, list(catalog.CATALOG), key=key, format_func=_option_label,
-        help="Each Greek shows as a fixed-volatility and a smile column. Decay is the "
+        help="Each Greek shows as a sticky-delta column (smile quotes unchanged as spot "
+             "moves) and a smile column (smile moved by the betas). Decay is the "
              "change to the next business day; gamma per vol is gamma's change per vol "
              "point; weighted Greeks are scaled by 0.25/T^0.4. Extras are computed "
              "when you price.")

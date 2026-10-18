@@ -577,8 +577,9 @@ def render_app():
         theta_date = next_business_day(currency_pair, valuation_date)
         theta_days = (pd.Timestamp(theta_date) - pd.Timestamp(valuation_date)).days
         st.caption(
-            "Line results are shown in the pricer grid. f-prefix Greek columns are "
-            "fixed-volatility risks; unprefixed columns are smile-adjusted risks. "
+            "Line results are shown in the pricer grid. Sticky-delta Greeks keep the "
+            "ATM/RR/BF quotes unchanged as spot moves; smile Greeks move the smile by "
+            "the betas (equal when every beta is 0). "
             "Premium is negative for buys and positive for sells. MTM and P&L are "
             "shown in base currency. "
             "Line deltas are in the pair's convention for the expiry (Delta conv.: "

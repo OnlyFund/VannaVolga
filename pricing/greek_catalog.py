@@ -1,7 +1,9 @@
 """Every Greek the app can report, in one list shared by all tabs.
 
-Each Greek comes in two columns: ``fixed_<name>`` (fixed volatility) and
-``<name>`` (smile-adjusted). The eight ``BASE_GREEKS`` are always computed;
+Each Greek comes in two columns: ``fixed_<name>``, shown as sticky-delta (the
+ATM/RR/BF quotes stay unchanged as spot moves, so the smile moves with spot in
+delta terms), and ``<name>``, shown as smile (the smile moved by the betas).
+The column keys keep ``fixed_`` so saved files and choices still read. The eight ``BASE_GREEKS`` are always computed;
 the ``EXTRA_GREEKS`` only when a report asks for them
 (``pricing.greeks.calculate_extra_greeks``), since each costs extra pricing:
 
@@ -53,6 +55,10 @@ EXTRA_GREEKS = tuple(name for name in CATALOG
 DECAY_GREEKS = tuple(greek.name for greek in _DECAY)
 WEIGHTED_GREEKS = tuple(greek.name for greek in _WEIGHTED)
 GROUPS = ("first order", "decay", "cross", "weighted")
+#: Display tags of the two families (``fixed_<name>`` and ``<name>``), after
+#: the Greek so a narrow column still shows which Greek it is.
+STICKY_DELTA = "sticky"
+SMILE = "smile"
 
 
 def columns(names):
@@ -79,10 +85,16 @@ def greek_of(column):
     return name if name in CATALOG else None
 
 
-def label(column):
-    """Display label for a Greek column (``fixed_vega`` -> ``Fixed vega``)."""
-    fixed = column.startswith("fixed_")
-    greek = CATALOG.get(column[6:] if fixed else column)
+def label(column, unit=None):
+    """Display label for a Greek column: ``fixed_vega`` -> ``Vega (sticky)``
+    (sticky-delta), ``vega`` -> ``Vega (smile)``, ``vega_usd`` ->
+    ``Vega (smile, USD)``; ``unit`` adds to the tag. Other columns unchanged."""
+    usd = column.endswith("_usd")
+    name = column[:-4] if usd else column
+    fixed = name.startswith("fixed_")
+    greek = CATALOG.get(name[6:] if fixed else name)
     if greek is None:
         return column
-    return ("Fixed " if fixed else "Smile ") + greek.label[0].lower() + greek.label[1:]
+    tags = [STICKY_DELTA if fixed else SMILE, *(["USD"] if usd else []),
+            *([unit] if unit else [])]
+    return f"{greek.label} ({', '.join(tags)})"

@@ -61,8 +61,10 @@ def render_risk(tab, market_set, mods, ladder_mode):
                 help="Adds the selected hedge forwards: to the ladder and the Greek "
                      "buckets, and to the last call bucket of the strike grid.")
         with fixed_col:
-            fixed = st.checkbox("Fixed-vol Greeks", key="risk_fixed",
-                                help="Use fixed-volatility instead of smile Greeks.")
+            fixed = st.checkbox("Sticky-delta Greeks", key="risk_fixed",
+                                help="Use sticky-delta Greeks (smile quotes unchanged as "
+                                     "spot moves) instead of smile Greeks (smile moved by "
+                                     "the betas).")
         options = [t for t in trades if t.currency_pair == pair and t.is_option]
         hedges = [t for t in trades if t.currency_pair == pair and t.is_forward]
         st.caption(f"{pair}: {len(options)} options"
@@ -116,7 +118,7 @@ def render_risk(tab, market_set, mods, ladder_mode):
             buckets = risk_grid.greek_buckets(lines, labels, dates, bucket_greeks)
             buckets.index = [CATALOG[name].label for name in buckets.index]
             st.dataframe(red_negatives(_formatted(buckets)), use_container_width=True)
-            st.caption("Greeks per expiry bucket (" + ("fixed-vol" if fixed else "smile")
+            st.caption("Greeks per expiry bucket (" + ("sticky-delta" if fixed else "smile")
                        + "), split between neighbouring buckets by expiry. Theta is in "
                          "the premium currency; the rest in the base currency.")
 

@@ -149,7 +149,7 @@ def risk_lines(markets, pair, trades, results, forwards, include_hedges=False, f
     """``RiskLine`` for each priced option of ``pair`` (and its forwards).
 
     ``results`` / ``forwards`` come from ``service.price_trades``; ``fixed``
-    uses the fixed-vol Greeks instead of the smile ones. ``greeks`` are the
+    uses the sticky-delta (``fixed_``) Greeks instead of the smile ones. ``greeks`` are the
     Greeks each line carries; one the results lack (or that failed) is 0.
     Forwards carry delta and theta only.
     """

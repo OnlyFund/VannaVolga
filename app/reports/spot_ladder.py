@@ -578,9 +578,8 @@ def render_spot_ladder(tab, results, errors, current_spot, greeks=GREEK_NAMES):
             "pnl_base": st.column_config.NumberColumn("P&L (base)", format="%.0f"),
         }
         for column in shown:
-            label = greek_label(column)
-            if column in ("theta", "fixed_theta"):
-                label += " (prem ccy)"
+            label = greek_label(column, "prem ccy" if column in ("theta", "fixed_theta")
+                                else None)
             config[column] = st.column_config.NumberColumn(label, format="%.0f")
 
         def highlight_current(row):

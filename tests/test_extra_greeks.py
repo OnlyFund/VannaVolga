@@ -65,8 +65,11 @@ def test_catalogue_lists_every_greek_once_in_groups():
                                                       "fixed_gamma_vol", "gamma_vol"]
     assert catalog.known(["sega", "nonsense", "delta", "delta"]) == ["delta", "sega"]
     assert catalog.extras(["delta", "vega_decay"]) == ["vega_decay"]
-    assert catalog.label("fixed_delta_decay") == "Fixed delta decay (charm)"
-    assert catalog.label("gamma_vol") == "Smile gamma per vol"
+    assert catalog.label("fixed_delta_decay") == "Delta decay (charm) (sticky)"
+    assert catalog.label("vega_usd") == "Vega (smile, USD)"
+    assert catalog.label("theta", "prem ccy") == "Theta (smile, prem ccy)"
+    assert catalog.label("pnl_usd") == "pnl_usd"
+    assert catalog.label("gamma_vol") == "Gamma per vol (smile)"
     assert catalog.label("mtm_base") == "mtm_base"
 
 

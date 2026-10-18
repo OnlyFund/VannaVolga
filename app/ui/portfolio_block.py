@@ -389,9 +389,7 @@ def render_portfolio_block(portfolio_tab, market_pair, pairs=()):
         for greek_name in greeks:
             # Theta is a P&L amount in the pair's premium currency; the other
             # Greeks are in the base currency.
-            unit = (
-                " (prem ccy)" if greek_name == "theta" else ""
-            )
+            unit = "prem ccy" if greek_name == "theta" else None
             unit_help = (
                 " In the premium currency: USD when USD is the term currency, "
                 "otherwise the base currency." if greek_name == "theta" else ""
@@ -399,8 +397,9 @@ def render_portfolio_block(portfolio_tab, market_pair, pairs=()):
             greek = catalog.CATALOG[greek_name]
             editor_column_config[f"fixed_{greek_name}"] = (
                 st.column_config.TextColumn(
-                    catalog.label(f"fixed_{greek_name}") + unit,
-                    help=f"Fixed-volatility {greek.label.lower()} ({greek.unit}).{unit_help}",
+                    catalog.label(f"fixed_{greek_name}", unit),
+                    help=f"Sticky-delta {greek.label.lower()} ({greek.unit}): the smile "
+                         f"quotes stay unchanged as spot moves.{unit_help}",
                     width="small",
                 )
             )
@@ -411,8 +410,9 @@ def render_portfolio_block(portfolio_tab, market_pair, pairs=()):
             if convention_help and isinstance(fixed_config, dict):
                 fixed_config["help"] = (fixed_config.get("help") or "") + convention_help
             editor_column_config[greek_name] = st.column_config.TextColumn(
-                catalog.label(greek_name) + unit,
-                help=f"Smile-adjusted {greek.label.lower()} ({greek.unit}).{unit_help}"
+                catalog.label(greek_name, unit),
+                help=f"Smile {greek.label.lower()} ({greek.unit}): the smile moved by "
+                     f"the betas.{unit_help}"
                      f"{convention_help}",
                 width="small",
             )
