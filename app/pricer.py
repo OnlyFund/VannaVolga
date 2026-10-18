@@ -16,6 +16,7 @@ from app.curve_roll import next_business_day
 from app.market_set import MarketSet
 from app.premium_side import premium_currency
 from app.smile_service import market_diagnostics
+from app.vol_override import shift_market, shifted_market, strike_vol, typed_vol
 from helper_functions.input_resolvers import parse_notional, resolve_strike
 from pricing import Pricable
 from pricing.fx_forward import FxForwardPosition
@@ -129,21 +130,43 @@ def price_line(markets, line_number, source_row, mods, extras=()):
         next_market = context.market_for_expiry(
             row["expiry"], as_of=next_valuation, allow_short_end=True
         )
+        # A typed vol prices the line on its own copy of the smile, shifted
+        # so the strike's vol is the typed one: the Greeks and an auto premium
+        # (the dealt price) come from it, MTM from the market, so P&L is the
+        # market value against the price at the typed vol.
+        line_market, vol_fields, value_args = market, {}, {}
+        override = typed_vol(row)
+        if override is not None:
+            unit_row = row.copy()
+            unit_row["notional"] = 1.0
+            model_args = (settings.pricing_model, settings.atm_type, settings.delta_base)
+            market_vol, _ = strike_vol(market, unit_row, *model_args)
+            line_market, shift = shifted_market(market, unit_row, override, *model_args,
+                                                market_vol=market_vol)
+            next_market = shift_market(next_market, shift)
+            value_args = {"value_market": market}
+            vol_fields = {"vol_override": True, "mkt_vol_pct": market_vol, "vol_shift": shift}
         pricing_result = Pricable(
             row=row, premium=None if premium is None else float(premium),
             premium_ccy=premium_ccy,
         ).price(
-            market, settings.pricing_model, settings.atm_type, settings.delta_base, mods,
+            line_market, settings.pricing_model, settings.atm_type, settings.delta_base, mods,
             next_market=next_market, next_valuation=next_valuation,
             # Only when asked: a Streamlit session that reloaded app/ but not
             # pricing/ (outside the watched folder) keeps pricing without extras.
             **({"extras": tuple(extras)} if extras else {}),
+            # Only for a typed vol, as for extras.
+            **value_args,
         )
+        if vol_fields:
+            vol_fields["vol_spread"] = pricing_result["vol_pct"] - vol_fields["mkt_vol_pct"]
+            # The premium at the typed vol (what an auto premium is).
+            vol_fields["prem_at_vol"] = abs(pricing_result["value_at_vol"])
         forward_rate = market.s + market.fwd_pts / market.forward_divisor
         # Spot, forward and pair-convention deltas; none if they cannot be
         # converted, and the line keeps its reported (spot-equivalent) delta.
         conventions = convention_deltas(
-            market, row, row["expiry"], valuation_date,
+            line_market, row, row["expiry"], valuation_date,
             pricing_result.get("fixed_delta"), pricing_result.get("delta"))
         status, reason = market_diagnostics(market, row["expiry"])
         # A booked trade keeps its id through pricing; typed lines have none.
@@ -153,6 +176,7 @@ def price_line(markets, line_number, source_row, mods, extras=()):
             "row": line_number,
             **identity,
             **pricing_result,
+            **vol_fields,
             "strike": resolved_strike,
             "call_put": row["call_put"],
             "buy_sell": row["buy_sell"],

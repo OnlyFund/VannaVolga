@@ -185,12 +185,15 @@ class Pricable:
 
     def price(
         self, market, pricing_model, atm_type, delta_base, mods=None,
-        next_market=None, next_valuation=None, extras=(),
+        next_market=None, next_valuation=None, extras=(), value_market=None,
     ):
         """Return the line's MTM, P&L, implied vol, and complete Greek vector.
 
         ``extras`` names on-demand Greeks (``pricing.greek_catalog``) to add;
         any that fail are ``None`` with the reason in ``greek_problems``.
+        ``value_market`` (a line priced at its own vol): MTM and P&L are
+        valued on it (the market), while the vol, Greeks and an auto premium
+        come from ``market``; the result then carries ``value_at_vol``.
         """
         from pricing.greeks import calculate_extra_greeks, calculate_greeks, theta_currency
 
@@ -230,11 +233,17 @@ class Pricable:
             )
             unit_greeks = {**unit_greeks, **unit_extras}
         conversion = 1.0 / float(market.s) if premium_ccy == base_ccy else 1.0
+        value_at_vol = float(unit_mtm) * notional * conversion
+        if value_market is not None:
+            _, _, unit_mtm = price_option(
+                value_market, row, pricing_model, atm_type, delta_base
+            )
         mtm = float(unit_mtm) * notional * conversion
         if auto_premium:
             # The option's value in the premium currency: paid on a buy,
-            # received on a sale, so premium + MTM is zero.
-            signed_premium = signed_premium_cashflow(abs(mtm), buy_sell)
+            # received on a sale, so premium + MTM is zero (at the line's
+            # own vol, against the market's value when valued apart).
+            signed_premium = signed_premium_cashflow(abs(value_at_vol), buy_sell)
         mtm_base = float(unit_mtm) * notional / float(market.s)
         mtm_term = float(unit_mtm) * notional
         premium_base = signed_premium if premium_ccy == base_ccy else signed_premium / float(market.s)
@@ -263,6 +272,8 @@ class Pricable:
         # Only with extras requested: results without them stay exactly as before.
         problems = {"greek_problems": greek_problems} if extras else {}
         auto = {"premium_auto": True, "auto_premium": abs(signed_premium)} if auto_premium else {}
+        if value_market is not None:
+            auto["value_at_vol"] = value_at_vol
         return {
             **problems,
             **auto,

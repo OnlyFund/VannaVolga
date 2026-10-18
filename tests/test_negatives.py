@@ -60,3 +60,13 @@ def test_red_negatives_falls_back_to_the_plain_table():
     assert red_negatives(frame, columns=[]) is frame
     assert red_negatives(frame.iloc[:0]) is not None
     assert red_negatives("not a table") == "not a table"
+
+
+def test_styled_tables_keep_the_same_id_from_run_to_run():
+    # Streamlit sends the Styler's id with the table; a random one rebuilt
+    # the Pricer editor every run and dropped a line being added.
+    frame = pd.DataFrame({"pair": ["EURUSD"], "mtm_base": ["-1,234"]})
+    first, second = red_negatives(frame, ["mtm_base"]), red_negatives(frame.copy(), ["mtm_base"])
+    assert first.uuid == second.uuid
+    other = red_negatives(frame.rename(columns={"mtm_base": "pnl_base"}), ["pnl_base"])
+    assert other.uuid != first.uuid

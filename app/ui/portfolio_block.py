@@ -5,6 +5,7 @@ import streamlit as st
 
 from app.premium_side import SIDES, TERM, premium_currency
 from app.pricer import AUTO, GREEK_NAMES, PREMIUM_MODE, TYPED
+from app.vol_override import MARKET, MAX_VOL, VOL_INPUT, VOL_MODE
 from app.ui.greek_picker import render_greek_picker
 from app.ui.negatives import red_negatives
 from pricing import greek_catalog as catalog
@@ -18,9 +19,13 @@ TRADE_ID_COLUMN = "trade_id"
 PREMIUM_CODE_COLUMN = "_premium_code"
 BOOKING_COLUMNS = ("book", "counterparty")
 #: Always shown after pricing; the Greek columns follow the Greek picker.
-SUMMARY_RESULT_COLUMNS = ("vol_pct", "mtm_base", "pnl_base", "delta_convention")
+#: The vol a line priced at is its Vol % cell (typed, or the market's).
+SUMMARY_RESULT_COLUMNS = ("mkt_vol_pct", "vol_spread", "prem_at_vol", "mtm_base", "pnl_base",
+                          "delta_convention")
 #: Every read-only result column a line can carry (all catalogue Greeks).
-LINE_RESULT_COLUMNS = (*SUMMARY_RESULT_COLUMNS, *catalog.columns(catalog.CATALOG))
+LINE_RESULT_COLUMNS = (*SUMMARY_RESULT_COLUMNS, "vol_pct", *catalog.columns(catalog.CATALOG))
+#: A line at market has no override fields: its market vol is its vol.
+RESULT_FALLBACKS = {"mkt_vol_pct": "vol_pct"}
 PRICER_GREEKS_KEY = "pricer_greeks"
 #: A line shows its delta in its pair's convention, when the pricing has it.
 PAIR_DELTA_COLUMNS = {"delta": "pair_delta", "fixed_delta": "fixed_pair_delta"}
@@ -45,15 +50,19 @@ def _with_line_results(rows, results, greek_columns=None):
         row_index = row_number - 1
         for column in shown:
             source = PAIR_DELTA_COLUMNS.get(column, column)
-            source = source if source in result else column
+            source = source if source in result else RESULT_FALLBACKS.get(column, column)
             if source in result:
                 value = result[source]
                 if value is None or (not isinstance(value, str) and pd.isna(value)):
                     display.at[row_index, column] = pd.NA
                 elif column == "delta_convention":
                     display.at[row_index, column] = str(value)
-                elif column == "vol_pct":
+                elif column in ("vol_pct", "mkt_vol_pct"):
                     display.at[row_index, column] = f"{float(value):.4f}"
+                elif column == "vol_spread":
+                    display.at[row_index, column] = f"{float(value):+.4f}"
+                elif column == "prem_at_vol":
+                    display.at[row_index, column] = f"{float(value):,.2f}"
                 else:
                     display.at[row_index, column] = f"{float(value):,.0f}"
     return display
@@ -67,7 +76,7 @@ LINE_INPUT_COLUMNS = (
 
 #: Cells pricing reads: a line's results stay valid while these are unchanged
 #: (ticks, book, counterparty and trade id do not change a price).
-PRICED_INPUT_COLUMNS = (*LINE_INPUT_COLUMNS, "premium_ccy", PREMIUM_MODE)
+PRICED_INPUT_COLUMNS = (*LINE_INPUT_COLUMNS, "premium_ccy", PREMIUM_MODE, VOL_INPUT, VOL_MODE)
 #: A line's terms: changing any of them resets its premium to auto.
 TERM_COLUMNS = ("currency_pair", "expiry", "call_put", "strike", "buy_sell", "notional",
                 "premium_ccy")
@@ -98,6 +107,51 @@ def with_premium_modes(rows):
                                                                   index=rows.index)
     rows[PREMIUM_MODE] = [premium_mode_of(mode, premium)
                           for mode, premium in zip(modes, premiums)]
+    return rows
+
+
+def _vol_entered(value):
+    """True for a vol cell holding a usable vol (percent)."""
+    try:
+        return _has_value(value) and 0.0 < float(value) <= MAX_VOL
+    except (TypeError, ValueError):
+        return False
+
+
+def vol_mode_of(mode, vol):
+    """A line's vol mode: market without a usable vol; else its own when
+    valid, and typed for a line that brings a vol but no mode."""
+    if not _vol_entered(vol):
+        return MARKET
+    if isinstance(mode, str) and mode.strip().lower() in (MARKET, TYPED):
+        return mode.strip().lower()
+    return TYPED
+
+
+def with_vol_modes(rows):
+    """``rows`` with a valid vol mode on every line (see ``vol_mode_of``)."""
+    rows = rows.copy()
+    blank = pd.Series([None] * len(rows), index=rows.index)
+    modes = rows[VOL_MODE] if VOL_MODE in rows else blank
+    vols = rows[VOL_INPUT] if VOL_INPUT in rows else blank
+    rows[VOL_MODE] = [vol_mode_of(mode, vol) for mode, vol in zip(modes, vols)]
+    return rows
+
+
+def apply_market_vols(rows, results):
+    """``rows`` with each market line's Vol % set to the vol it priced at;
+    typed lines keep their vol."""
+    if VOL_INPUT not in rows:
+        return rows
+    rows = rows.copy()
+    modes = rows[VOL_MODE] if VOL_MODE in rows else pd.Series([MARKET] * len(rows),
+                                                              index=rows.index)
+    for result in results:
+        number = result.get("row")
+        if (isinstance(number, int) and 1 <= number <= len(rows)
+                and not result.get("vol_override") and modes.iloc[number - 1] != TYPED
+                and result.get("vol_pct") is not None):
+            rows.iat[number - 1, rows.columns.get_loc(VOL_INPUT)] = float(result["vol_pct"])
     return rows
 
 
@@ -224,6 +278,16 @@ def _apply_editor_state(rows, editor_state):
                     updated.iat[index, mode] = AUTO
                     if "premium" in updated.columns:
                         updated.iat[index, updated.columns.get_loc("premium")] = float("nan")
+            # Typing a vol makes it the line's (clearing it returns to the
+            # market); a change to the terms returns it to the market too.
+            if VOL_MODE in updated.columns:
+                mode = updated.columns.get_loc(VOL_MODE)
+                if VOL_INPUT in changes:
+                    updated.iat[index, mode] = TYPED if _vol_entered(changes[VOL_INPUT]) else MARKET
+                elif any(column in TERM_COLUMNS for column in changes):
+                    updated.iat[index, mode] = MARKET
+                    if VOL_INPUT in updated.columns:
+                        updated.iat[index, updated.columns.get_loc(VOL_INPUT)] = float("nan")
 
     deleted_indices = sorted(
         (int(index) for index in editor_state.get("deleted_rows", [])),
@@ -237,6 +301,9 @@ def _apply_editor_state(rows, editor_state):
     if PREMIUM_MODE in updated.columns or added_rows:
         # Added lines: typed when they carry a premium, auto otherwise.
         updated = with_premium_modes(updated)
+    if VOL_MODE in updated.columns or added_rows:
+        # Added lines: typed when they carry a vol, market otherwise.
+        updated = with_vol_modes(updated)
     if "currency_pair" in updated.columns:
         updated["currency_pair"] = updated["currency_pair"].map(
             lambda value: (
@@ -261,6 +328,33 @@ def with_premium_codes(rows, market_pair):
     at = columns.index("premium_ccy") + 1 if "premium_ccy" in columns else len(columns)
     shown.insert(at, PREMIUM_CODE_COLUMN, codes)
     return shown
+
+
+def adopt_pending_rows():
+    """Make lines left by the last run (resolved, priced, or committed edits)
+    the grid's lines, and its pricing results the shown ones.
+
+    The app calls this before it sets up the grid's columns: lines adopted
+    after that would show unprepared for one run, and the editor, whose
+    identity is its contents, would be rebuilt on the next run, dropping a
+    line being added. Calling it again in the same run does nothing.
+    """
+    pending_resolved_rows = st.session_state.pop("_pending_resolved_portfolio_rows", None)
+    pending_priced_rows = st.session_state.pop("_pending_priced_portfolio_rows", None)
+    pending_editor_rows = st.session_state.pop("_pending_editor_portfolio_rows", None)
+    pending_line_results = st.session_state.pop("_pending_portfolio_line_results", None)
+    pending_rows = (
+        pending_resolved_rows
+        if pending_resolved_rows is not None
+        else pending_priced_rows
+        if pending_priced_rows is not None
+        else pending_editor_rows
+    )
+    if pending_rows is not None:
+        st.session_state.option_rows = pending_rows
+        st.session_state.pop("portfolio_editor_v3", None)
+    if pending_line_results is not None:
+        st.session_state._portfolio_line_results = pending_line_results
 
 
 def render_portfolio_block(portfolio_tab, market_pair, pairs=()):
@@ -314,30 +408,8 @@ def render_portfolio_block(portfolio_tab, market_pair, pairs=()):
             "Tick Remove to delete a line."
         )
         greeks = render_greek_picker(PRICER_GREEKS_KEY)
-        pending_resolved_rows = st.session_state.pop(
-            "_pending_resolved_portfolio_rows", None
-        )
-        pending_priced_rows = st.session_state.pop(
-            "_pending_priced_portfolio_rows", None
-        )
-        pending_editor_rows = st.session_state.pop(
-            "_pending_editor_portfolio_rows", None
-        )
-        pending_line_results = st.session_state.pop(
-            "_pending_portfolio_line_results", None
-        )
-        pending_rows = (
-            pending_resolved_rows
-            if pending_resolved_rows is not None
-            else pending_priced_rows
-            if pending_priced_rows is not None
-            else pending_editor_rows
-        )
-        if pending_rows is not None:
-            st.session_state.option_rows = pending_rows
-            st.session_state.pop("portfolio_editor_v3", None)
-        if pending_line_results is not None:
-            st.session_state._portfolio_line_results = pending_line_results
+        # Normally done already, before the app sets up the grid's columns.
+        adopt_pending_rows()
         line_results = st.session_state.get("_portfolio_line_results")
         # Ticking, booking or naming a book does not change a price, so
         # results stay shown until a priced input changes.
@@ -387,6 +459,25 @@ def render_portfolio_block(portfolio_tab, market_pair, pairs=()):
                 "notional": st.column_config.TextColumn(
                     "Notional", help="Base-currency notional, for example 100k or 1m.", width="small",
                 ),
+                VOL_INPUT: st.column_config.NumberColumn(
+                    "Vol %", min_value=0.0, max_value=MAX_VOL, format="%.4f", width="small",
+                    help="The vol the line prices at: the market's at the strike, or "
+                         "yours. A typed vol shifts this line's smile so its strike is at "
+                         "your vol; Greeks follow it, an auto premium stays at the market "
+                         "price, so P&L is your vol against market. Clear it, or change "
+                         "a term, to return to the market."),
+                VOL_MODE: st.column_config.TextColumn(
+                    "Vol src", width="small",
+                    help="market: the smile's vol at the strike. typed: the vol you entered."),
+                "mkt_vol_pct": st.column_config.TextColumn(
+                    "Mkt vol %", width="small", help="The market smile's vol at the strike."),
+                "vol_spread": st.column_config.TextColumn(
+                    "Vol spread", width="small",
+                    help="Your vol minus the market's, in vol points (typed lines)."),
+                "prem_at_vol": st.column_config.TextColumn(
+                    "Prem @ vol", width="small",
+                    help="The premium at your vol, in the premium currency (typed lines). "
+                         "Type it into Premium to book that price."),
                 "premium": st.column_config.NumberColumn(
                     "Premium", help="Absolute premium amount. Its cashflow sign follows Side.",
                     min_value=0.0, format="%.2f", width="small",
@@ -486,7 +577,7 @@ def render_portfolio_block(portfolio_tab, market_pair, pairs=()):
             column_config=editor_column_config,
             hide_index=True,
             disabled=[*LINE_RESULT_COLUMNS, TRADE_ID_COLUMN, PREMIUM_CODE_COLUMN,
-                      PREMIUM_MODE],
+                      PREMIUM_MODE, VOL_MODE],
             key="portfolio_editor_v3",
             on_change=resolve_strikes_after_edit,
         )

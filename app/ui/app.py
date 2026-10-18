@@ -24,9 +24,11 @@ from app.ui.greek_picker import chosen_greeks, missing_extras
 from app.ui.negatives import red_negatives
 from pricing import greek_catalog
 from app.ui.portfolio_block import (
-    BOOK_COLUMN, PREMIUM_MODE, PRICER_GREEKS_KEY, TRADE_ID_COLUMN, apply_auto_premiums,
-    render_portfolio_block, same_priced_inputs, with_premium_modes,
+    BOOK_COLUMN, PREMIUM_MODE, PRICER_GREEKS_KEY, TRADE_ID_COLUMN, adopt_pending_rows,
+    apply_auto_premiums, apply_market_vols, render_portfolio_block, same_priced_inputs, with_premium_modes,
+    with_vol_modes,
 )
+from app.vol_override import VOL_INPUT, VOL_MODE
 from app.ui.trades_block import render_blotter, render_portfolio, trade_store
 from app.ui.risk_block import render_risk
 from app.ui.store_sync import LAYERS, render_store_status, sync_store_markets
@@ -165,6 +167,9 @@ def render_app():
 
     if "option_rows" not in st.session_state:
         st.session_state.option_rows = default_rows()
+    # Lines the last run left (priced, resolved, edited) are set up below
+    # like every other line.
+    adopt_pending_rows()
 
     # Migrate existing in-session rows when new pricing inputs are introduced.
     if "currency_pair" not in st.session_state.option_rows:
@@ -188,15 +193,17 @@ def render_app():
         st.session_state["_premium_notes"] = premium_notes
     # Every line has a premium mode: auto (pricing fills the premium) or typed.
     st.session_state.option_rows = with_premium_modes(st.session_state.option_rows)
-    if st.session_state.get("_portfolio_editor_schema") != 7:
+    # ... and a vol mode: market (the smile's vol) or typed.
+    st.session_state.option_rows = with_vol_modes(st.session_state.option_rows)
+    if st.session_state.get("_portfolio_editor_schema") != 8:
         st.session_state.pop("portfolio_editor_v2", None)
         st.session_state.pop("portfolio_editor_v3", None)
-        st.session_state._portfolio_editor_schema = 7
+        st.session_state._portfolio_editor_schema = 8
 
     portfolio_columns = [
         "currency_pair", "expiry", "call_put", "strike", "buy_sell",
-        "notional", "premium", PREMIUM_MODE, "premium_ccy", "book", "counterparty",
-        TRADE_ID_COLUMN,
+        "notional", VOL_INPUT, VOL_MODE, "premium", PREMIUM_MODE, "premium_ccy", "book",
+        "counterparty", TRADE_ID_COLUMN,
     ]
     portfolio_columns += [
         column for column in st.session_state.option_rows.columns
@@ -460,8 +467,10 @@ def render_app():
         results, errors = pricer.price_lines(
             market_set, edited_rows, mods,
             extras=greek_catalog.extras(chosen_greeks(PRICER_GREEKS_KEY)))
-        # Auto lines show the premium their pricing found (P&L zero).
+        # Auto lines show the premium their pricing found (P&L zero), and
+        # market lines the vol they priced at.
         edited_rows = apply_auto_premiums(edited_rows, results)
+        edited_rows = apply_market_vols(edited_rows, results)
         hedge_trades = []
         if delta_hedge:
             hedge_trades, hedge_errors = pricer.hedge_trades_for(market_set, results)

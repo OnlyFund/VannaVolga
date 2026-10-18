@@ -242,9 +242,11 @@ def test_line_results_attach_to_matching_pricer_rows():
     assert {*SUMMARY_RESULT_COLUMNS, *columns(BASE_GREEKS)}.issubset(display.columns)
     assert not set(columns(EXTRA_GREEKS)) & set(display.columns)   # only chosen Greeks show
     assert set(display.columns) - set(rows.columns) <= set(LINE_RESULT_COLUMNS)
-    assert display.loc[0, "vol_pct"] == "8.2500"
+    # A line at market shows its vol as the market vol; no spread or premium at vol.
+    assert display.loc[0, "mkt_vol_pct"] == "8.2500"
+    assert pd.isna(display.loc[0, "vol_spread"]) and pd.isna(display.loc[0, "prem_at_vol"])
     assert display.loc[0, "mtm_base"] == "125"
-    assert pd.isna(display.loc[1, "vol_pct"])
+    assert pd.isna(display.loc[1, "mkt_vol_pct"])
     assert list(display["currency_pair"]) == ["EURUSD", "USDJPY"]
 
 
