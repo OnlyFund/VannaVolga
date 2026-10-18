@@ -29,7 +29,7 @@ def load_markets(name):
 class AppHarness:
     """One pair's market as the app would hold it after loading the file."""
 
-    def __init__(self, market_payload, pricing_model="vv", premium_quote="term_cash",
+    def __init__(self, market_payload, pricing_model="vv",
                  beta_atm=0.7, beta_rr=1.2, beta_bf=0.0, delta_reporting="forward"):
         settings = PricingSettings(pricing_model=pricing_model, delta_reporting=delta_reporting)
         self.context = MarketContext.from_payload(market_payload, settings)
@@ -38,12 +38,10 @@ class AppHarness:
         self.spot = self.context.spot
         self.mods = Modifications(beta_atm=beta_atm, beta_rr=beta_rr, beta_bf=beta_bf)
         self.pricing_model = pricing_model
-        self.premium_quote = premium_quote
 
     def price_rows(self, rows):
         """Price ``rows`` exactly as the Pricer's "Price portfolio" button does."""
-        return pricer.price_lines(self.context, pd.DataFrame(rows), self.mods,
-                                  self.premium_quote)
+        return pricer.price_lines(self.context, pd.DataFrame(rows), self.mods)
 
     def build_delta_hedges(self, rows, mods):
         return pricer.build_delta_hedges(self.context, rows, mods)

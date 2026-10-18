@@ -332,7 +332,7 @@ def market_spots(market_set):
     return {pair: float(market_set.market(pair).spot) for pair in market_set.available()}
 
 
-def render_portfolio(tab, market_set, mods, premium_quote):
+def render_portfolio(tab, market_set, mods):
     """Price a selection of the book through the market set, at the Portfolio spots."""
     store, problem = trade_store()
     with tab:
@@ -359,7 +359,7 @@ def render_portfolio(tab, market_set, mods, premium_quote):
         if clicked or respot:
             extras = chosen_extras(st.session_state.get(_PAIR_COLUMNS, DEFAULT_COLUMNS))
             results, forwards, errors = service.price_trades(
-                market_set.with_spots(overrides), selected, mods, premium_quote,
+                market_set.with_spots(overrides), selected, mods,
                 extras=extras)
             cached = (ids, overrides, results, forwards, errors)
             st.session_state["_portfolio_book_result"] = cached

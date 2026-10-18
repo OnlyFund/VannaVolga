@@ -17,7 +17,6 @@ from app.curve_roll import next_business_day
 from app.smile_service import (
     SURFACE_CACHE_VERSION, DiagnosticsCollector, SurfaceCache, bind_cache,
 )
-from helper_functions.premium_quotes import PREMIUM_QUOTES, premium_quote_label
 from app.ui.market_block import render_market_block
 from app.premium_side import TERM, premium_side
 from app.ui.greek_picker import chosen_greeks, missing_extras
@@ -238,26 +237,6 @@ def render_app():
             "BF quotes are broker strangles", key="broker_strangle",
             help="Disable only for already converted two-vol butterflies.",
         )
-        premium_quote_options = list(PREMIUM_QUOTES)
-        _pair = str(st.session_state.currency_pair).replace("/", "").replace(" ", "").upper()
-        _base_ccy, _term_ccy = (_pair[:3], _pair[3:]) if len(_pair) == 6 else ("BASE", "TERM")
-        # A value persisted by an older build would make the widget raise, so
-        # reset anything unrecognised before the selectbox is constructed.
-        if st.session_state.get("premium_quote") not in premium_quote_options:
-            st.session_state["premium_quote"] = premium_quote_options[0]
-        premium_quote = st.selectbox(
-            "Premium quote",
-            premium_quote_options,
-            key="premium_quote",
-            format_func=lambda q: premium_quote_label(q, _base_ccy, _term_ccy),
-            help=(
-                "Units used to report premium, MTM and P&L. Presentation only: "
-                "it does not change the trade value, the delta convention, or "
-                "the currency the premium settles in."
-            ),
-        )
-        if premium_quote not in PREMIUM_QUOTES:
-            premium_quote = "term_cash"
         st.header("Smile dynamics")
         beta_atm = st.slider("beta_atm", 0.0, 5.0, 0.7, 0.05, key="beta_atm")
         beta_rr = st.slider("beta_rr", 0.0, 2.0, 1.2, 0.05, key="beta_rr")
@@ -391,7 +370,7 @@ def render_app():
     # Pricer results are kept across reruns only while the markets, settings
     # and smile dynamics they were priced with are unchanged.
     pricing_state = repr((sorted(st.session_state.get("_surface_fingerprints", {}).items()),
-                          repr(mods), premium_quote))
+                          repr(mods)))
     for key in ("_portfolio_line_results", "_portfolio_result_cache"):
         held = st.session_state.get(key)
         if held is not None and held.get("state") != pricing_state:
@@ -399,7 +378,6 @@ def render_app():
     edited_rows, delta_hedge, ticked_lines = render_portfolio_block(
         portfolio_tab,
         market_pair=str(st.session_state.currency_pair).strip().upper(),
-        quote_label=premium_quote_label(premium_quote, _base_ccy, _term_ccy),
         pairs=sorted(market_set.pairs),
     )
     if st.session_state.pop("_portfolio_strike_resolution_requested", False):
@@ -479,7 +457,7 @@ def render_app():
         # Pricing reads no session state, but stays on the script thread so
         # progress and diagnostics belong to this run.
         results, errors = pricer.price_lines(
-            market_set, edited_rows, mods, premium_quote,
+            market_set, edited_rows, mods,
             extras=greek_catalog.extras(chosen_greeks(PRICER_GREEKS_KEY)))
         hedge_trades = []
         if delta_hedge:
@@ -617,7 +595,7 @@ def render_app():
         )
 
     render_blotter(blotter_tab)
-    render_portfolio(book_tab, market_set, mods, premium_quote)
-    render_risk(risk_tab, market_set, mods, premium_quote, spot_ladder_mode)
+    render_portfolio(book_tab, market_set, mods)
+    render_risk(risk_tab, market_set, mods, spot_ladder_mode)
     if diagnostics.records():
         st.warning("Some calculations used legacy fallback. The selected pricing model was retained.")

@@ -18,16 +18,13 @@ TRADE_ID_COLUMN = "trade_id"
 PREMIUM_CODE_COLUMN = "_premium_code"
 BOOKING_COLUMNS = ("book", "counterparty")
 #: Always shown after pricing; the Greek columns follow the Greek picker.
-SUMMARY_RESULT_COLUMNS = ("vol_pct", "mtm_base", "pnl_base", "mtm_quote", "pnl_quote")
+SUMMARY_RESULT_COLUMNS = ("vol_pct", "mtm_base", "pnl_base")
 #: Every read-only result column a line can carry (all catalogue Greeks).
 LINE_RESULT_COLUMNS = (*SUMMARY_RESULT_COLUMNS, *catalog.columns(catalog.CATALOG))
 PRICER_GREEKS_KEY = "pricer_greeks"
 
 #: Input cells whose edits can change a resolved pair, expiry or strike.
 RESOLVED_INPUT_COLUMNS = ("currency_pair", "expiry", "call_put", "strike")
-
-#: Columns the pricer supplies already formatted for display.
-PREFORMATTED_RESULT_COLUMNS = ("mtm_quote", "pnl_quote")
 
 
 def _with_line_results(rows, results, greek_columns=None):
@@ -47,12 +44,7 @@ def _with_line_results(rows, results, greek_columns=None):
         for column in shown:
             if column in result:
                 value = result[column]
-                if column in PREFORMATTED_RESULT_COLUMNS:
-                    # Already rendered in the active premium quote upstream.
-                    display.at[row_index, column] = (
-                        pd.NA if value is None else str(value)
-                    )
-                elif value is None or pd.isna(value):
+                if value is None or pd.isna(value):
                     display.at[row_index, column] = pd.NA
                 elif column == "vol_pct":
                     display.at[row_index, column] = f"{float(value):.4f}"
@@ -208,8 +200,7 @@ def with_premium_codes(rows, market_pair):
     return shown
 
 
-def render_portfolio_block(portfolio_tab, market_pair, quote_label="quote",
-                           pairs=()):
+def render_portfolio_block(portfolio_tab, market_pair, pairs=()):
     """Render the Pricer lines and the hedge choice.
 
     The premium currency is chosen as BASE or TERM of the line's pair
@@ -381,16 +372,6 @@ def render_portfolio_block(portfolio_tab, market_pair, quote_label="quote",
                 ),
                 "pnl_base": st.column_config.TextColumn(
                     "P&L (base)", help="P&L in base currency, including premium.",
-                    width="small",
-                ),
-                "mtm_quote": st.column_config.TextColumn(
-                    "MTM ({})".format(quote_label),
-                    help="Mark-to-market in the selected premium quote.",
-                    width="small",
-                ),
-                "pnl_quote": st.column_config.TextColumn(
-                    "P&L ({})".format(quote_label),
-                    help="P&L in the selected premium quote, including premium.",
                     width="small",
                 ),
         }

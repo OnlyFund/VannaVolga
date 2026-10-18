@@ -182,12 +182,12 @@ spot. It does not change the delta or ATM convention.
 
 #### In the app
 
-The sidebar **Premium quote** selector sets the units of the per-line
-`MTM (...)` and `P&L (...)` columns. It is **presentation only**: it does not
-change the trade value, the delta convention, or the currency the premium
-settles in. The conversions live in `helper_functions/premium_quotes.py`,
-which is the single source of truth shared by `BlackScholes.premium()`, the
-portfolio valuation layer and the UI.
+The app reports MTM and P&L in cash (base and premium currency); it has no
+premium-quote selector. Every line's pricing result still carries each quote
+(`mtm_<quote>`, `premium_<quote>`, `pnl_<quote>`). The conversions live in
+`helper_functions/premium_quotes.py`, which is the single source of truth
+shared by `BlackScholes.premium()`, the portfolio valuation layer and the
+premium-adjusted delta.
 
 Failure handling is layered so that a bad input degrades rather than breaks:
 

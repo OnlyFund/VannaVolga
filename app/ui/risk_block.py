@@ -39,7 +39,7 @@ def _selection(store):
     return [trade for trade in trades if trade.trade_id in wanted]
 
 
-def render_risk(tab, market_set, mods, premium_quote, ladder_mode):
+def render_risk(tab, market_set, mods, ladder_mode):
     store, problem = trade_store()
     with tab:
         st.subheader("Risk")
@@ -88,7 +88,7 @@ def render_risk(tab, market_set, mods, premium_quote, ladder_mode):
                 step = st.selectbox("Delta step", STEPS, key="risk_step")
         greeks = greek_catalog.known([*bucket_greeks, measure])
         lines, line_errors = _risk_lines(market_set, pair, options, hedges, include_hedges,
-                                         fixed, mods, premium_quote, greeks)
+                                         fixed, mods, greeks)
         pillars = risk_grid.market_tenors(context)
         with grid_tab:
             tenors_text = st.text_input(
@@ -121,7 +121,7 @@ def render_risk(tab, market_set, mods, premium_quote, ladder_mode):
                          "the premium currency; the rest in the base currency.")
 
 
-def _risk_lines(market_set, pair, options, hedges, include_hedges, fixed, mods, premium_quote,
+def _risk_lines(market_set, pair, options, hedges, include_hedges, fixed, mods,
                 greeks=risk_grid.BUCKET_GREEKS):
     """Price the pair's selection once per inputs (and extra Greeks); cached
     across reruns."""
@@ -132,7 +132,7 @@ def _risk_lines(market_set, pair, options, hedges, include_hedges, fixed, mods, 
     cached = st.session_state.get("_risk_pricing")
     if not cached or cached[0] != key:
         results, forwards, errors = service.price_trades(market_set, [*options, *hedges], mods,
-                                                         premium_quote, extras=extras)
+                                                         extras=extras)
         cached = (key, results, forwards, errors)
         st.session_state["_risk_pricing"] = cached
     _, results, forwards, errors = cached

@@ -279,7 +279,7 @@ def test_save_load_defaults_and_removed_controls():
     assert ast.literal_eval(selector.args[1]) == ["forward", "spot"]
     assert next(ast.literal_eval(k.value) for k in selector.keywords if k.arg == "index") == 0
     assert "Use smooth 5-pillar interpolation" not in labels
-    assert "Pricing model" in labels and "Premium quote" in labels
+    assert "Pricing model" in labels and "Premium quote" not in labels
     market_source = Path(market_block.__file__).read_text(encoding="utf-8-sig")
     assert 'st.session_state.get("broker_strangle", True)' in market_source
     from app.market_store import market_payload

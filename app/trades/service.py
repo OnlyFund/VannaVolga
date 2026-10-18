@@ -141,7 +141,7 @@ def select_trades(store, status=LIVE, currency_pair=None, book=None, counterpart
                         as_of=as_of, live_on=live_on)
 
 
-def price_trades(markets, trades, mods, premium_quote="term_cash", extras=()):
+def price_trades(markets, trades, mods, extras=()):
     """Price booked trades; returns ``(option results, forward rows, errors)``.
 
     Each result carries its ``trade_id``. Expired or cancelled trades are
@@ -158,8 +158,7 @@ def price_trades(markets, trades, mods, premium_quote="term_cash", extras=()):
             options.append(trade.to_pricer_row())
         else:
             forwards.append(trade)
-    results, line_errors = pricer.price_lines(markets, options, mods, premium_quote,
-                                              extras=extras)
+    results, line_errors = pricer.price_lines(markets, options, mods, extras=extras)
     by_row = {number: row["trade_id"] for number, row in enumerate(options, start=1)}
     errors += [_with_trade_id(message, by_row) for message in line_errors]
     forward_rows = []

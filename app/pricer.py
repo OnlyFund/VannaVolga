@@ -17,7 +17,6 @@ from app.market_set import MarketSet
 from app.premium_side import premium_currency
 from app.smile_service import market_diagnostics
 from helper_functions.input_resolvers import parse_notional, resolve_strike
-from helper_functions.premium_quotes import PREMIUM_QUOTES, format_premium_quote
 from pricing import Pricable
 from pricing.fx_forward import FxForwardPosition
 from pricing.greeks import calculate_forward_theta, calculate_greeks, forward_delta_factor
@@ -83,14 +82,12 @@ def market_for_pair(markets, pair, mismatch=None):
     return markets
 
 
-def price_line(markets, line_number, source_row, mods, premium_quote="term_cash", extras=()):
+def price_line(markets, line_number, source_row, mods, extras=()):
     """Price one trade line.
 
     Returns ``(line_number, result, error, resolved_strike)``: exactly one of
     ``result`` (the line's row for the pricer grid) and ``error`` is set.
     """
-    if premium_quote not in PREMIUM_QUOTES:
-        premium_quote = "term_cash"
     resolved_strike = None
     try:
         row = source_row.copy()
@@ -134,11 +131,6 @@ def price_line(markets, line_number, source_row, mods, premium_quote="term_cash"
             **({"extras": tuple(extras)} if extras else {}),
         )
         forward_rate = market.s + market.fwd_pts / market.forward_divisor
-        # Map the chosen quote onto stable column names so the display layer
-        # never has to know which convention is active. Missing conversions
-        # degrade to the term-cash figures.
-        quoted_mtm = pricing_result.get("mtm_" + premium_quote, pricing_result.get("mtm_term"))
-        quoted_pnl = pricing_result.get("pnl_" + premium_quote, pricing_result.get("pnl_term"))
         status, reason = market_diagnostics(market, row["expiry"])
         # A booked trade keeps its id through pricing; typed lines have none.
         identity = ({"trade_id": source_row["trade_id"]}
@@ -151,8 +143,6 @@ def price_line(markets, line_number, source_row, mods, premium_quote="term_cash"
             "call_put": row["call_put"],
             "buy_sell": row["buy_sell"],
             "notional": format_notional(row["notional"]),
-            "mtm_quote": format_premium_quote(quoted_mtm, premium_quote),
-            "pnl_quote": format_premium_quote(quoted_pnl, premium_quote),
             "_forward_rate": forward_rate,
             "smile_status": status,
             "smile_reason": reason,
@@ -177,13 +167,13 @@ def _numbered(rows):
             for number, row in enumerate(rows, start=1)]
 
 
-def price_lines(markets, rows, mods, premium_quote="term_cash", extras=()):
+def price_lines(markets, rows, mods, extras=()):
     """Price every line; returns ``(results, errors)`` in line order.
 
     ``extras`` adds on-demand Greeks (``pricing.greek_catalog.EXTRA_GREEKS``).
     """
     calculated = sorted(
-        (price_line(markets, number, row, mods, premium_quote, extras)
+        (price_line(markets, number, row, mods, extras)
          for number, row in _numbered(rows)),
         key=lambda item: item[0],
     )
