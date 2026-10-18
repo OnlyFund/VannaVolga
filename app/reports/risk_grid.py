@@ -171,7 +171,10 @@ def risk_lines(markets, pair, trades, results, forwards, include_hedges=False, f
             errors.append(f"{trade.trade_id}: {exc}")
             continue
         sign = 1.0 if trade.buy_sell == "BUY" else -1.0
-        values = {"notional": sign * trade.notional, "mtm_base": result["mtm_base"]}
+        # An exotic's notional is a payout, not a vanilla notional: it is
+        # left out of the Notional measure (its Greeks and MTM count).
+        values = {"notional": sign * trade.notional if trade.is_vanilla else 0.0,
+                  "mtm_base": result["mtm_base"]}
         for greek in greeks:
             values[greek] = result.get(f"fixed_{greek}" if fixed else greek) or 0.0
         lines.append(RiskLine(trade.trade_id, pd.Timestamp(result["expiry"]).date(),

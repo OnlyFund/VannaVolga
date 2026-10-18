@@ -50,6 +50,28 @@ def legs(strike, call_put, payout_base, width):
     return [(strike, vanilla), *((k, strike * weight) for k, weight in spread)]
 
 
+def leg_rows(row, payout_base):
+    """A digital line (a dict or Series with a numeric strike; its notional
+    is the payout) as vanilla rows, for calculators that sum rows (the spot
+    ladder). The premium rides on the first leg on the line's own side; the
+    other legs carry none."""
+    strike, payout = float(row["strike"]), float(row["notional"])
+    buy_sell = str(row["buy_sell"]).strip().upper()
+    other_side = {"BUY": "SELL", "SELL": "BUY"}[buy_sell]
+    rows, premium_placed = [], False
+    for leg_strike, weight in legs(strike, row["call_put"], payout_base,
+                                   RELATIVE_WIDTH * strike):
+        leg = dict(row)
+        leg.update(strike=leg_strike, notional=abs(weight) * payout, option_type="vanilla",
+                   buy_sell=buy_sell if weight > 0 else other_side, payout_ccy=None)
+        if weight > 0 and not premium_placed:
+            premium_placed = True
+        else:
+            leg["premium"] = 0.0
+        rows.append(leg)
+    return rows
+
+
 @dataclass
 class DigitalPricable:
     """One European digital line; ``row`` as for ``Pricable`` (numeric
