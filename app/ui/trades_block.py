@@ -392,11 +392,16 @@ def render_portfolio(tab, market_set, mods):
 
 
 def usd_totals(totals, spots):
-    """Pair totals with spot and USD columns, plus a USD total row across pairs."""
+    """Pair totals with spot and USD columns, plus a USD total row across pairs.
+
+    Directional exposures (vanna, rega, ...: ``greek_catalog.is_directional``)
+    stay blank in the total row: each pair's direction is its own.
+    """
     frame = usd_spots.add_usd_columns(totals, spots)
     usd = [target for _, target in usd_spots.ALL_USD_COLUMNS if target in frame]
     counts = [c for c in ("options", "forwards") if c in frame]
-    total = {"currency_pair": TOTAL_ROW, **frame[counts + usd].sum(min_count=1).to_dict()}
+    summed = [c for c in usd if not greek_catalog.is_directional(c)]
+    total = {"currency_pair": TOTAL_ROW, **frame[counts + summed].sum(min_count=1).to_dict()}
     return pd.concat([frame, pd.DataFrame([total])], ignore_index=True), usd
 
 
@@ -481,6 +486,10 @@ def _pair_view(totals, market, overrides, valuation_date=None):
     unpriced = [c for c in chosen if c not in totals]
     if unpriced:
         st.caption("Price selection to compute: " + ", ".join(unpriced))
+    if any(greek_catalog.is_directional(c) for c in chosen if c in usd):
+        st.caption("The total row leaves directional exposures (vanna, rega and their "
+                   "decays) blank: each pair's spot, risk reversal and rates move on their "
+                   "own, so they do not add up across pairs.")
     unconverted = list(totals["currency_pair"][is_pair & totals[usd[0]].isna()])
     if unconverted:
         st.warning("No USD spot for " + ", ".join(unconverted) + ": USD columns left blank"

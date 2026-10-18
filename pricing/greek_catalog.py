@@ -77,6 +77,24 @@ def extras(names):
     return [name for name in known(names) if name in EXTRA_GREEKS]
 
 
+#: Greeks measured against a direction of the pair's own: its spot (delta,
+#: vanna), its risk reversal (rega) or its rates (rho, phi). The same move
+#: means different things across pairs (EURUSD up is USD down, USDJPY up is
+#: USD up), so these never add up across pairs. A decay of one is one too.
+DIRECTIONAL = frozenset({"delta", "spot_delta", "fwd_delta", "pair_delta", "vanna", "rega",
+                         "rho", "phi"})
+
+
+def is_directional(column):
+    """True for a column reporting a directional Greek (see ``DIRECTIONAL``),
+    in any family, unit or decay: ``vanna_usd``, ``fixed_rega``,
+    ``vanna_decay_usd``, ``delta_decay``."""
+    name = column[6:] if column.startswith("fixed_") else column
+    name = name[:-4] if name.endswith("_usd") else name
+    name = name[:-6] if name.endswith("_decay") else name
+    return name in DIRECTIONAL
+
+
 def greek_of(column):
     """The Greek a column reports (``fixed_vega_decay_usd`` -> ``vega_decay``),
     or ``None`` for a column that is not a Greek."""

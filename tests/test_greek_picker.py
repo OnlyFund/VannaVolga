@@ -118,3 +118,30 @@ def test_portfolio_column_options_do_not_depend_on_what_was_priced():
     assert options[:len(DEFAULT_COLUMNS)] == list(DEFAULT_COLUMNS)
     assert set(rich.columns) - {"currency_pair", "spot"} <= set(options)
     assert column_options(["surprise"])[-1] == "surprise"     # never hidden
+
+
+@pytest.mark.parametrize("column, directional", [
+    ("vanna", True), ("fixed_vanna_usd", True), ("rega_usd", True), ("vanna_decay_usd", True),
+    ("rega_decay", True), ("delta", True), ("fixed_delta", True), ("delta_decay", True),
+    ("spot_delta", True), ("rho", True), ("phi", True),
+    ("vega_usd", False), ("volga_usd", False), ("sega_usd", False), ("gamma", False),
+    ("theta_usd", False), ("vega_decay_usd", False), ("weighted_vega_usd", False),
+    ("pnl_usd", False), ("mtm_usd", False),
+])
+def test_directional_greeks(column, directional):
+    from pricing.greek_catalog import is_directional
+    assert is_directional(column) is directional
+
+
+def test_the_total_row_leaves_directional_exposures_blank():
+    from app.ui.trades_block import TOTAL_ROW, pair_totals, usd_totals
+    totals = pair_totals([result("EURUSD", 1, 10.0), result("USDJPY", 2, 20.0)], [])
+    frame, usd = usd_totals(totals, {"EURUSD": 1.10, "USDJPY": 150.0})
+    total = frame[frame["currency_pair"] == TOTAL_ROW].iloc[0]
+    pairs = frame[frame["currency_pair"] != TOTAL_ROW]
+    for column in usd:
+        if column in ("vanna_usd", "rega_usd", "vanna_decay_usd", "rega_decay_usd"):
+            assert pd.isna(total[column]), column
+            assert pairs[column].notna().all(), column        # per pair still shown
+        else:
+            assert total[column] == pytest.approx(pairs[column].sum()), column
