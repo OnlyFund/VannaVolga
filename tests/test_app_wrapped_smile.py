@@ -275,7 +275,11 @@ def test_save_load_defaults_and_removed_controls():
     from app.market_context import PricingSettings
     assert PricingSettings().delta_reporting == "spot"
     assert "Use smooth 5-pillar interpolation" not in labels
-    assert "Pricing model" in labels and "Premium quote" not in labels
+    # Pricing model and betas are global settings on the Model tab.
+    assert "Pricing model" not in labels and "Premium quote" not in labels
+    from app.ui import model_block
+    model_source = Path(model_block.__file__).read_text(encoding="utf-8-sig")
+    assert 'st.selectbox("Pricing model"' in model_source
     # The BF convention is per pair, on the Markets tab, not a global setting.
     assert "BF quotes are broker strangles" not in labels
     assert state["_pending_market_load"]["_broker_strangle_pair"] == "EURUSD"

@@ -18,6 +18,7 @@ from app.smile_service import (
     SURFACE_CACHE_VERSION, DiagnosticsCollector, SurfaceCache, bind_cache,
 )
 from app.ui.market_block import render_market_block
+from app.ui.model_block import render_model_tab
 from app.premium_side import TERM, premium_side
 from app.ui.greek_picker import chosen_greeks, missing_extras
 from app.ui.negatives import red_negatives
@@ -223,17 +224,7 @@ def render_app():
         # date); files and edits sit on top. A store problem only shows here.
         render_store_status(sync_store_markets(valuation_date, apply_loaded_market))
 
-        st.header("Conventions")
-        pricing_model = st.selectbox("Pricing model", ["vv", "vv-sabr"], key="pricing_model")
-        atm_type, delta_base = "dn", True
-        # Deltas are computed spot-equivalent, so totals add up; each line
-        # shows its pair's convention. Hedge amounts are forward deltas.
-        delta_reporting = "spot"
-        st.header("Smile dynamics")
-        beta_atm = st.slider("beta_atm", 0.0, 5.0, 0.7, 0.05, key="beta_atm")
-        beta_rr = st.slider("beta_rr", 0.0, 2.0, 1.2, 0.05, key="beta_rr")
-        beta_bf = st.slider("beta_bf", 0.0, 2.0, 0.0, 0.05, key="beta_bf")
-        smooth_pillar_interpolation = True
+        st.header("Reports")
         spot_ladder_mode = st.selectbox(
             "Spot ladder calculation mode",
             ["shadow", "optimized", "reference"],
@@ -241,11 +232,22 @@ def render_app():
             help="Shadow compares optimized and reference results before returning.",
             key="spot_ladder_mode",
         )
+        st.caption("Pricing model and smile dynamics: Model tab.")
 
     surface_progress = st.empty()
-    book_tab,risk_tab,portfolio_tab,blotter_tab,markets_tab    = st.tabs(
-        ["Portfolio", "Risk","Pricer","Blotter","Markets"]
+    book_tab, risk_tab, portfolio_tab, blotter_tab, markets_tab, model_tab = st.tabs(
+        ["Portfolio", "Risk", "Pricer", "Blotter", "Markets", "Model"]
     )
+    # Global model settings (Model tab); invalid or missing values fall back
+    # to the defaults. The app fixes the rest.
+    model = render_model_tab(model_tab)
+    pricing_model = model["pricing_model"]
+    beta_atm, beta_rr, beta_bf = model["beta_atm"], model["beta_rr"], model["beta_bf"]
+    atm_type, delta_base = "dn", True
+    smooth_pillar_interpolation = True
+    # Deltas are computed spot-equivalent, so totals add up; each line
+    # shows its pair's convention. Hedge amounts are forward deltas.
+    delta_reporting = "spot"
 
     spot, forward_divisor, currency_pair, vol_rows, forward_rows, event_rows = render_market_block(
         markets_tab, valuation_date, apply_loaded_market
