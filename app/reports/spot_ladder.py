@@ -246,9 +246,12 @@ def _add_forward_pnl(level, position, market, valuation_date,
     level["fixed_delta"] += delta
     level["delta"] += delta
     if next_market is not None:
-        level["theta"] += calculate_forward_theta(
+        # A forward has no smile: its roll goes into sticky and smile theta.
+        theta = calculate_forward_theta(
             position, market, next_market, valuation_date, next_valuation
         )
+        level["fixed_theta"] += theta
+        level["theta"] += theta
 
 
 def _calculate_reference_ladder(

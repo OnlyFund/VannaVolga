@@ -601,7 +601,7 @@ def render_app():
                 f"Smile theta is a {theta_days}-calendar-day roll to {theta_date}, "
                 "re-interpolating volatility and forward curves and re-solving the "
                 "fixed strike on the rolled skew. Pair totals include forward-hedge "
-                "roll theta when a hedge is enabled."
+                "roll theta (sticky and smile) when a hedge is enabled."
             )
 
     render_blotter(blotter_tab)

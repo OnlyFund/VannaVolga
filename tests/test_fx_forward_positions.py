@@ -277,8 +277,9 @@ def test_pricer_results_aggregate_by_pair_including_hedges():
     assert aggregation.loc["EURUSD", "pnl_base"] == pytest.approx(19.0)
     assert aggregation.loc["EURUSD", "fixed_delta"] == pytest.approx(23.0)
     assert aggregation.loc["EURUSD", "delta"] == pytest.approx(23.0)
+    # A forward has no smile: its roll is in sticky and smile theta alike.
     assert aggregation.loc["EURUSD", "theta"] == pytest.approx(32.0)
-    assert aggregation.loc["EURUSD", "fixed_theta"] == pytest.approx(30.0)
+    assert aggregation.loc["EURUSD", "fixed_theta"] == pytest.approx(32.0)
     assert aggregation.loc["USDJPY", "mtm_base"] == pytest.approx(5.0)
 
 
@@ -379,7 +380,33 @@ def test_spot_ladder_includes_weekend_forward_roll_theta(mode):
     discount = term_discount_factor(_market_for_expiry(None), date(2027, 1, 15),
                                     date(2026, 10, 12))
     assert levels[0]["theta"] == pytest.approx(2_000. * discount)
-    assert levels[0]["fixed_theta"] == 0.0
+    # A forward has no smile: the same roll is in sticky theta.
+    assert levels[0]["fixed_theta"] == levels[0]["theta"]
+
+
+def test_spot_ladder_adds_the_forward_roll_to_sticky_and_smile_theta(monkeypatch):
+    class Forward:
+        def __init__(self, **kwargs):
+            self.base_amount = kwargs["base_amount"]
+            self.expiry = kwargs["expiry"]
+
+        def value(self, market, valuation_date):
+            return {"mtm_term": 0.0, "mtm_base": 0.0}
+
+    monkeypatch.setattr(spot_ladder, "FxForwardPosition", Forward)
+    monkeypatch.setattr(spot_ladder, "calculate_forward_theta", lambda *args: -125.0)
+    position = {"currency_pair": "EURUSD", "expiry": date(2025, 9, 12),
+                "base_amount": -2_000_000.0, "contract_rate": 1.30}
+    level = _empty_level(1.20)
+    level["fixed_theta"], level["theta"] = -10.0, -20.0          # the options' theta
+    spot_ladder._add_forward_pnl(level, position, _market_for_expiry(None),
+                                 date(2025, 8, 29), _market_for_expiry(None), date(2025, 9, 1))
+    assert level["fixed_theta"] == pytest.approx(-135.0)
+    assert level["theta"] == pytest.approx(-145.0)
+    # Without a next-day market there is no roll in either.
+    bare = _empty_level(1.20)
+    spot_ladder._add_forward_pnl(bare, position, _market_for_expiry(None), date(2025, 8, 29))
+    assert bare["fixed_theta"] == bare["theta"] == 0.0
 
 
 def test_spot_ladder_uses_forward_base_amount_not_discounted_delta(monkeypatch):

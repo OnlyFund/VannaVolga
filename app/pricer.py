@@ -469,7 +469,7 @@ def aggregate_by_pair(results, hedge_trades=(), greeks=GREEK_NAMES):
 
     ``greeks`` picks the Greek columns; one the results do not carry (an
     extra not priced yet) is left out. Forward hedges add to MTM, P&L,
-    delta and theta only.
+    delta and theta only (sticky and smile alike: a forward has no smile).
     """
     from pricing.greek_catalog import columns as greek_columns
     wanted = greek_columns(greeks)
@@ -509,6 +509,7 @@ def aggregate_by_pair(results, hedge_trades=(), greeks=GREEK_NAMES):
                                ("spot_delta", trade.get("spot_delta")),
                                ("fixed_fwd_delta", trade.get("fwd_delta")),
                                ("fwd_delta", trade.get("fwd_delta")),
+                               ("fixed_theta", trade.get("theta", 0.0)),
                                ("theta", trade.get("theta", 0.0))):
             if column in aggregation and amount is not None:
                 aggregation.loc[matches, column] += float(amount)
