@@ -495,104 +495,107 @@ def render_app():
         errors = []
         hedge_trades = []
 
-    if calculation_matches_inputs:
-        st.info(
-            "Priced {} of {} input lines.".format(
-                len(results), len(cached_calculation["rows"])
-            )
-        )
-    for error in errors:
-        st.error("Not priced — " + error)
-
-    pricer_greeks = chosen_greeks(PRICER_GREEKS_KEY)
-    if results:
-        to_compute = missing_extras(pricer_greeks, results)
-        if to_compute:
-            st.caption("Price portfolio to compute: " + ", ".join(
-                greek_catalog.CATALOG[name].label for name in to_compute))
-        problems = {name: reason for result in results
-                    for name, reason in result.get("greek_problems", {}).items()}
-        for name, reason in problems.items():
-            st.warning(f"{greek_catalog.CATALOG[name].label} not available: {reason}")
-        aggregation = aggregate_pricer_results_by_pair(results, hedge_trades, pricer_greeks)
-        aggregation_display = format_pricer_aggregation(aggregation)
-        st.subheader("By pair")
-        aggregation_column_config = {
-            "currency_pair": st.column_config.TextColumn(
-                "Currency pair", help="Currency pair aggregation.", width="small"
-            ),
-            "mtm_base": st.column_config.TextColumn(
-                "MTM (base)", help="Aggregate mark-to-market in base currency.",
-                width="small",
-            ),
-            "pnl_base": st.column_config.TextColumn(
-                "P&L (base)", help="Aggregate P&L in base currency, including premium.",
-                width="small",
-            ),
-        }
-        for greek_name in pricer_greeks:
-            for column in (f"fixed_{greek_name}", greek_name):
-                aggregation_column_config[column] = st.column_config.TextColumn(
-                    greek_catalog.label(column),
-                    help=f"Aggregate {greek_catalog.label(column).lower()}.",
-                    width="small",
+    # The Pricer's results belong to its tab; drawn outside it they showed
+    # under every tab.
+    with portfolio_tab:
+        if calculation_matches_inputs:
+            st.info(
+                "Priced {} of {} input lines.".format(
+                    len(results), len(cached_calculation["rows"])
                 )
-        st.dataframe(
-            red_negatives(aggregation_display),
-            use_container_width=True,
-            hide_index=True,
-            column_config=aggregation_column_config,
-        )
-        if hedge_trades:
-            st.subheader("Delta hedge forward trades")
+            )
+        for error in errors:
+            st.error("Not priced — " + error)
+
+        pricer_greeks = chosen_greeks(PRICER_GREEKS_KEY)
+        if results:
+            to_compute = missing_extras(pricer_greeks, results)
+            if to_compute:
+                st.caption("Price portfolio to compute: " + ", ".join(
+                    greek_catalog.CATALOG[name].label for name in to_compute))
+            problems = {name: reason for result in results
+                        for name, reason in result.get("greek_problems", {}).items()}
+            for name, reason in problems.items():
+                st.warning(f"{greek_catalog.CATALOG[name].label} not available: {reason}")
+            aggregation = aggregate_pricer_results_by_pair(results, hedge_trades, pricer_greeks)
+            aggregation_display = format_pricer_aggregation(aggregation)
+            st.subheader("By pair")
+            aggregation_column_config = {
+                "currency_pair": st.column_config.TextColumn(
+                    "Currency pair", help="Currency pair aggregation.", width="small"
+                ),
+                "mtm_base": st.column_config.TextColumn(
+                    "MTM (base)", help="Aggregate mark-to-market in base currency.",
+                    width="small",
+                ),
+                "pnl_base": st.column_config.TextColumn(
+                    "P&L (base)", help="Aggregate P&L in base currency, including premium.",
+                    width="small",
+                ),
+            }
+            for greek_name in pricer_greeks:
+                for column in (f"fixed_{greek_name}", greek_name):
+                    aggregation_column_config[column] = st.column_config.TextColumn(
+                        greek_catalog.label(column),
+                        help=f"Aggregate {greek_catalog.label(column).lower()}.",
+                        width="small",
+                    )
             st.dataframe(
-                red_negatives(pd.DataFrame(hedge_trades)),
+                red_negatives(aggregation_display),
                 use_container_width=True,
                 hide_index=True,
-                column_config={
-                    "base_amount": st.column_config.NumberColumn(
-                        "Base amount", format="%.2f"
-                    ),
-                    "forward_rate": st.column_config.NumberColumn(
-                        "Forward rate", format="%.6f"
-                    ),
-                    "delta_offset": st.column_config.NumberColumn(
-                        "Delta offset", format="%.2f"
-                    ),
-                    "mtm_term": st.column_config.NumberColumn(
-                        "MTM (term)", format="%.2f"
-                    ),
-                    "mtm_base": st.column_config.NumberColumn(
-                        "MTM (base)", format="%.2f"
-                    ),
-                    "pnl_term": st.column_config.NumberColumn(
-                        "P&L (term)", format="%.2f"
-                    ),
-                    "pnl_base": st.column_config.NumberColumn(
-                        "P&L (base)", format="%.2f"
-                    ),
-                    "theta": st.column_config.NumberColumn(
-                        "Roll theta (prem ccy)", format="%.2f"
-                    ),
-                },
+                column_config=aggregation_column_config,
             )
-        theta_date = next_business_day(currency_pair, valuation_date)
-        theta_days = (pd.Timestamp(theta_date) - pd.Timestamp(valuation_date)).days
-        st.caption(
-            "Line results are shown in the pricer grid. Sticky-delta Greeks keep the "
-            "ATM/RR/BF quotes unchanged as spot moves; smile Greeks move the smile by "
-            "the betas (equal when every beta is 0). "
-            "Premium is negative for buys and positive for sells. MTM and P&L are "
-            "shown in base currency. "
-            "Line deltas are in the pair's convention for the expiry (Delta conv.: "
-            "S spot, F forward); the By pair totals add spot-equivalent delta and "
-            "gamma. Hedge forwards are sized by forward delta. "
-            "Gamma is spot-equivalent delta sensitivity per 1% spot move. "
-            f"Smile theta is a {theta_days}-calendar-day roll to {theta_date}, "
-            "re-interpolating volatility and forward curves and re-solving the "
-            "fixed strike on the rolled skew. Pair totals include forward-hedge "
-            "roll theta when a hedge is enabled."
-        )
+            if hedge_trades:
+                st.subheader("Delta hedge forward trades")
+                st.dataframe(
+                    red_negatives(pd.DataFrame(hedge_trades)),
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "base_amount": st.column_config.NumberColumn(
+                            "Base amount", format="%.2f"
+                        ),
+                        "forward_rate": st.column_config.NumberColumn(
+                            "Forward rate", format="%.6f"
+                        ),
+                        "delta_offset": st.column_config.NumberColumn(
+                            "Delta offset", format="%.2f"
+                        ),
+                        "mtm_term": st.column_config.NumberColumn(
+                            "MTM (term)", format="%.2f"
+                        ),
+                        "mtm_base": st.column_config.NumberColumn(
+                            "MTM (base)", format="%.2f"
+                        ),
+                        "pnl_term": st.column_config.NumberColumn(
+                            "P&L (term)", format="%.2f"
+                        ),
+                        "pnl_base": st.column_config.NumberColumn(
+                            "P&L (base)", format="%.2f"
+                        ),
+                        "theta": st.column_config.NumberColumn(
+                            "Roll theta (prem ccy)", format="%.2f"
+                        ),
+                    },
+                )
+            theta_date = next_business_day(currency_pair, valuation_date)
+            theta_days = (pd.Timestamp(theta_date) - pd.Timestamp(valuation_date)).days
+            st.caption(
+                "Line results are shown in the pricer grid. Sticky-delta Greeks keep the "
+                "ATM/RR/BF quotes unchanged as spot moves; smile Greeks move the smile by "
+                "the betas (equal when every beta is 0). "
+                "Premium is negative for buys and positive for sells. MTM and P&L are "
+                "shown in base currency. "
+                "Line deltas are in the pair's convention for the expiry (Delta conv.: "
+                "S spot, F forward); the By pair totals add spot-equivalent delta and "
+                "gamma. Hedge forwards are sized by forward delta. "
+                "Gamma is spot-equivalent delta sensitivity per 1% spot move. "
+                f"Smile theta is a {theta_days}-calendar-day roll to {theta_date}, "
+                "re-interpolating volatility and forward curves and re-solving the "
+                "fixed strike on the rolled skew. Pair totals include forward-hedge "
+                "roll theta when a hedge is enabled."
+            )
 
     render_blotter(blotter_tab)
     render_portfolio(book_tab, market_set, mods)
