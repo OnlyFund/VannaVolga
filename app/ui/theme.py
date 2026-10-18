@@ -34,6 +34,12 @@ CSS = """
     [data-testid="stMainBlockContainer"] {
         padding-top: 2rem !important;
     }
+    /* Newer releases (the online app) fix a 3.75rem header over the page:
+       start the title below it. 1.23's container has no test id. */
+    [data-testid="stAppViewContainer"] [data-testid="stAppViewBlockContainer"],
+    [data-testid="stAppViewContainer"] [data-testid="stMainBlockContainer"] {
+        padding-top: 4.5rem !important;
+    }
     [data-testid="stAppViewContainer"] h1 {
         padding-top: 0 !important;
         padding-bottom: 0.25rem !important;
