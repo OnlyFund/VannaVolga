@@ -7,7 +7,9 @@ are two trades with two ids.
 
 Two products for now:
 
-* ``fx_option`` — a vanilla FX option;
+* ``fx_option`` — an FX option: a vanilla unless its ``option_type`` says
+  otherwise (``app.option_types``; trades booked before types existed read
+  as vanillas). Binary-payout types carry a ``payout_ccy``;
 * ``fx_forward`` — an FX forward, e.g. a delta hedge. ``HedgeAllocation``
   links a hedge forward to the options it hedges, with the share of its
   base amount assigned to each, so one forward can hedge several options
@@ -24,6 +26,8 @@ from datetime import date, datetime
 from typing import Optional, Tuple, Union
 
 import pandas as pd
+
+from app.option_types import PAYOUT_TYPES, VANILLA, option_type_of
 
 FX_OPTION = "fx_option"
 FX_FORWARD = "fx_forward"
@@ -80,6 +84,10 @@ class Trade:
     version: int = 0
     status: str = LIVE
     package_id: Optional[str] = None
+    #: Options only: ``app.option_types`` key; None reads as vanilla.
+    option_type: Optional[str] = None
+    #: Binary-payout options only: the currency the payout is paid in.
+    payout_ccy: Optional[str] = None
 
     @property
     def base(self):
@@ -96,6 +104,11 @@ class Trade:
     @property
     def is_forward(self):
         return self.product_type == FX_FORWARD
+
+    @property
+    def is_vanilla(self):
+        """A vanilla option (an option without a type is one)."""
+        return self.is_option and (self.option_type or VANILLA) == VANILLA
 
     def is_live_on(self, valuation_date):
         """Live and not yet expired on ``valuation_date``."""
@@ -147,8 +160,20 @@ class Trade:
         notional = number("notional", self.notional)
         premium = number("premium", self.premium or 0.0, positive=False)
         premium_ccy = text(self.premium_ccy).upper() or (pair[3:] if len(pair) == 6 else "")
-        strike = call_put = contract_rate = None
+        strike = call_put = contract_rate = option_type = payout_ccy = None
         if product == FX_OPTION:
+            try:
+                option_type = option_type_of(self.option_type)
+            except ValueError as exc:
+                problems.append(str(exc).lower())
+            payout_ccy = text(self.payout_ccy).upper() or None
+            if option_type in PAYOUT_TYPES:
+                payout_ccy = payout_ccy or (pair[:3] if len(pair) == 6 else None)
+                if len(pair) == 6 and payout_ccy not in (pair[:3], pair[3:]):
+                    problems.append(f"payout currency must be {pair[:3]} or {pair[3:]}, "
+                                    f"not {payout_ccy!r}")
+            elif payout_ccy is not None:
+                problems.append("only a binary-payout option has a payout currency")
             strike = number("strike", self.strike)
             call_put = text(self.call_put).upper()
             if call_put not in ("CALL", "PUT"):
@@ -163,6 +188,8 @@ class Trade:
                 problems.append("a forward has no strike or call/put")
             if premium:
                 problems.append("a forward has no premium")
+            if self.option_type not in (None, "") or self.payout_ccy not in (None, ""):
+                problems.append("a forward has no option type or payout currency")
             premium, premium_ccy = 0.0, None
         status = text(self.status).lower() or LIVE
         if status not in STATUSES:
@@ -175,7 +202,7 @@ class Trade:
             expiry=expiry, buy_sell=buy_sell, notional=notional, premium=premium,
             premium_ccy=premium_ccy, strike=strike, call_put=call_put or None,
             contract_rate=contract_rate, book=text(self.book), counterparty=text(self.counterparty),
-            status=status,
+            status=status, option_type=option_type, payout_ccy=payout_ccy,
         )
 
     def amended(self, **changes):
@@ -200,6 +227,7 @@ class Trade:
             "call_put": self.call_put, "buy_sell": self.buy_sell,
             "notional": self.notional, "premium": self.premium,
             "premium_ccy": self.premium_ccy,
+            "option_type": self.option_type or VANILLA, "payout_ccy": self.payout_ccy,
         }
 
     def to_position(self):

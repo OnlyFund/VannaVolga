@@ -23,6 +23,7 @@ from typing import List, Optional
 import pandas as pd
 
 from app import pricer
+from app.option_types import PAYOUT_TYPES, option_type_of
 from app.premium_side import premium_currency
 from app.trades.model import (
     FX_FORWARD, FX_OPTION, LIVE, Booking, HedgeAllocation, Trade, TradeValidationError,
@@ -60,6 +61,14 @@ def _amount(value):
     return value
 
 
+def _type_terms(pair, line):
+    """``option_type`` and ``payout_ccy`` for a Pricer line's trade."""
+    option_type = option_type_of(line.get("option_type"))
+    payout = (premium_currency(pair, line.get("payout_ccy")) or pair[:3]
+              if option_type in PAYOUT_TYPES else None)
+    return {"option_type": option_type, "payout_ccy": payout}
+
+
 def booking_from_lines(markets, rows, mods, trade_date=None, book="", counterparty="",
                        with_hedges=False, default_pair=None):
     """Build a ``Booking`` from Pricer lines; returns ``(booking, line_numbers, errors)``.
@@ -89,6 +98,9 @@ def booking_from_lines(markets, rows, mods, trade_date=None, book="", counterpar
                                              line.get("premium_ccy")) or None,
                 book=_text(line.get("book")) or book,
                 counterparty=_text(line.get("counterparty")) or counterparty,
+                # The line's type (pricing has already refused any it cannot
+                # price) and, for a binary payout, its currency.
+                **_type_terms(result["currency_pair"], line),
             ).normalized()
         except (TradeValidationError, ValueError) as exc:
             errors.append(f"Line {result['row']}: {exc}")

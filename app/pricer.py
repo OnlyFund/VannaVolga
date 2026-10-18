@@ -17,6 +17,7 @@ from app.market_set import MarketSet
 from app.premium_side import premium_currency
 from app.smile_service import market_diagnostics
 from app.hedge_delta import hedge_delta, typed_hedge_fields, typed_hedge_pct
+from app.option_types import check_priced
 from app.vol_override import shift_market, shifted_market, strike_vol, typed_vol
 from helper_functions.input_resolvers import parse_notional, resolve_strike
 from pricing import Pricable
@@ -95,6 +96,9 @@ def price_line(markets, line_number, source_row, mods, extras=()):
     resolved_strike = None
     try:
         row = source_row.copy()
+        # A type the app cannot price is reported, never priced as a vanilla
+        # (a line without a type is a vanilla).
+        check_priced(row.get("option_type"))
         valuation_date = markets.valuation_date
         row["valuation"] = valuation_date
         currency_pair = _line_pair(row)

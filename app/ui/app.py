@@ -19,7 +19,8 @@ from app.smile_service import (
 )
 from app.ui.market_block import render_market_block
 from app.ui.model_block import render_model_tab
-from app.premium_side import TERM, premium_side
+from app.option_types import LABELS as OPTION_TYPE_LABELS, VANILLA, option_type_of
+from app.premium_side import BASE, TERM, premium_side
 from app.ui.greek_picker import chosen_greeks, missing_extras
 from app.ui.negatives import red_negatives
 from pricing import greek_catalog
@@ -164,6 +165,8 @@ def render_app():
             "notional": "1m",
             "premium": 0.0,
             "premium_ccy": TERM,
+            "option_type": OPTION_TYPE_LABELS[VANILLA],
+            "payout_ccy": BASE,
         }])
 
     if "option_rows" not in st.session_state:
@@ -192,20 +195,32 @@ def render_app():
                      for number, (_, note) in enumerate(sides, start=1) if note]
     if premium_notes:
         st.session_state["_premium_notes"] = premium_notes
+    # Every line has an option type (blank, or a line from before types, is a
+    # vanilla; an unknown one is kept so pricing reports it) and a payout side.
+    def type_label(value):
+        try:
+            return OPTION_TYPE_LABELS[option_type_of(value)]
+        except ValueError:
+            return value
+    rows = st.session_state.option_rows
+    rows["option_type"] = ([type_label(v) for v in rows["option_type"]]
+                           if "option_type" in rows else OPTION_TYPE_LABELS[VANILLA])
+    rows["payout_ccy"] = ([v if isinstance(v, str) and v.strip() else BASE
+                           for v in rows["payout_ccy"]] if "payout_ccy" in rows else BASE)
     # Every line has a premium mode: auto (pricing fills the premium) or typed.
     st.session_state.option_rows = with_premium_modes(st.session_state.option_rows)
     # ... and a vol mode: market (the smile's vol) or typed.
     st.session_state.option_rows = with_vol_modes(st.session_state.option_rows)
     # ... and a hedge delta mode: auto (the line's delta) or typed.
     st.session_state.option_rows = with_hedge_modes(st.session_state.option_rows)
-    if st.session_state.get("_portfolio_editor_schema") != 9:
+    if st.session_state.get("_portfolio_editor_schema") != 10:
         st.session_state.pop("portfolio_editor_v2", None)
         st.session_state.pop("portfolio_editor_v3", None)
-        st.session_state._portfolio_editor_schema = 9
+        st.session_state._portfolio_editor_schema = 10
 
     portfolio_columns = [
-        "currency_pair", "expiry", "call_put", "strike", "buy_sell",
-        "notional", VOL_INPUT, VOL_MODE, HEDGE_DELTA, HEDGE_MODE, "premium", PREMIUM_MODE,
+        "currency_pair", "expiry", "option_type", "call_put", "strike", "buy_sell",
+        "notional", "payout_ccy", VOL_INPUT, VOL_MODE, HEDGE_DELTA, HEDGE_MODE, "premium", PREMIUM_MODE,
         "premium_ccy", "book", "counterparty", TRADE_ID_COLUMN,
     ]
     portfolio_columns += [

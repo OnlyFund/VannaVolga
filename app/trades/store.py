@@ -37,7 +37,7 @@ from app.trades.model import (
     Trade, TradeValidationError, as_date,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 TRADE_PREFIX, PACKAGE_PREFIX = "TR", "PK"
 BACKUPS_KEPT = 14
 
@@ -66,6 +66,8 @@ CREATE TABLE trade_versions (
     premium_ccy TEXT,
     contract_rate REAL,
     package_id TEXT,
+    option_type TEXT,
+    payout_ccy TEXT,
     PRIMARY KEY (trade_id, version)
 );
 CREATE INDEX trade_versions_pair ON trade_versions (currency_pair);
@@ -90,12 +92,16 @@ BEGIN SELECT RAISE(ABORT, 'hedge links are append-only'); END;
 """
 
 #: Schema migrations: version -> SQL taking the previous version to it.
-MIGRATIONS = {}
+#: 2: option types. Existing rows get NULL, which reads as a vanilla.
+MIGRATIONS = {
+    2: ("ALTER TABLE trade_versions ADD COLUMN option_type TEXT;"
+        "ALTER TABLE trade_versions ADD COLUMN payout_ccy TEXT;"),
+}
 
 _TERMS = (
     "status", "product_type", "currency_pair", "trade_date", "expiry", "buy_sell",
     "notional", "book", "counterparty", "strike", "call_put", "premium", "premium_ccy",
-    "contract_rate", "package_id",
+    "contract_rate", "package_id", "option_type", "payout_ccy",
 )
 
 
@@ -469,6 +475,9 @@ class SqliteTradeStore:
             counterparty=row["counterparty"], strike=row["strike"], call_put=row["call_put"],
             premium=row["premium"], premium_ccy=row["premium_ccy"],
             contract_rate=row["contract_rate"], package_id=row["package_id"],
+            # A store opened read-only before its migration has no type
+            # columns: its options are vanillas.
+            **{name: row[name] for name in ("option_type", "payout_ccy") if name in row.keys()},
         )
 
     def _latest_rows(self, as_of=None, where="", params=()):

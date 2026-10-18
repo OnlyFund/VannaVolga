@@ -8,6 +8,7 @@ import streamlit as st
 from app import pricer, usd_spots
 from app.ui.negatives import red_negatives
 from pricing import greek_catalog
+from app.option_types import VANILLA, label as option_type_label
 from app.premium_side import SIDES, premium_currency, premium_side
 from app.trades import service
 from app.trades.model import AMENDABLE, CANCELLED, FX_FORWARD, FX_OPTION, LIVE
@@ -18,9 +19,10 @@ DEFAULT_STORE = Path(__file__).resolve().parents[2] / "data" / "local" / "trades
 
 ALL = "All"
 TRADE_COLUMNS = [
-    "trade_id", "version", "status", "product_type", "currency_pair", "buy_sell", "notional",
+    "trade_id", "version", "status", "product_type", "option_type", "currency_pair",
+    "buy_sell", "notional",
     "strike", "call_put", "contract_rate", "expiry", "premium", "premium_ccy", "book",
-    "counterparty", "trade_date", "package_id",
+    "counterparty", "trade_date", "package_id", "payout_ccy",
 ]
 
 
@@ -75,6 +77,10 @@ def trades_frame(trades):
         row["strike"] = "" if trade.strike is None else pricer.format_strike_for_pair(
             trade.currency_pair, trade.strike)
         row["contract_rate"] = _rate(trade.currency_pair, trade.contract_rate)
+        # Options without a type (booked before types) are vanillas.
+        row["option_type"] = (option_type_label(trade.option_type or VANILLA)
+                              if trade.is_option else "")
+        row["payout_ccy"] = trade.payout_ccy or ""
         rows.append(row)
     return pd.DataFrame(rows, columns=TRADE_COLUMNS)
 

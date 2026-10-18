@@ -3,7 +3,8 @@
 import pandas as pd
 import streamlit as st
 
-from app.premium_side import SIDES, TERM, premium_currency
+from app.option_types import LABELS as OPTION_TYPE_LABELS, VANILLA
+from app.premium_side import BASE, SIDES, TERM, premium_currency
 from app.pricer import AUTO, GREEK_NAMES, PREMIUM_MODE, TYPED
 from app.hedge_delta import HEDGE_DELTA, HEDGE_MODE, MAX_PCT, shown_pct
 from app.vol_override import MARKET, MAX_VOL, VOL_INPUT, VOL_MODE
@@ -78,10 +79,10 @@ LINE_INPUT_COLUMNS = (
 #: Cells pricing reads: a line's results stay valid while these are unchanged
 #: (ticks, book, counterparty and trade id do not change a price).
 PRICED_INPUT_COLUMNS = (*LINE_INPUT_COLUMNS, "premium_ccy", PREMIUM_MODE, VOL_INPUT, VOL_MODE,
-                        HEDGE_DELTA, HEDGE_MODE)
+                        HEDGE_DELTA, HEDGE_MODE, "option_type", "payout_ccy")
 #: A line's terms: changing any of them resets its premium to auto.
 TERM_COLUMNS = ("currency_pair", "expiry", "call_put", "strike", "buy_sell", "notional",
-                "premium_ccy")
+                "premium_ccy", "option_type", "payout_ccy")
 
 
 def _premium_entered(value):
@@ -319,7 +320,8 @@ def _apply_editor_state(rows, editor_state):
             # An edited booked line no longer matches its trade: it becomes a
             # new, unbooked line (amend booked trades in the Blotter).
             if (TRADE_ID_COLUMN in updated.columns
-                    and any(column in (*LINE_INPUT_COLUMNS, *BOOKING_COLUMNS) for column in changes)):
+                    and any(column in (*LINE_INPUT_COLUMNS, *BOOKING_COLUMNS, "option_type",
+                                       "payout_ccy") for column in changes)):
                 updated.iat[index, updated.columns.get_loc(TRADE_ID_COLUMN)] = ""
             # Typing a premium makes it the line's (clearing it returns to
             # auto); any other change to the terms resets it to auto.
@@ -519,6 +521,15 @@ def render_portfolio_block(portfolio_tab, market_pair, pairs=()):
                     help="Expiry, such as 1w, 2w, 1m, 1y, 09/18/2025, or 18sep25.",
                     width="small",
                 ),
+                "option_type": st.column_config.SelectboxColumn(
+                    "Type", options=list(OPTION_TYPE_LABELS.values()),
+                    default=OPTION_TYPE_LABELS[VANILLA], width="small",
+                    help="Option type. Vanilla is priced; the others are listed for what "
+                         "comes next and report that they are not priced yet."),
+                "payout_ccy": st.column_config.SelectboxColumn(
+                    "Payout in", options=list(SIDES), default=BASE, width="small",
+                    help="Binary-payout types (digital, touches): the notional is paid in "
+                         "the pair's base or term currency. Vanillas ignore it."),
                 "call_put": st.column_config.SelectboxColumn(
                     "Call/Put", help="Option type: call or put.", options=["CALL", "PUT"], width="small",
                 ),

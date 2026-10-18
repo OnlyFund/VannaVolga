@@ -65,12 +65,18 @@ def render_risk(tab, market_set, mods, ladder_mode):
                                 help="Use sticky-delta Greeks (smile quotes unchanged as "
                                      "spot moves) instead of smile Greeks (smile moved by "
                                      "the betas).")
-        options = [t for t in trades if t.currency_pair == pair and t.is_option]
+        # Only vanillas reach the risk reports: the spot ladder prices its
+        # rows as vanillas, so other option types are left out and counted.
+        options = [t for t in trades if t.currency_pair == pair and t.is_vanilla]
+        exotics = [t for t in trades if t.currency_pair == pair and t.is_option
+                   and not t.is_vanilla]
         hedges = [t for t in trades if t.currency_pair == pair and t.is_forward]
         st.caption(f"{pair}: {len(options)} options"
                    + (f" and {len(hedges)} hedge forwards" if include_hedges else
                       f" ({len(hedges)} hedge forwards not included)")
-                   + " from the Portfolio selection.")
+                   + " from the Portfolio selection."
+                   + (f" {len(exotics)} exotic options are not in the risk reports "
+                      "(not priced yet)." if exotics else ""))
         if pair not in market_set.available():
             st.error(f"No usable market for {pair}: load it in the Markets tab.")
             return
