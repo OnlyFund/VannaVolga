@@ -16,6 +16,7 @@ from app.curve_roll import next_business_day
 from app.market_set import MarketSet
 from app.premium_side import premium_currency
 from app.smile_service import market_diagnostics
+from app.hedge_delta import hedge_delta, typed_hedge_fields, typed_hedge_pct
 from app.vol_override import shift_market, shifted_market, strike_vol, typed_vol
 from helper_functions.input_resolvers import parse_notional, resolve_strike
 from pricing import Pricable
@@ -135,6 +136,8 @@ def price_line(markets, line_number, source_row, mods, extras=()):
         # (the dealt price) come from it, MTM from the market, so P&L is the
         # market value against the price at the typed vol.
         line_market, vol_fields, value_args = market, {}, {}
+        # Checked before pricing: a bad typed hedge delta fails the line.
+        hedge_pct = typed_hedge_pct(row)
         override = typed_vol(row)
         if override is not None:
             unit_row = row.copy()
@@ -168,6 +171,10 @@ def price_line(markets, line_number, source_row, mods, extras=()):
         conventions = convention_deltas(
             line_market, row, row["expiry"], valuation_date,
             pricing_result.get("fixed_delta"), pricing_result.get("delta"))
+        # A typed hedge delta (the agreed one) sizes the line's hedge.
+        hedge_fields = ({} if hedge_pct is None else typed_hedge_fields(
+            hedge_pct, {**pricing_result, **conventions}, row["notional"],
+            row["call_put"], row["buy_sell"]))
         status, reason = market_diagnostics(market, row["expiry"])
         # A booked trade keeps its id through pricing; typed lines have none.
         identity = ({"trade_id": source_row["trade_id"]}
@@ -182,6 +189,7 @@ def price_line(markets, line_number, source_row, mods, extras=()):
             "buy_sell": row["buy_sell"],
             "notional": format_notional(row["notional"]),
             **conventions,
+            **hedge_fields,
             "_forward_rate": forward_rate,
             "smile_status": status,
             "smile_reason": reason,
@@ -328,7 +336,8 @@ def value_forward(markets, pair, expiry, base_amount, contract_rate):
 
 
 def hedge_amounts(markets, results):
-    """Forward base amount that flattens each priced line's smile delta.
+    """Forward base amount that flattens each priced line's smile delta (or
+    its typed hedge delta, ``app.hedge_delta``).
 
     Returns ``({(pair, expiry, forward rate): [(result, base amount)]}, errors)``:
     lines are grouped by the forward that would hedge them, and each line's
@@ -339,7 +348,7 @@ def hedge_amounts(markets, results):
     for result in results:
         key = (result["currency_pair"], result["expiry"], float(result["_forward_rate"]))
         try:
-            delta = float(result["delta"])
+            delta = hedge_delta(result)
             if not np.isfinite(delta):
                 raise ValueError("Smile-adjusted delta is invalid")
             market = market_for_pair(markets, key[0]).market_for_expiry(key[1])
@@ -354,7 +363,8 @@ def hedge_amounts(markets, results):
 
 
 def hedge_trades_for(markets, results):
-    """Forward trades that flatten the priced lines' smile delta, per expiry.
+    """Forward trades that flatten the priced lines' smile delta (or typed
+    hedge delta), per expiry.
 
     Returns ``(trades, errors)``. A hedge group that cannot be valued is
     reported and skipped; it never stops the other groups or the pricing.
@@ -362,7 +372,7 @@ def hedge_trades_for(markets, results):
     grouped = {}
     for result in results:
         key = (result["currency_pair"], result["expiry"], float(result["_forward_rate"]))
-        grouped[key] = grouped.get(key, 0.0) + float(result["delta"])
+        grouped[key] = grouped.get(key, 0.0) + hedge_delta(result)
     trades, errors = [], []
     for (pair, expiry, forward_rate), net_smile_delta in grouped.items():
         try:

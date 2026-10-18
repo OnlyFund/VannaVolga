@@ -25,9 +25,10 @@ from app.ui.negatives import red_negatives
 from pricing import greek_catalog
 from app.ui.portfolio_block import (
     BOOK_COLUMN, PREMIUM_MODE, PRICER_GREEKS_KEY, TRADE_ID_COLUMN, adopt_pending_rows,
-    apply_auto_premiums, apply_market_vols, render_portfolio_block, same_priced_inputs, with_premium_modes,
-    with_vol_modes,
+    apply_auto_hedge_deltas, apply_auto_premiums, apply_market_vols, render_portfolio_block,
+    same_priced_inputs, with_hedge_modes, with_premium_modes, with_vol_modes,
 )
+from app.hedge_delta import HEDGE_DELTA, HEDGE_MODE
 from app.vol_override import VOL_INPUT, VOL_MODE
 from app.ui.trades_block import render_blotter, render_portfolio, trade_store
 from app.ui.risk_block import render_risk
@@ -195,15 +196,17 @@ def render_app():
     st.session_state.option_rows = with_premium_modes(st.session_state.option_rows)
     # ... and a vol mode: market (the smile's vol) or typed.
     st.session_state.option_rows = with_vol_modes(st.session_state.option_rows)
-    if st.session_state.get("_portfolio_editor_schema") != 8:
+    # ... and a hedge delta mode: auto (the line's delta) or typed.
+    st.session_state.option_rows = with_hedge_modes(st.session_state.option_rows)
+    if st.session_state.get("_portfolio_editor_schema") != 9:
         st.session_state.pop("portfolio_editor_v2", None)
         st.session_state.pop("portfolio_editor_v3", None)
-        st.session_state._portfolio_editor_schema = 8
+        st.session_state._portfolio_editor_schema = 9
 
     portfolio_columns = [
         "currency_pair", "expiry", "call_put", "strike", "buy_sell",
-        "notional", VOL_INPUT, VOL_MODE, "premium", PREMIUM_MODE, "premium_ccy", "book",
-        "counterparty", TRADE_ID_COLUMN,
+        "notional", VOL_INPUT, VOL_MODE, HEDGE_DELTA, HEDGE_MODE, "premium", PREMIUM_MODE,
+        "premium_ccy", "book", "counterparty", TRADE_ID_COLUMN,
     ]
     portfolio_columns += [
         column for column in st.session_state.option_rows.columns
@@ -471,6 +474,8 @@ def render_app():
         # market lines the vol they priced at.
         edited_rows = apply_auto_premiums(edited_rows, results)
         edited_rows = apply_market_vols(edited_rows, results)
+        # ... and auto lines the delta their hedge flattens.
+        edited_rows = apply_auto_hedge_deltas(edited_rows, results)
         hedge_trades = []
         if delta_hedge:
             hedge_trades, hedge_errors = pricer.hedge_trades_for(market_set, results)

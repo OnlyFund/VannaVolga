@@ -5,6 +5,7 @@ import streamlit as st
 
 from app.premium_side import SIDES, TERM, premium_currency
 from app.pricer import AUTO, GREEK_NAMES, PREMIUM_MODE, TYPED
+from app.hedge_delta import HEDGE_DELTA, HEDGE_MODE, MAX_PCT, shown_pct
 from app.vol_override import MARKET, MAX_VOL, VOL_INPUT, VOL_MODE
 from app.ui.greek_picker import render_greek_picker
 from app.ui.negatives import red_negatives
@@ -76,7 +77,8 @@ LINE_INPUT_COLUMNS = (
 
 #: Cells pricing reads: a line's results stay valid while these are unchanged
 #: (ticks, book, counterparty and trade id do not change a price).
-PRICED_INPUT_COLUMNS = (*LINE_INPUT_COLUMNS, "premium_ccy", PREMIUM_MODE, VOL_INPUT, VOL_MODE)
+PRICED_INPUT_COLUMNS = (*LINE_INPUT_COLUMNS, "premium_ccy", PREMIUM_MODE, VOL_INPUT, VOL_MODE,
+                        HEDGE_DELTA, HEDGE_MODE)
 #: A line's terms: changing any of them resets its premium to auto.
 TERM_COLUMNS = ("currency_pair", "expiry", "call_put", "strike", "buy_sell", "notional",
                 "premium_ccy")
@@ -152,6 +154,58 @@ def apply_market_vols(rows, results):
                 and not result.get("vol_override") and modes.iloc[number - 1] != TYPED
                 and result.get("vol_pct") is not None):
             rows.iat[number - 1, rows.columns.get_loc(VOL_INPUT)] = float(result["vol_pct"])
+    return rows
+
+
+def _hedge_entered(value):
+    """True for a hedge delta cell holding a usable percent (sign ignored)."""
+    try:
+        return _has_value(value) and abs(float(value)) <= MAX_PCT
+    except (TypeError, ValueError):
+        return False
+
+
+def hedge_mode_of(mode, pct):
+    """A line's hedge delta mode: auto without a usable delta; else its own
+    when valid, and typed for a line that brings a delta but no mode."""
+    if not _hedge_entered(pct):
+        return AUTO
+    if isinstance(mode, str) and mode.strip().lower() in (AUTO, TYPED):
+        return mode.strip().lower()
+    return TYPED
+
+
+def with_hedge_modes(rows):
+    """``rows`` with a valid hedge delta mode on every line."""
+    rows = rows.copy()
+    blank = pd.Series([None] * len(rows), index=rows.index)
+    modes = rows[HEDGE_MODE] if HEDGE_MODE in rows else blank
+    pcts = rows[HEDGE_DELTA] if HEDGE_DELTA in rows else blank
+    rows[HEDGE_MODE] = [hedge_mode_of(mode, pct) for mode, pct in zip(modes, pcts)]
+    return rows
+
+
+def apply_auto_hedge_deltas(rows, results):
+    """``rows`` with each auto line's hedge delta set to its shown delta (a
+    percent of notional in its convention); typed lines keep theirs."""
+    if HEDGE_DELTA not in rows:
+        return rows
+    from app.pricer import parse_notional
+    rows = rows.copy()
+    modes = rows[HEDGE_MODE] if HEDGE_MODE in rows else pd.Series([AUTO] * len(rows),
+                                                                  index=rows.index)
+    for result in results:
+        number = result.get("row")
+        if (not isinstance(number, int) or not 1 <= number <= len(rows)
+                or result.get("hedge_override") or modes.iloc[number - 1] == TYPED):
+            continue
+        try:
+            notional = parse_notional(rows.iloc[number - 1]["notional"])
+        except Exception:
+            continue
+        pct = shown_pct(result, notional)
+        if pct is not None:
+            rows.iat[number - 1, rows.columns.get_loc(HEDGE_DELTA)] = pct
     return rows
 
 
@@ -288,6 +342,18 @@ def _apply_editor_state(rows, editor_state):
                     updated.iat[index, mode] = MARKET
                     if VOL_INPUT in updated.columns:
                         updated.iat[index, updated.columns.get_loc(VOL_INPUT)] = float("nan")
+            # Typing a hedge delta makes it the line's (clearing it returns to
+            # auto); a change to the terms or the vol returns it to auto, as
+            # the agreed delta belonged to the old ones.
+            if HEDGE_MODE in updated.columns:
+                mode = updated.columns.get_loc(HEDGE_MODE)
+                if HEDGE_DELTA in changes:
+                    updated.iat[index, mode] = (TYPED if _hedge_entered(changes[HEDGE_DELTA])
+                                                else AUTO)
+                elif any(column in (*TERM_COLUMNS, VOL_INPUT) for column in changes):
+                    updated.iat[index, mode] = AUTO
+                    if HEDGE_DELTA in updated.columns:
+                        updated.iat[index, updated.columns.get_loc(HEDGE_DELTA)] = float("nan")
 
     deleted_indices = sorted(
         (int(index) for index in editor_state.get("deleted_rows", [])),
@@ -304,6 +370,9 @@ def _apply_editor_state(rows, editor_state):
     if VOL_MODE in updated.columns or added_rows:
         # Added lines: typed when they carry a vol, market otherwise.
         updated = with_vol_modes(updated)
+    if HEDGE_MODE in updated.columns or added_rows:
+        # Added lines: typed when they carry a hedge delta, auto otherwise.
+        updated = with_hedge_modes(updated)
     if "currency_pair" in updated.columns:
         updated["currency_pair"] = updated["currency_pair"].map(
             lambda value: (
@@ -469,6 +538,18 @@ def render_portfolio_block(portfolio_tab, market_pair, pairs=()):
                 VOL_MODE: st.column_config.TextColumn(
                     "Vol src", width="small",
                     help="market: the smile's vol at the strike. typed: the vol you entered."),
+                HEDGE_DELTA: st.column_config.NumberColumn(
+                    "Hedge Δ %", min_value=0.0, max_value=MAX_PCT, format="%.2f",
+                    width="small",
+                    help="The delta the line's hedge flattens, in percent of notional, in "
+                         "the line's convention (Delta conv.), without sign: a bought "
+                         "call or sold put is long delta, a bought put or sold call "
+                         "short. auto: the line's delta. Type the agreed delta to hedge "
+                         "and book that; clearing it, or changing a term or the vol, "
+                         "returns to auto."),
+                HEDGE_MODE: st.column_config.TextColumn(
+                    "Delta src", width="small",
+                    help="auto: the line's delta. typed: the delta you entered."),
                 "mkt_vol_pct": st.column_config.TextColumn(
                     "Mkt vol %", width="small", help="The market smile's vol at the strike."),
                 "vol_spread": st.column_config.TextColumn(
@@ -577,7 +658,7 @@ def render_portfolio_block(portfolio_tab, market_pair, pairs=()):
             column_config=editor_column_config,
             hide_index=True,
             disabled=[*LINE_RESULT_COLUMNS, TRADE_ID_COLUMN, PREMIUM_CODE_COLUMN,
-                      PREMIUM_MODE, VOL_MODE],
+                      PREMIUM_MODE, VOL_MODE, HEDGE_MODE],
             key="portfolio_editor_v3",
             on_change=resolve_strikes_after_edit,
         )
