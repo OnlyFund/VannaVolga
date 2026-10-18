@@ -26,8 +26,8 @@ LABELS = {
     DOUBLE_NO_TOUCH: "Double no-touch",
 }
 OPTION_TYPES = tuple(LABELS)
-#: Types the app can price.
-PRICED = frozenset({VANILLA})
+#: Types the app can price (digitals: ``pricing.digital``).
+PRICED = frozenset({VANILLA, DIGITAL})
 #: Types whose payout is a fixed amount in the base or term currency.
 PAYOUT_TYPES = frozenset({DIGITAL, ONE_TOUCH, NO_TOUCH, DOUBLE_NO_TOUCH})
 

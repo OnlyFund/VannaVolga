@@ -75,8 +75,8 @@ def render_risk(tab, market_set, mods, ladder_mode):
                    + (f" and {len(hedges)} hedge forwards" if include_hedges else
                       f" ({len(hedges)} hedge forwards not included)")
                    + " from the Portfolio selection."
-                   + (f" {len(exotics)} exotic options are not in the risk reports "
-                      "(not priced yet)." if exotics else ""))
+                   + (f" {len(exotics)} exotic options are not in the risk reports yet."
+                      if exotics else ""))
         if pair not in market_set.available():
             st.error(f"No usable market for {pair}: load it in the Markets tab.")
             return

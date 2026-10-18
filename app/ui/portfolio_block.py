@@ -1,12 +1,13 @@
 ﻿"""Portfolio input block for the Streamlit application."""
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 
 from app.option_types import LABELS as OPTION_TYPE_LABELS, VANILLA
 from app.premium_side import BASE, SIDES, TERM, premium_currency
 from app.pricer import AUTO, GREEK_NAMES, PREMIUM_MODE, TYPED
-from app.hedge_delta import HEDGE_DELTA, HEDGE_MODE, MAX_PCT, shown_pct
+from app.hedge_delta import HEDGE_DELTA, HEDGE_MODE, shown_pct
 from app.vol_override import MARKET, MAX_VOL, VOL_INPUT, VOL_MODE
 from app.ui.greek_picker import render_greek_picker
 from app.ui.negatives import red_negatives
@@ -66,7 +67,9 @@ def _with_line_results(rows, results, greek_columns=None):
                 elif column == "prem_at_vol":
                     display.at[row_index, column] = f"{float(value):,.2f}"
                 else:
-                    display.at[row_index, column] = f"{float(value):,.0f}"
+                    # A rounding residue below half a unit shows as 0, not "-0".
+                    number = float(value)
+                    display.at[row_index, column] = f"{0.0 if abs(number) < 0.5 else number:,.0f}"
     return display
 
 
@@ -159,9 +162,10 @@ def apply_market_vols(rows, results):
 
 
 def _hedge_entered(value):
-    """True for a hedge delta cell holding a usable percent (sign ignored)."""
+    """True for a hedge delta cell holding a usable percent (sign ignored;
+    pricing checks a vanilla's against ``MAX_PCT``)."""
     try:
-        return _has_value(value) and abs(float(value)) <= MAX_PCT
+        return _has_value(value) and np.isfinite(float(value))
     except (TypeError, ValueError):
         return False
 
@@ -524,12 +528,14 @@ def render_portfolio_block(portfolio_tab, market_pair, pairs=()):
                 "option_type": st.column_config.SelectboxColumn(
                     "Type", options=list(OPTION_TYPE_LABELS.values()),
                     default=OPTION_TYPE_LABELS[VANILLA], width="small",
-                    help="Option type. Vanilla is priced; the others are listed for what "
-                         "comes next and report that they are not priced yet."),
+                    help="Option type. Vanilla and Digital (European, replicated with "
+                         "vanilla spreads on the smile) are priced; the others are listed "
+                         "for what comes next and report that they are not priced yet."),
                 "payout_ccy": st.column_config.SelectboxColumn(
                     "Payout in", options=list(SIDES), default=BASE, width="small",
-                    help="Binary-payout types (digital, touches): the notional is paid in "
-                         "the pair's base or term currency. Vanillas ignore it."),
+                    help="Binary-payout types (digital, touches): the notional is the "
+                         "payout, paid in the pair's base (default) or term currency. "
+                         "Vanillas ignore it."),
                 "call_put": st.column_config.SelectboxColumn(
                     "Call/Put", help="Option type: call or put.", options=["CALL", "PUT"], width="small",
                 ),
@@ -550,7 +556,7 @@ def render_portfolio_block(portfolio_tab, market_pair, pairs=()):
                     "Vol src", width="small",
                     help="market: the smile's vol at the strike. typed: the vol you entered."),
                 HEDGE_DELTA: st.column_config.NumberColumn(
-                    "Hedge Δ %", min_value=0.0, max_value=MAX_PCT, format="%.2f",
+                    "Hedge Δ %", min_value=0.0, format="%.2f",
                     width="small",
                     help="The delta the line's hedge flattens, in percent of notional, in "
                          "the line's convention (Delta conv.), without sign: a bought "

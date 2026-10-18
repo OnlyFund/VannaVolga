@@ -13,13 +13,15 @@ import math
 HEDGE_DELTA = "hedge_delta_pct"
 HEDGE_MODE = "hedge_mode"
 AUTO, TYPED = "auto", "typed"
-#: A typed hedge delta must lie in [0, MAX_PCT] percent of notional.
+#: A vanilla's typed hedge delta must lie in [0, MAX_PCT] percent of its
+#: notional. A digital's delta can be many times its payout: no cap.
 MAX_PCT = 150.0
 
 
-def typed_hedge_pct(row):
+def typed_hedge_pct(row, capped=True):
     """The line's typed hedge delta in percent, or ``None`` when it is hedged
-    on its priced delta. A typed line without a valid delta raises."""
+    on its priced delta. A typed line without a valid delta raises; above
+    ``MAX_PCT`` too when ``capped`` (vanillas)."""
     mode = row.get(HEDGE_MODE)
     if not (isinstance(mode, str) and mode.strip().lower() == TYPED):
         return None
@@ -27,8 +29,9 @@ def typed_hedge_pct(row):
         pct = abs(float(row.get(HEDGE_DELTA)))
     except (TypeError, ValueError):
         pct = float("nan")
-    if not math.isfinite(pct) or pct > MAX_PCT:
-        raise ValueError(f"Hedge delta must be a percent of notional from 0 to {MAX_PCT:g}")
+    if not math.isfinite(pct) or (capped and pct > MAX_PCT):
+        raise ValueError(f"Hedge delta must be a percent of notional from 0 to {MAX_PCT:g}"
+                         if capped else "Hedge delta must be a finite percent of the payout")
     return pct
 
 

@@ -147,7 +147,8 @@ def test_pricing_writes_auto_hedge_deltas_back(markets):
 @pytest.mark.parametrize("mode, pct, expected", [
     (None, None, "auto"), (None, np.nan, "auto"), (None, 25.0, "typed"), (None, 0.0, "typed"),
     ("auto", 25.0, "auto"), ("typed", 25.0, "typed"), ("typed", None, "auto"),
-    ("bad", 25.0, "typed"), ("typed", 151.0, "auto"), (None, -25.0, "typed"),
+    ("bad", 25.0, "typed"), ("typed", 151.0, "typed"), ("typed", np.inf, "auto"),
+    (None, -25.0, "typed"),
 ])
 def test_hedge_mode_defaults(mode, pct, expected):
     assert hedge_mode_of(mode, pct) == expected

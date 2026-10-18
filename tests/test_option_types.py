@@ -1,4 +1,4 @@
-"""Option types (groundwork): vanilla is the default and the only type priced;
+"""Option types: vanilla is the default; vanillas and digitals are priced,
 other types are stored and shown but report that they are not priced yet,
 never priced as vanillas. Trades booked before types existed read as
 vanillas, and the store migrates to the type columns without touching them."""
@@ -50,9 +50,10 @@ def test_an_unknown_type_is_rejected():
         option_types.option_type_of("asian")
 
 
-def test_only_vanillas_are_priced_for_now():
+def test_only_vanillas_and_digitals_are_priced_for_now():
     assert option_types.check_priced(None) == "vanilla"
-    for key in option_types.OPTION_TYPES[1:]:
+    assert option_types.check_priced("Digital") == "digital"
+    for key in option_types.OPTION_TYPES[2:]:
         with pytest.raises(ValueError, match="not priced yet"):
             option_types.check_priced(key)
 
@@ -97,13 +98,13 @@ def line(**changes):
 
 def test_lines_of_types_not_priced_yet_report_it_and_vanillas_are_unchanged(markets):
     rows, _, _ = pricer.resolve_line_inputs(markets, pd.DataFrame([
-        line(), line(option_type="Vanilla"), line(option_type="Digital"),
+        line(), line(option_type="Vanilla"), line(option_type="One-touch"),
         line(option_type="Knock-out"), line(option_type="asian")]))
     results, errors = pricer.price_lines(markets, rows, MODS)
     assert [r["row"] for r in results] == [1, 2]
     strip = [{k: v for k, v in r.items() if k != "row"} for r in results]
     assert strip[0] == strip[1]
-    assert errors == ["Line 3: Digital options are not priced yet",
+    assert errors == ["Line 3: One-touch options are not priced yet",
                       "Line 4: Knock-out options are not priced yet",
                       "Line 5: Option type must be one of Vanilla, Digital, Knock-out, Knock-in, "
                       "One-touch, No-touch, Double no-touch, not 'asian'"]
@@ -113,7 +114,7 @@ def test_booking_a_type_not_priced_yet_is_refused_and_vanillas_record_their_type
         markets, tmp_path):
     store = SqliteTradeStore(tmp_path / "trades.sqlite")
     rows, _, _ = pricer.resolve_line_inputs(markets, pd.DataFrame(
-        [line(), line(option_type="Digital")]))
+        [line(), line(option_type="Knock-in")]))
     refused = service.book_lines(store, markets, rows, MODS)
     assert not refused.ok and store.trades() == []
     booked = service.book_lines(store, markets, rows.iloc[[0]], MODS)
@@ -122,13 +123,13 @@ def test_booking_a_type_not_priced_yet_is_refused_and_vanillas_record_their_type
 
 def test_stored_trades_of_types_not_priced_yet_are_reported(markets, tmp_path):
     store = SqliteTradeStore(tmp_path / "trades.sqlite")
-    store.book(Booking(trades=(option(), option(option_type="digital"))))
+    store.book(Booking(trades=(option(), option(option_type="no_touch"))))
     trades = store.trades()
-    assert [t.option_type for t in trades] == ["vanilla", "digital"]
+    assert [t.option_type for t in trades] == ["vanilla", "no_touch"]
     assert trades[1].payout_ccy == "EUR"
     results, _, errors = service.price_trades(markets, trades, MODS)
     assert [r["trade_id"] for r in results] == [trades[0].trade_id]
-    assert errors == [f"{trades[1].trade_id}: Digital options are not priced yet"]
+    assert errors == [f"{trades[1].trade_id}: No-touch options are not priced yet"]
 
 
 def _version_1_store(path):
