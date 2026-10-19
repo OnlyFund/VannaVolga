@@ -33,6 +33,7 @@ from app.hedge_delta import HEDGE_DELTA, HEDGE_MODE
 from app.vol_override import VOL_INPUT, VOL_MODE
 from app.ui.trades_block import render_blotter, render_portfolio, trade_store
 from app.ui.risk_block import render_risk
+from app.ui import market_picker
 from app.ui.store_sync import LAYERS, render_store_status, sync_store_markets
 from app.market_layers import origins as store_origins, unavailable as store_unavailable
 from app.market_context import UnavailableMarket
@@ -250,9 +251,26 @@ def render_app():
     with st.sidebar:
         st.header("Valuation")
         valuation_date = st.date_input("Valuation date", key="valuation_date")
-        # Markets come from the market data store (latest on or before the
-        # date); files and edits sit on top. A store problem only shows here.
-        render_store_status(sync_store_markets(valuation_date, apply_loaded_market))
+        # Markets come from the market data store: Latest (on or before the
+        # date) or the snapshot picked below; files and edits sit on top. A
+        # store problem only shows here; a picked snapshot that fails to load
+        # falls back to Latest.
+        picked = market_picker.checked_pick(valuation_date)
+        store_status = sync_store_markets(valuation_date, apply_loaded_market, market_id=picked)
+        if picked is not None and store_status.get("problem"):
+            # Within this run (see market_picker): load Latest instead.
+            market_picker.fall_back(f"Market {picked} could not be loaded "
+                                    f"({store_status['problem']}); using Latest.")
+            picked = None
+            store_status = sync_store_markets(valuation_date, apply_loaded_market)
+        if picked is None:
+            st.session_state["_latest_market_id"] = store_status.get("market_id")
+        # The USD spots for Portfolio totals come from the same snapshot.
+        st.session_state["_loaded_market_id"] = (
+            None if store_status.get("sample") else store_status.get("market_id"))
+        market_picker.render_market_picker(valuation_date,
+                                           st.session_state.get("_latest_market_id"))
+        render_store_status(store_status)
 
         st.header("Reports")
         spot_ladder_mode = st.selectbox(

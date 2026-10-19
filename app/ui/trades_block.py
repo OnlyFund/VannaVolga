@@ -458,7 +458,8 @@ def _table_height(rows):
 
 def _pair_view(totals, market, overrides, valuation_date=None):
     try:
-        snapshot = usd_spots.latest_snapshot(valuation_date)
+        snapshot = usd_spots.latest_snapshot(
+            valuation_date, market_id=st.session_state.get("_loaded_market_id"))
     except Exception as exc:          # an unreadable store must not stop the page
         st.warning(f"Market data store unavailable: {exc}")
         snapshot = None

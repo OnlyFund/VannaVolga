@@ -28,11 +28,17 @@ def theta_ccy(pair):
     return conventional_premium_ccy(pair) or str(pair)[:3]
 
 
-def latest_snapshot(valuation_date=None, store=None):
-    """The latest stored market with data on or before ``valuation_date``
-    (the latest of all without one), or ``None``."""
+def latest_snapshot(valuation_date=None, store=None, market_id=None):
+    """The stored market ``market_id`` when given (the one the app prices on),
+    else the latest with data on or before ``valuation_date`` (the latest of
+    all without one), or ``None``. A ``market_id`` that is gone falls back to
+    the latest."""
     from market_data.store import open_market_data_store
     store = store or open_market_data_store()
+    if market_id is not None:
+        snapshot = store.load(market_id=market_id)
+        if snapshot is not None:
+            return snapshot
     return store.load(on_or_before=valuation_date)
 
 

@@ -35,6 +35,7 @@ def sync_store_markets(valuation_date, apply_loaded_market, market_id=None):
         return st.session_state[STATUS]
     snapshot = result.snapshot
     status = {"problem": result.problem, "notes": list(result.notes),
+              "market_id": None if snapshot is None else int(snapshot.market_id),
               "market": None if snapshot is None else
               f"market {snapshot.market_id} ({snapshot.market_source}, "
               f"{snapshot.date_time.replace('T', ' ')})",

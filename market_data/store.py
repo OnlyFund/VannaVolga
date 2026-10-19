@@ -4,9 +4,11 @@ Each fetch (``market_data.bloomberg_fetch``) saves one market snapshot:
 
 * ``market_id``: a running serial number (1, 2, 3 ...);
 * ``market_source``: where the data came from (``bloomberg``, ``import`` ...);
-* ``date_time``: when the data is from. For a live fetch, the fetch time;
-  for a fetch of a past date, that date's close (23:59:59). A market can
-  value any date on or after its ``date_time``'s date, never an earlier one;
+* ``date_time``: when the data is from, in the fetch machine's local time
+  (``STORE_TIMEZONE``). For a live fetch, the fetch time; for a fetch of a
+  past date, that date's close, 15:00 New York (``close_date_time``; stores
+  from before this used 23:59:59). A market can value any date on or after
+  its ``date_time``'s date, never an earlier one;
 * ``fetched_at``: when it was pulled (audit trail).
 
 and its quotes, one row ``(kind, name, tenor, value)`` each:
@@ -51,8 +53,12 @@ SCHEMA_VERSION = 3
 SPOT, DEPO, FWD_PTS = "spot", "depo", "fwd_pts"
 VOL_FIELDS = ("atm", "rr_25", "bf_25", "rr_10", "bf_10")
 VOL_PREFIX = "vol_"
-#: ``date_time`` of a fetch for a past date: that date's close.
-CLOSE = "23:59:59"
+#: Stored date-times are naive, in the fetch machine's local time.
+STORE_TIMEZONE = "Europe/London"
+#: The close of business: 15:00 New York.
+CLOSE_TIMEZONE, CLOSE_TIME = "America/New_York", "15:00:00"
+#: The close stamped by older code (and still by the schema-1 migration).
+CLOSE = LEGACY_CLOSE = "23:59:59"
 
 _EVENT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS event_sets (
@@ -132,13 +138,23 @@ def _day(value):
     return pd.Timestamp(value).strftime("%Y-%m-%d")
 
 
+def close_date_time(day):
+    """``day``'s close of business (15:00 New York) as a stored date-time.
+
+    In London that is 20:00, or 19:00 in the weeks the UK and US change their
+    clocks on different dates.
+    """
+    close = pd.Timestamp(f"{_day(day)} {CLOSE_TIME}").tz_localize(CLOSE_TIMEZONE)
+    return _iso(close.tz_convert(STORE_TIMEZONE).tz_localize(None))
+
+
 def data_date_time(valuation_date, now=None):
     """The ``date_time`` of data fetched for ``valuation_date``: now when it is
-    today, else that date's close."""
+    today, else that date's close (``close_date_time``)."""
     now = pd.Timestamp(now or datetime.now())
     if _day(valuation_date) == _day(now):
         return _iso(now)
-    return f"{_day(valuation_date)}T{CLOSE}"
+    return close_date_time(valuation_date)
 
 
 def validate_events(rows):
@@ -397,9 +413,13 @@ class MarketDataStore:
 
     def snapshots(self, date=None):
         """Markets, newest first: ``market_id, market_source, date_time,
-        fetched_at, note, quotes``; ``date`` limits them to data of that date."""
+        fetched_at, note, quotes, vols, forwards`` (``vols`` and ``forwards``
+        count the vol and forward point quotes); ``date`` limits them to data
+        of that date."""
         query = ("SELECT m.market_id, m.market_source, m.date_time, m.fetched_at, m.note, "
-                 "COUNT(q.value) AS quotes FROM markets m "
+                 "COUNT(q.value) AS quotes, "
+                 f"COALESCE(SUM(q.kind LIKE '{VOL_PREFIX}%'), 0) AS vols, "
+                 f"COALESCE(SUM(q.kind = '{FWD_PTS}'), 0) AS forwards FROM markets m "
                  "LEFT JOIN quotes q ON q.market_id = m.market_id")
         args = ()
         if date is not None:
@@ -494,7 +514,7 @@ class MarketDataStore:
         payload = json.loads(Path(path).read_text())
         date_time = _iso(payload["as_of"])
         if _day(date_time) != _day(payload["valuation_date"]):
-            date_time = f"{_day(payload['valuation_date'])}T{CLOSE}"
+            date_time = close_date_time(payload["valuation_date"])
         spots = payload.get("spots") if payload.get("format") == "usd_spots" else None
         curves = payload.get("curves") if payload.get("format") == "depo_curves" else None
         if spots is None and curves is None:

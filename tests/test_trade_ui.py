@@ -129,6 +129,9 @@ def test_portfolio_reports_spot_and_usd_columns(store, markets, tmp_path):
     market_data.save("2026-10-16T09:00:00", "bloomberg", spots=spots)
     assert usd_spots.latest_snapshot("2026-10-16", market_data).spots == spots
     assert usd_spots.latest_snapshot("2026-10-15", market_data).spots["EURUSD"] == 1.0
+    # The market the app prices on (a picked one) gives the spots; a gone one falls back.
+    assert usd_spots.latest_snapshot("2026-10-16", market_data, market_id=1).spots["EURUSD"] == 1.0
+    assert usd_spots.latest_snapshot("2026-10-16", market_data, market_id=99).spots == spots
     assert usd_spots.pair_spot("EURJPY", spots) == pytest.approx(1.12 * 158.0)
     totals = pair_totals(results, forwards)
     frame, usd = usd_totals(totals, spots)

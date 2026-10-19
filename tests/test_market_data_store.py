@@ -6,6 +6,7 @@ import pytest
 
 from market_data.store import (
     DEPO, SCHEMA_VERSION, SPOT, VOL_FIELDS, MarketDataStore, MarketDataStoreError,
+    close_date_time,
     data_date_time,
 )
 
@@ -54,7 +55,19 @@ def test_markets_have_a_serial_id_a_source_and_a_data_date_time(store):
 
 def test_data_date_time_is_the_fetch_time_today_and_the_close_for_a_past_date():
     assert data_date_time("2026-10-16", "2026-10-16T15:09:34.6") == "2026-10-16T15:09:34"
-    assert data_date_time("2026-10-15", "2026-10-16T15:09:34") == "2026-10-15T23:59:59"
+    # A past date's close is 15:00 New York, stored in London time.
+    assert data_date_time("2026-10-15", "2026-10-16T15:09:34") == "2026-10-15T20:00:00"
+    assert data_date_time("2026-10-27", "2026-10-28T09:00:00") == "2026-10-27T19:00:00"
+
+
+@pytest.mark.parametrize("day, close", [
+    ("2026-10-16", "2026-10-16T20:00:00"),     # both on summer time
+    ("2026-10-27", "2026-10-27T19:00:00"),     # UK back on GMT, US still on EDT
+    ("2026-11-02", "2026-11-02T20:00:00"),     # both on winter time
+    ("2027-03-20", "2027-03-20T19:00:00"),     # US on EDT, UK still on GMT
+    ("2027-03-29", "2027-03-29T20:00:00")])
+def test_the_close_is_15_00_new_york_in_london_time(day, close):
+    assert close_date_time(day) == close
 
 
 def test_json_files_import_into_one_market(store, tmp_path):
