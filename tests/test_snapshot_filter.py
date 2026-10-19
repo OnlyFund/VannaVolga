@@ -1,5 +1,6 @@
 """Choosing a stored snapshot: usable ones only, the 15:00 New York close of
 business per source, and the quick filter with its failsafes."""
+import pandas as pd
 import pytest
 
 from market_data.snapshot_filter import (
@@ -67,7 +68,7 @@ def test_quick_filter(snapshots, text, listed, selected):
 
 @pytest.mark.parametrize("text, valuation, message", [
     ("19oct", "2026-10-16", "after the valuation date"),
-    ("17oct", "2026-10-19", "latest before it: market 4"),
+    ("17oct", "2026-10-19", "latest before it: [4] BBG 16-Oct 21:30"),
     ("import 15oct", "2026-10-19", "no usable import market on 15-Oct-2026"),
     ("xyz", "2026-10-19", "'xyz' is not a source or a date (sources: bloomberg, import)"),
     ("bloomberg import", "2026-10-19", "one source at a time"),
@@ -93,3 +94,14 @@ def test_picker_labels_are_id_source_code_date_and_time():
     assert label(row) == "[24] BBG 16-Oct 19:06"
     assert label(row, frozenset({24})) == "[24] BBG 16-Oct 19:06 · close"
     assert [source_code(s) for s in ("import", "sample", "refinitiv")] == ["IMP", "SMP", "REF"]
+
+
+def test_a_linked_date_takes_its_close_or_the_last_good_snapshot_and_its_date(snapshots):
+    from market_data.snapshot_filter import linked_snapshot, snapshot_day
+    assert linked_snapshot(snapshots, "2026-10-16")[:2] == (3, pd.Timestamp("2026-10-16"))
+    market_id, day, note = linked_snapshot(snapshots, "2026-10-18")      # a Sunday
+    assert (market_id, day) == (3, pd.Timestamp("2026-10-16"))
+    assert "No market data on 18-Oct-2026" in note and "[3] BBG 16-Oct 19:06" in note
+    assert linked_snapshot(snapshots, "2026-10-14")[0] is None
+    assert snapshot_day(snapshots, 6) == pd.Timestamp("2026-10-16")
+    assert snapshot_day(snapshots, 99) is None

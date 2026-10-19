@@ -126,8 +126,23 @@ def parse_source(token, sources):
     return None, None
 
 
-def _label(row):
-    return f"market {row['market_id']} ({row['market_source']}, {row['date_time'].replace('T', ' ')[:16]})"
+#: Three-letter source codes; any other source shows its first three letters.
+SOURCE_CODES = {"bloomberg": "BBG", "import": "IMP", "sample": "SMP"}
+
+
+def source_code(source):
+    text = str(source)
+    return SOURCE_CODES.get(text.lower(), text[:3].upper())
+
+
+def label(row, closes=frozenset()):
+    """``[23] BBG 16-Oct 15:28``, ``· close`` for a day's close."""
+    stamp = pd.Timestamp(row["date_time"])
+    text = f"[{row['market_id']}] {source_code(row['market_source'])} {stamp:%d-%b %H:%M}"
+    return text + (" · close" if int(row["market_id"]) in closes else "")
+
+
+_label = label
 
 
 def apply_filter(snapshots, text, valuation_date):
@@ -185,3 +200,30 @@ def apply_filter(snapshots, text, valuation_date):
     if source is not None:
         rows = rows[rows["market_source"] == source]
     return FilterResult(rows.reset_index(drop=True), int(best["market_id"]), None, source, day)
+
+
+def linked_snapshot(snapshots, day):
+    """``(market_id, date, note)`` for a valuation date linked to its market data.
+
+    That day's close when the day has a usable snapshot; otherwise the last
+    good snapshot before it (its day's close) and that day, with a note; or
+    ``(None, day, note)`` when there is none at all.
+    """
+    day = _day(day)
+    usable = usable_snapshots(snapshots, day)
+    best = close_of_business(usable, day)
+    if best is not None:
+        return int(best["market_id"]), day, None
+    if usable.empty:
+        return None, day, f"No usable market data on or before {day:%d-%b-%Y}."
+    last_day = _day(usable.iloc[0]["date_time"][:10])
+    best = close_of_business(usable, last_day)
+    return (int(best["market_id"]), last_day,
+            f"No market data on {day:%d-%b-%Y}; using the last good snapshot, "
+            f"{_label(best)}, and its date {last_day:%d-%b-%Y}.")
+
+
+def snapshot_day(snapshots, market_id):
+    """The data date of ``market_id``, or ``None`` when it is not stored."""
+    rows = snapshots[snapshots["market_id"] == market_id]
+    return None if rows.empty else _day(rows.iloc[0]["date_time"][:10])

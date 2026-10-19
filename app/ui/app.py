@@ -250,7 +250,15 @@ def render_app():
 
     with st.sidebar:
         st.header("Valuation")
-        valuation_date = st.date_input("Valuation date", key="valuation_date")
+        market_picker.init_dates()
+        valuation_date = st.date_input("Valuation date", key=market_picker.DATE,
+                                       on_change=market_picker.on_date_change)
+        st.checkbox("Link to market data date", key=market_picker.LINK,
+                    on_change=market_picker.on_link_change,
+                    help="On: the valuation date is the loaded market's date; picking a "
+                         "market moves the date and a date loads its close (or the last "
+                         "good snapshot before it). Off: the date is free and the market "
+                         "is valued forward to it.")
         # Markets come from the market data store: Latest (on or before the
         # date) or the snapshot picked below; files and edits sit on top. A
         # store problem only shows here; a picked snapshot that fails to load
@@ -269,7 +277,8 @@ def render_app():
         st.session_state["_loaded_market_id"] = (
             None if store_status.get("sample") else store_status.get("market_id"))
         market_picker.render_market_picker(valuation_date,
-                                           st.session_state.get("_latest_market_id"))
+                                           st.session_state.get("_latest_market_id"),
+                                           market_picker.horizon(valuation_date))
         render_store_status(store_status)
 
         st.header("Reports")
