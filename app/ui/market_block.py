@@ -7,6 +7,7 @@ import pandas as pd
 import streamlit as st
 from pandas.tseries.offsets import BDay
 from app.market_service import pair_delivery, pair_divisor
+from app.pair_input import resolve_pair_input
 from app.market_store import (
     bundle_payload, choose_active_pair, is_pair, market_payload as build_market_payload,
     pair_broker_strangle, read_market_file, validate_market,
@@ -161,11 +162,23 @@ def render_market_block(markets_tab, valuation_date, apply_loaded_market):
             spot = st.number_input("Spot", format="%.6f", key="spot")
         with market_col2:
             divisor_placeholder = st.empty()
-        with market_col3:
-            currency_pair = st.text_input("Currency pair", key="currency_pair")
-        currency_pair = currency_pair.replace("/", "").replace(" ", "").upper()
         library = st.session_state.setdefault("market_library", {})
         active_pair = st.session_state.get("_active_market_pair")
+        # Before the widget exists, so a rejected value can be replaced: only a
+        # supported six-letter pair is used; anything else goes back to the
+        # last valid pair (or EURUSD) and never touches the market set.
+        typed = st.session_state.get("currency_pair")
+        accepted, rejection = resolve_pair_input(typed, active_pair, library)
+        if accepted != typed:
+            st.session_state["currency_pair"] = accepted
+        if rejection and typed is not None:
+            st.session_state["_pair_rejection"] = rejection
+        with market_col3:
+            currency_pair = st.text_input("Currency pair", key="currency_pair")
+        currency_pair = resolve_pair_input(currency_pair, active_pair, library)[0]
+        rejection = st.session_state.pop("_pair_rejection", None)
+        if rejection:
+            st.warning(rejection)
         if active_pair and currency_pair != active_pair and currency_pair in library:
             # Typing a stored pair switches to its market; the previous pair's
             # edits were stored at the end of the last run.
