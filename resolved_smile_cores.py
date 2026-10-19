@@ -7,7 +7,7 @@ from scipy.special import ndtr
 
 from helper_functions.fx_strangle_converter import _strike_from_delta
 from helper_functions.vanna_volga_helpers import (
-    _validate_pillar_strikes, interpolate_pillar_vols,
+    _validate_pillar_strikes, end_segment_curvatures, interpolate_pillar_vols,
 )
 from resolved_smile_inputs import PreparationError
 
@@ -21,13 +21,18 @@ def validate_strike(strike):
 
 
 class VannaVolgaCore:
-    """Natural-cubic five-pillar smile with curvature-extended wings.
+    """Cubic five-pillar smile with curvature-extended wings.
 
-    Beyond each 10-delta pillar the smile keeps its vol and slope and carries
-    the mean curvature of the 25-10 delta segment on that side, so skew and
-    convexity extend into the wings instead of flattening out. Past
-    ``wing_min_delta`` the wing continues linearly, and Lee's moment bound caps
-    total variance at ``2|log(K/F)|``.
+    Each side's curvature is the mean curvature of the natural pillar spline
+    between its 25- and 10-delta pillars. The interior cubic spline ends with
+    exactly that second derivative, and beyond each 10-delta pillar the wing
+    keeps the spline's vol and slope and carries the same curvature. The smile
+    is then continuous in level, slope and curvature through the pillar (a
+    natural spline's zero end curvature against a curved wing made a kink in
+    the Greeks of options struck near 10D), and skew and convexity extend into
+    the wings instead of flattening out. Past ``wing_min_delta`` the wing
+    continues linearly, and Lee's moment bound caps total variance at
+    ``2|log(K/F)|``.
     """
 
     wing_min_delta = 0.01
@@ -44,11 +49,18 @@ class VannaVolgaCore:
                 raise ValueError("VV requires positive expiry and forward")
         except (TypeError, ValueError) as exc:
             raise PreparationError("invalid resolved VV pillars: {}".format(exc)) from exc
+        try:
+            self.end_curvatures = end_segment_curvatures(self.strikes, self.vols)
+        except (TypeError, ValueError) as exc:
+            raise PreparationError("VV wing curvature failed: {}".format(exc)) from exc
+        if not all(math.isfinite(c) for c in self.end_curvatures):
+            raise PreparationError("VV wing curvature is not finite")
         self._wings = {}
 
     def _interior_vol(self, strike):
         try:
-            return float(interpolate_pillar_vols(self.strikes, self.vols, strike))
+            return float(interpolate_pillar_vols(self.strikes, self.vols, strike,
+                                                 self.end_curvatures))
         except (TypeError, ValueError, RuntimeError, FloatingPointError) as exc:
             raise PreparationError("VV pillar interpolation failed") from exc
 
@@ -63,16 +75,12 @@ class VannaVolgaCore:
         """Strike-independent wing parameters, built once per side."""
         if edge in self._wings:
             return self._wings[edge]
-        inner = 1 if edge == 0 else 3
         inward = 1.0 if edge == 0 else -1.0
         log_edge = math.log(self.strikes[edge])
-        log_inner = math.log(self.strikes[inner])
         vol = float(self.vols[edge])
         slope = self._outward_slope(log_edge, inward)
-        # Outward slope just outside the 25-delta pillar, toward the wing.
-        inner_slope = -self._outward_slope(log_inner, -inward)
-        length = abs(log_edge - log_inner)
-        curvature = max((slope - inner_slope) / length, 0.0)
+        # The spline ends with this second derivative, so curvature is continuous.
+        curvature = self.end_curvatures[0 if edge == 0 else 1]
         if not all(math.isfinite(x) for x in (slope, curvature)):
             raise PreparationError("VV wing slope or curvature is not finite")
         wing = {"log_edge": log_edge, "vol": vol, "slope": slope,

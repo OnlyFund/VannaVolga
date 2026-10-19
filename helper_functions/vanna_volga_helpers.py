@@ -93,7 +93,23 @@ except Exception:  # pragma: no cover - scipy is a hard dependency elsewhere
     _CubicSpline = None
 
 
-def interpolate_pillar_vols(strikes, vols, targets):
+def end_segment_curvatures(strikes, vols):
+    """Mean curvature of the natural pillar spline over each end segment.
+
+    For each side this is the change in the natural spline's log-strike slope
+    from the 25-delta to the 10-delta pillar divided by the segment's length,
+    in vol points per unit log-strike squared: the curvature the smile has
+    between those quotes. It is floored at zero so a wing never bends back
+    toward the money. Returns ``(left, right)``.
+    """
+    x = np.log(np.asarray(strikes, dtype=float))
+    slope = _CubicSpline(x, np.asarray(vols, dtype=float), bc_type="natural").derivative()
+    left = (slope(x[1]) - slope(x[0])) / (x[1] - x[0])
+    right = (slope(x[-1]) - slope(x[-2])) / (x[-1] - x[-2])
+    return max(float(left), 0.0), max(float(right), 0.0)
+
+
+def interpolate_pillar_vols(strikes, vols, targets, end_curvatures=None):
     """Interpolate a quoted smile across its pillars, smoothly.
 
     The pillars are interpolated with a natural cubic spline in **log-strike**.
@@ -113,6 +129,11 @@ def interpolate_pillar_vols(strikes, vols, targets):
     a level outside the quoted range, so a degenerate pillar set can never make
     this worse than the previous behaviour.
 
+    ``end_curvatures`` ``(left, right)`` replaces the natural end condition
+    with those second derivatives (log-strike), so a wing that carries the same
+    curvature joins the spline with continuous curvature. ``None`` keeps the
+    natural spline.
+
     ``strikes`` must be sorted, strictly increasing and positive. Returns a
     float for a scalar ``targets`` and an array otherwise.
     """
@@ -127,7 +148,9 @@ def interpolate_pillar_vols(strikes, vols, targets):
         return float(linear[0]) if scalar else linear
 
     try:
-        spline = _CubicSpline(np.log(strikes_arr), vols_arr, bc_type="natural")
+        bc_type = ("natural" if end_curvatures is None else
+                   ((2, float(end_curvatures[0])), (2, float(end_curvatures[1]))))
+        spline = _CubicSpline(np.log(strikes_arr), vols_arr, bc_type=bc_type)
         with np.errstate(invalid="ignore", divide="ignore"):
             smooth = np.asarray(spline(np.log(np.clip(query, 1e-12, None))),
                                 dtype=float)

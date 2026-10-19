@@ -12,7 +12,7 @@ from wrapped_vol_resolver import WrappedVolResolver
     ("USDMXN", "2026-12-02"),
 ])
 @pytest.mark.parametrize("model", ["vv", "vv-sabr"])
-def test_no_broker_core_matches_legacy_at_pillars_intervals_and_wings(
+def test_no_broker_core_matches_legacy_at_pillars_and_stays_close_between(
         pair, expiry, model):
     raw = MarketSnapshot.capture(market(pair))
     context = resolve_conventions(raw, expiry, "2026-10-02")
@@ -28,12 +28,17 @@ def test_no_broker_core_matches_legacy_at_pillars_intervals_and_wings(
             "atm_conv": context.atm_convention,
         },
         fallback=False)
-    # Wings beyond the 10-delta pillars intentionally differ from legacy.
+    # Wings beyond the 10-delta pillars intentionally differ from legacy, and
+    # between the pillars the core's spline ends with the wing curvature where
+    # legacy's is natural, so it stays within a few hundredths of a vol point.
+    for strike in pillars.strikes:
+        assert core.get_vol_for_strike(strike) == pytest.approx(
+            resolver.benchmark(strike), rel=3e-5, abs=5e-4)
     strikes = np.linspace(pillars.strikes[0], pillars.strikes[-1], 19)
     for strike in strikes:
         actual = core.get_vol_for_strike(strike)
         expected = resolver.benchmark(strike)
-        assert actual == pytest.approx(expected, rel=3e-5, abs=5e-4), (
+        assert actual == pytest.approx(expected, abs=0.05), (
             "{} {} mismatch at {}: core={}, legacy={}".format(
                 model, pair, strike, actual, expected))
 
@@ -88,14 +93,20 @@ def test_wing_is_continuous_in_vol_and_slope_at_10_delta(expiry):
 
 @pytest.mark.parametrize("expiry", ["2026-11-02", "2027-04-02", "2027-10-04"])
 def test_wing_carries_the_25_10_curvature_and_widens_skew(expiry):
+    from helper_functions.vanna_volga_helpers import interpolate_pillar_vols
     core, context, pillars = _skewed_core(expiry)
     h = 1e-4
+
+    def natural(k):
+        return float(interpolate_pillar_vols(pillars.strikes, pillars.vols, k))
     for edge, inner, outward in ((0, 1, -1.0), (4, 3, 1.0)):
         wing = core._wing(edge)
         k_edge, k_inner = pillars.strikes[edge], pillars.strikes[inner]
-        slope = lambda k, s: s * (
-            core.get_vol_for_strike(k * np.exp(outward * s * h)) - core.get_vol_for_strike(k)) / h
-        expected = (slope(k_edge, -1) - slope(k_inner, 1)) / abs(np.log(k_edge / k_inner))
+        slope = lambda k, s, f=core.get_vol_for_strike: s * (
+            f(k * np.exp(outward * s * h)) - f(k)) / h
+        # The natural spline's mean curvature between the 25 and 10 delta pillars.
+        expected = (slope(k_edge, -1, natural) - slope(k_inner, 1, natural)) / abs(
+            np.log(k_edge / k_inner))
         assert wing["slope"] == pytest.approx(slope(k_edge, -1), rel=1e-2, abs=1e-3)
         assert wing["curvature"] == pytest.approx(max(expected, 0.0), rel=2e-2, abs=0.5)
         assert np.isfinite(wing["cap"]) and wing["cap"] > 0
@@ -105,6 +116,28 @@ def test_wing_carries_the_25_10_curvature_and_widens_skew(expiry):
     assert all(b < a for a, b in zip(rr, rr[1:])), rr
     calls = [_delta_vol(core, context, d, 1) for d in (.10, .05, .02, .01)]
     assert all(b >= a - 1e-9 for a, b in zip(calls, calls[1:])), calls
+
+
+@pytest.mark.parametrize("expiry", ["2026-11-02", "2027-04-02", "2027-10-04"])
+@pytest.mark.parametrize("model", ["vv", "vv-sabr"])
+def test_curvature_is_continuous_through_the_10_delta_pillars(expiry, model):
+    core, _, pillars = _skewed_core(expiry, model)
+    for edge, outward in ((0, -1.0), (4, 1.0)):
+        x = np.log(pillars.strikes[edge])
+        h = 2e-3 * abs(x - np.log(pillars.strikes[2]))
+
+        def curvature(at):
+            v = [core.get_vol_for_strike(np.exp(at + s * h)) for s in (-1, 0, 1)]
+            return (v[0] - 2 * v[1] + v[2]) / h ** 2
+
+        def limit(side):
+            # Curvature at 2h and 4h from the pillar, extrapolated to it.
+            return 2 * curvature(x + side * 2 * h) - curvature(x + side * 4 * h)
+        inside, outside = limit(-outward), limit(outward)
+        assert outside == pytest.approx(inside, rel=1e-2, abs=0.5), (edge, inside, outside)
+        if model == "vv":
+            assert outside == pytest.approx(core.end_curvatures[0 if edge == 0 else 1],
+                                            rel=1e-2, abs=0.5)
 
 
 def test_wing_is_linear_beyond_min_delta_and_lee_bounded():
