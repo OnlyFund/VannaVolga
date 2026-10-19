@@ -32,6 +32,7 @@ import numpy as np
 import pandas as pd
 
 from market_data import MarketData
+from market_data.variance_calendar import DEFAULT_WEIGHTS, pair_holidays, weighted_days
 from app.curve_roll import (
     OVERNIGHT_TENORS, anchor_forward_rows, overnight_expiry, roll_forward_rows,
     roll_vol_rows,
@@ -92,9 +93,18 @@ class PricingSettings:
     #: Line tables convert each option's delta to its pair's convention
     #: (``pricing.greeks.convention_deltas``).
     delta_reporting: Optional[str] = "spot"
+    #: Weights of a Saturday, Sunday, holiday and Dec 25 / Jan 1 on the vol
+    #: time clock (``market_data.variance_calendar``); ``CALENDAR`` weights
+    #: every day 1, the calendar-day clock used before.
+    variance_weights: tuple = DEFAULT_WEIGHTS
 
     def problems(self):
         found = []
+        weights = tuple(self.variance_weights)
+        if len(weights) != 4 or not all(isinstance(w, (int, float)) and math.isfinite(w)
+                                        and 0.0 <= w <= 1.0 for w in weights):
+            found.append(f"variance weights must be four numbers between 0 and 1, "
+                         f"not {self.variance_weights!r}")
         if self.pricing_model not in PRICING_MODELS:
             found.append(f"pricing model must be one of {', '.join(PRICING_MODELS)}, "
                          f"not {self.pricing_model!r}")
@@ -201,12 +211,15 @@ class MarketContext:
     # -- time and curves -------------------------------------------------
 
     def variance_days_between(self, start, end):
-        """Calendar days plus the event weights in ``(start, end]``."""
+        """Variance days in ``(start, end]``: each day weighted as a weekday,
+        weekend day, holiday of either currency or year-end day
+        (``market_data.variance_calendar``, weights from the settings), plus
+        the event weights."""
         start = naive_date(start)
         end = naive_date(end)
         if end < start:
             raise ValueError("End date must not precede start date")
-        total = float((end - start).days)
+        total = self._weighted_days(start, end)
         events = self.event_rows
         if not events.empty:
             event_dates = pd.to_datetime(
@@ -217,6 +230,17 @@ class MarketContext:
                 raise ValueError("Event variance days must be finite")
             total += float(weights.loc[(event_dates > start) & (event_dates <= end)].sum())
         return float(total)
+
+    def _weighted_days(self, start, end):
+        """Weighted days, cached per context; the pair's holidays load once."""
+        cache = self.__dict__.setdefault("_variance_day_cache", {})
+        key = (start, end)
+        if key not in cache:
+            if "_holidays" not in self.__dict__:
+                self._holidays, self.calendar_notes = pair_holidays(self.currency_pair)
+            cache[key] = weighted_days(start, end, self._holidays,
+                                       type(DEFAULT_WEIGHTS)(*self.settings.variance_weights))
+        return cache[key]
 
     def delivery(self, expiry):
         return pair_delivery(self.currency_pair, expiry, self.diagnostics)
@@ -316,9 +340,15 @@ class MarketContext:
             raise ValueError("Volatility expiries must be valid dates")
         forward_rows = self.forward_rows
         roll_days = (curve_date - naive_date(valuation_date)).days
+        # A rolled pillar (moved by trading days) keeps its tenor's
+        # settlement: its delivery comes from the calendar-day roll.
+        calendar_rolled = {}
         if curve_date != naive_date(valuation_date):
             forward_rows = self.forward_curve(valuation_date, forward_rows)
+            unadjusted = rows["expiry"] + pd.Timedelta(days=roll_days)
             rows = roll_vol_rows(rows, pair, valuation_date, curve_date)
+            calendar_rolled = {naive_date(a): naive_date(u)
+                               for a, u in zip(rows["expiry"], unadjusted)}
             forward_rows = roll_forward_rows(
                 forward_rows, rows, pair, valuation_date, curve_date, self.delivery,
             )
@@ -326,6 +356,7 @@ class MarketContext:
 
         def pillar_delivery(value):
             # Synthetic risk nodes retain their original settlement offsets.
+            value = calendar_rolled.get(naive_date(value), naive_date(value))
             original_expiry = naive_date(value) - pd.Timedelta(days=roll_days)
             return self.delivery(original_expiry) + pd.Timedelta(days=roll_days)
 

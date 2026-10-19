@@ -8,8 +8,14 @@ roll-down. Each pillar's total variance is fixed by its quote; events only
 distribute it between pillar dates, so an event that passes leaves the
 variance clock and its share is redistributed over the remaining days.
 
-Risk-roll nodes move by elapsed calendar days, without business-day adjustment.
-They are interpolation coordinates, not new contractual settlement dates.
+Vol pillars move by the trading days elapsed (weekdays other than Dec 25 /
+Jan 1): rolling to the next trading day moves every pillar to its next
+trading day, so the surface rolls one trading day forward and each option is
+repriced at its fixed strike and expiry, with total variance from the quotes
+spread by variance days. (A calendar-day shift would put pillars on weekends,
+which the vol clock weights near zero.) Forward and delivery nodes move by
+the calendar days elapsed: carry accrues over weekends. All are interpolation
+coordinates, not new contractual settlement dates.
 Stored expiry/delivery offsets are preserved, including broker date conventions.
 A zero-day roll leaves the market untouched.
 """
@@ -82,9 +88,32 @@ def spot_date(pair, valuation) -> date:
         return (pd.Timestamp(_to_date(valuation)) + BDay(2)).date()
 
 
+def _is_trading_day(day):
+    return day.weekday() < 5 and (day.month, day.day) not in ((12, 25), (1, 1))
+
+
+def trading_days_between(start, end):
+    """Trading days in ``(start, end]``: weekdays other than Dec 25 / Jan 1."""
+    start, end = pd.Timestamp(_to_date(start)), pd.Timestamp(_to_date(end))
+    return sum(_is_trading_day(day) for day in pd.date_range(start + pd.Timedelta(days=1), end))
+
+
+def _add_trading_days(day, count):
+    day = pd.Timestamp(day)
+    for _ in range(count):
+        day += pd.Timedelta(days=1)
+        while not _is_trading_day(day):
+            day += pd.Timedelta(days=1)
+    return day
+
+
 def roll_tenor_dates(pair, tenors, dates, valuation, as_of, kind="expiry"):
-    """Translate risk-curve coordinates by elapsed calendar days."""
+    """Translate risk-curve coordinates to ``as_of``: vol pillars (``expiry``)
+    by the trading days elapsed, delivery nodes by the calendar days."""
     valuation, as_of = _to_date(valuation), _to_date(as_of)
+    if kind == "expiry":
+        steps = trading_days_between(valuation, as_of)
+        return [_add_trading_days(_to_date(stored), steps) for stored in dates]
     shift = pd.Timedelta(days=(as_of - valuation).days)
     return [pd.Timestamp(_to_date(stored)) + shift for stored in dates]
 

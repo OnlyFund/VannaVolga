@@ -10,6 +10,7 @@ from app.curve_roll import (
     roll_vol_rows, spot_date,
 )
 from app.market_context import MarketContext, PricingSettings
+from market_data.variance_calendar import CALENDAR
 from app.market_service import pair_delivery, pair_divisor
 from pricing.greeks import calculate_greeks
 
@@ -22,7 +23,7 @@ EXPIRIES = pd.to_datetime(["2026-10-08", "2026-11-04", "2026-12-03"])  # tenor r
 
 
 def app_curve(events=None, vol_rows=None, forward_rows=None, pair=PAIR, valuation_date=T0,
-              spot=1.1, broker_strangle=False, atm=None):
+              spot=1.1, broker_strangle=False, atm=None, weights=None):
     """The app's market builder (``MarketContext``) on a three-pillar curve."""
     if vol_rows is None:
         vol_rows = pd.DataFrame(dict(
@@ -37,7 +38,8 @@ def app_curve(events=None, vol_rows=None, forward_rows=None, pair=PAIR, valuatio
     event_rows = pd.DataFrame(events or [], columns=["event_date", "variance_days"])
     context = MarketContext(
         pair, valuation_date, spot, pair_divisor(PAIR), broker_strangle,
-        vol_rows, forward_rows, event_rows, settings=PricingSettings(delta_reporting=None),
+        vol_rows, forward_rows, event_rows, settings=PricingSettings(
+            delta_reporting=None, **({} if weights is None else {"variance_weights": weights})),
     )
     return dict(
         context=context, market_for_expiry=context.market_for_expiry,
@@ -66,10 +68,15 @@ def test_zero_day_roll_leaves_the_market_unchanged():
     assert same_day.fwd_pts == pytest.approx(today.fwd_pts, abs=1e-12)
 
 
-def test_variance_clock_counts_full_calendar_days():
+def test_variance_clock_weights_weekends_and_holidays():
     clock = app_curve()["variance_days_between"]
-    assert clock(T0, T1) == 3.0
+    assert clock(T0, T1) == pytest.approx(1.1)            # Sat 0 + Sun 0.1 + Mon 1
     assert clock(T1, date(2026, 10, 6)) == 1.0
+    # Columbus Day (a USD holiday) 0.2; Christmas 0.
+    assert clock(date(2026, 10, 9), date(2026, 10, 12)) == pytest.approx(0.3)
+    assert clock(date(2026, 12, 24), date(2026, 12, 25)) == 0.0
+    calendar = app_curve(weights=CALENDAR)["variance_days_between"]
+    assert calendar(T0, T1) == 3.0                         # the calendar-day clock
 
 
 def test_usdzar_friday_rolls_curves_even_when_spot_settlement_is_unchanged():
@@ -102,7 +109,8 @@ def test_usdzar_friday_rolls_curves_even_when_spot_settlement_is_unchanged():
     rolled_forward = roll_forward_rows(
         forward_rows, rolled_vol, pair, t0, t1, lambda e: pair_delivery(pair, e)
     )
-    assert rolled_vol.expiry.iloc[-1] == pd.Timestamp("2027-10-01")
+    # One trading day elapsed (Fri -> Mon): the 1Y pillar moves Tue -> Wed.
+    assert rolled_vol.expiry.iloc[-1] == pd.Timestamp("2027-09-29")
     # Sunday is a valid synthetic risk coordinate, not a settlement date.
     assert rolled_forward.delivery_date.iloc[-1] == pd.Timestamp("2027-10-03")
     row = pd.Series(dict(
@@ -127,8 +135,21 @@ def test_usdzar_friday_rolls_curves_even_when_spot_settlement_is_unchanged():
     assert rolled_volatility > frozen_forward_volatility
 
 
-def test_flat_tenor_vols_stay_flat_across_weekend_and_between_pillars():
+def test_an_expiry_after_a_weekend_carries_less_vol_than_the_week_around_it():
+    # Flat 10% quotes on Friday: the 1W pillar (Thu 8 Oct) holds 4.1 variance
+    # days (Sat 0, Sun 0.1, Mon-Thu 1) over 6 calendar days; the Monday expiry
+    # holds 1.1 of them over 3 calendar days.
     build = app_curve(atm=10.0)["market_for_expiry"]
+    monday = build("2026-10-05")
+    assert monday.v_atm == pytest.approx(10.0 * np.sqrt(6 / 4.1 * 1.1 / 3), abs=1e-9)
+    # Rolled one trading day (to Monday) the 1W pillar is Friday 9 Oct: a
+    # weekday-only stretch, so a Thursday expiry stays at the flat 10%.
+    thursday = build("2026-10-08", as_of=T1, allow_short_end=True)
+    assert thursday.v_atm == pytest.approx(10.0, abs=1e-9)
+
+
+def test_flat_tenor_vols_stay_flat_across_weekend_and_between_pillars():
+    build = app_curve(atm=10.0, weights=CALENDAR)["market_for_expiry"]
     for expiry in ("2026-10-08", "2026-10-23", "2026-11-17"):
         today = build(expiry)
         tomorrow = build(expiry, as_of=T1, allow_short_end=True)
@@ -139,9 +160,15 @@ def test_flat_tenor_vols_stay_flat_across_weekend_and_between_pillars():
         assert tomorrow.v_atm == pytest.approx(10.0, abs=1e-10)
 
 
-def test_pillar_dates_roll_with_their_tenors():
-    for tenor, stored in zip(TENORS, EXPIRIES):
-        assert rolled_expiry(tenor) == stored + pd.Timedelta(days=3)
+def test_pillar_dates_roll_one_trading_day_per_trading_day_elapsed():
+    # Friday -> Monday is one trading day: each pillar moves to its next
+    # trading day (Thu -> Fri, Wed -> Thu, Thu -> Fri).
+    assert [rolled_expiry(t) for t in TENORS] == list(pd.to_datetime(
+        ["2026-10-09", "2026-11-05", "2026-12-04"]))
+    # Christmas Eve -> the 28th: one trading day; a pillar on the 24th skips
+    # Christmas and the weekend.
+    assert roll_tenor_dates(PAIR, ["1W"], [pd.Timestamp("2026-12-24")],
+                            date(2026, 12, 24), date(2026, 12, 28)) == [pd.Timestamp("2026-12-28")]
 
 
 def test_rolled_pillar_date_keeps_its_tenor_quote():
@@ -151,7 +178,7 @@ def test_rolled_pillar_date_keeps_its_tenor_quote():
 
 
 def test_fixed_expiry_rolls_down_the_vol_and_forward_curves():
-    build = app_curve()["market_for_expiry"]
+    build = app_curve(weights=CALENDAR)["market_for_expiry"]
     expiry = EXPIRIES[1]                       # today's 1M pillar date
     today = build(expiry)
     tomorrow = build(expiry, as_of=T1, allow_short_end=True)
