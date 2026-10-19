@@ -10,13 +10,12 @@ PairConv model already in this file:
   * `delta_base` / `premium_ccy` in the source dict map directly onto
     `premium_adjusted` / `premium_ccy` here (premium quoted in the base
     currency <=> premium-adjusted delta).
-  * `delta_type: "forward"` in the source (applied unconditionally to every
-    EM pair, at every tenor) is modelled here by setting
-    `fwd_delta_beyond="0D"`, which collapses the spot/forward cutoff to the
-    spot date so `delta_type()` always returns the forward-delta branch.
-    Several EM pairs that were already present (USDMXN, USDZAR, USDTRY,
-    USDPLN, USDCZK, USDHUF, USDSGD, USDHKD) previously used the default
-    1Y spot/forward split and have been updated to match.
+  * Every pair, G10 and EM, reads its smile quotes in spot delta up to 1Y
+    and forward delta beyond (the default `fwd_delta_beyond="1Y"`), as
+    Bloomberg does (checked on USDZAR, 2026-10-19). The source's EM
+    `delta_type: "forward"` at every tenor was modelled with
+    `fwd_delta_beyond="0D"` until then. Hedges are booked as forwards
+    regardless: the app sizes them as forward amounts.
 
 Currencies/pairs added here that have no dedicated QuantLib calendar
 (Colombia, Malaysia, Philippines, Vietnam) fall back to `ql.WeekendsOnly()`
@@ -212,55 +211,52 @@ PAIRS: Dict[str, PairConv] = {p.name: p for p in [
 
     _P("DKK", "JPY", 2, 1e-2, True,  "DKK", "dn"),
 
-    # ================= EM (forward delta, every tenor) ==================
-    # fwd_delta_beyond="0D" forces the forward-delta branch unconditionally,
-    # matching fx_conventions_full's "delta_type": "forward" for every one
-    # of these pairs regardless of expiry.
+    # ================= EM (spot delta up to 1Y, forward beyond) ==========
 
     # --- USD base -------------------------------------------------------
-    _P("USD", "SGD", 2, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D"),
-    _P("USD", "HKD", 2, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D"),
-    _P("USD", "MXN", 2, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D"),
-    _P("USD", "BRL", 2, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D", deliverable=False),
-    _P("USD", "CLP", 2, 1,    True,  "USD", "dn", fwd_delta_beyond="0D", deliverable=False),
-    _P("USD", "COP", 2, 1,    True,  "USD", "dn", fwd_delta_beyond="0D", deliverable=False),
-    _P("USD", "ARS", 2, 1e-2, True,  "USD", "dn", fwd_delta_beyond="0D", deliverable=False),
-    _P("USD", "TRY", 1, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D"),   # T+1
-    _P("USD", "ZAR", 2, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D"),
-    _P("USD", "PLN", 2, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D"),
-    _P("USD", "HUF", 2, 1e-2, True,  "USD", "dn", fwd_delta_beyond="0D", fwd_divisor=100),
-    _P("USD", "CZK", 2, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D", fwd_divisor=1_000),
-    _P("USD", "ILS", 2, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D"),
-    _P("USD", "CNH", 2, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D"),
-    _P("USD", "KRW", 2, 1,    True,  "USD", "dn", fwd_delta_beyond="0D", deliverable=False),
-    _P("USD", "INR", 2, 1e-2, True,  "USD", "dn", fwd_delta_beyond="0D", deliverable=False),
-    _P("USD", "TWD", 2, 1e-3, True,  "USD", "dn", fwd_delta_beyond="0D", deliverable=False),
-    _P("USD", "MYR", 2, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D", deliverable=False),
-    _P("USD", "THB", 2, 1e-2, True,  "USD", "dn", fwd_delta_beyond="0D"),
-    _P("USD", "IDR", 2, 1,    True,  "USD", "dn", fwd_delta_beyond="0D", deliverable=False),
-    _P("USD", "PHP", 1, 1e-4, True,  "USD", "dn", fwd_delta_beyond="0D", deliverable=False),
-    _P("USD", "VND", 2, 1,    True,  "USD", "dn", fwd_delta_beyond="0D", deliverable=False),
+    _P("USD", "SGD", 2, 1e-4, True,  "USD", "dn"),
+    _P("USD", "HKD", 2, 1e-4, True,  "USD", "dn"),
+    _P("USD", "MXN", 2, 1e-4, True,  "USD", "dn"),
+    _P("USD", "BRL", 2, 1e-4, True,  "USD", "dn", deliverable=False),
+    _P("USD", "CLP", 2, 1,    True,  "USD", "dn", deliverable=False),
+    _P("USD", "COP", 2, 1,    True,  "USD", "dn", deliverable=False),
+    _P("USD", "ARS", 2, 1e-2, True,  "USD", "dn", deliverable=False),
+    _P("USD", "TRY", 1, 1e-4, True,  "USD", "dn"),   # T+1
+    _P("USD", "ZAR", 2, 1e-4, True,  "USD", "dn"),
+    _P("USD", "PLN", 2, 1e-4, True,  "USD", "dn"),
+    _P("USD", "HUF", 2, 1e-2, True,  "USD", "dn", fwd_divisor=100),
+    _P("USD", "CZK", 2, 1e-4, True,  "USD", "dn", fwd_divisor=1_000),
+    _P("USD", "ILS", 2, 1e-4, True,  "USD", "dn"),
+    _P("USD", "CNH", 2, 1e-4, True,  "USD", "dn"),
+    _P("USD", "KRW", 2, 1,    True,  "USD", "dn", deliverable=False),
+    _P("USD", "INR", 2, 1e-2, True,  "USD", "dn", deliverable=False),
+    _P("USD", "TWD", 2, 1e-3, True,  "USD", "dn", deliverable=False),
+    _P("USD", "MYR", 2, 1e-4, True,  "USD", "dn", deliverable=False),
+    _P("USD", "THB", 2, 1e-2, True,  "USD", "dn"),
+    _P("USD", "IDR", 2, 1,    True,  "USD", "dn", deliverable=False),
+    _P("USD", "PHP", 1, 1e-4, True,  "USD", "dn", deliverable=False),
+    _P("USD", "VND", 2, 1,    True,  "USD", "dn", deliverable=False),
 
     # --- EUR base ---------------------------------------------------------
-    _P("EUR", "BRL", 2, 1e-4, True,  "EUR", "dn", fwd_delta_beyond="0D", deliverable=False),
-    _P("EUR", "MXN", 2, 1e-4, True,  "EUR", "dn", fwd_delta_beyond="0D"),
-    _P("EUR", "CLP", 2, 1,    True,  "EUR", "dn", fwd_delta_beyond="0D", deliverable=False),
-    _P("EUR", "COP", 2, 1,    True,  "EUR", "dn", fwd_delta_beyond="0D", deliverable=False),
-    _P("EUR", "ARS", 2, 1e-2, True,  "EUR", "dn", fwd_delta_beyond="0D", deliverable=False),
-    _P("EUR", "TRY", 1, 1e-4, True,  "EUR", "dn", fwd_delta_beyond="0D"),   # T+1
-    _P("EUR", "ZAR", 2, 1e-4, True,  "EUR", "dn", fwd_delta_beyond="0D"),
-    _P("EUR", "ILS", 2, 1e-4, True,  "EUR", "dn", fwd_delta_beyond="0D"),
-    _P("EUR", "SGD", 2, 1e-4, True,  "EUR", "dn", fwd_delta_beyond="0D"),
-    _P("EUR", "HKD", 2, 1e-4, True,  "EUR", "dn", fwd_delta_beyond="0D"),
-    _P("EUR", "CNH", 2, 1e-4, True,  "EUR", "dn", fwd_delta_beyond="0D"),
-    _P("EUR", "KRW", 2, 1,    True,  "EUR", "dn", fwd_delta_beyond="0D", deliverable=False),
-    _P("EUR", "INR", 2, 1e-2, True,  "EUR", "dn", fwd_delta_beyond="0D", deliverable=False),
-    _P("EUR", "TWD", 2, 1e-3, True,  "EUR", "dn", fwd_delta_beyond="0D", deliverable=False),
-    _P("EUR", "MYR", 2, 1e-4, True,  "EUR", "dn", fwd_delta_beyond="0D", deliverable=False),
-    _P("EUR", "THB", 2, 1e-2, True,  "EUR", "dn", fwd_delta_beyond="0D"),
-    _P("EUR", "IDR", 2, 1,    True,  "EUR", "dn", fwd_delta_beyond="0D", deliverable=False),
-    _P("EUR", "PHP", 1, 1e-4, True,  "EUR", "dn", fwd_delta_beyond="0D", deliverable=False),
-    _P("EUR", "VND", 2, 1,    True,  "EUR", "dn", fwd_delta_beyond="0D", deliverable=False),
+    _P("EUR", "BRL", 2, 1e-4, True,  "EUR", "dn", deliverable=False),
+    _P("EUR", "MXN", 2, 1e-4, True,  "EUR", "dn"),
+    _P("EUR", "CLP", 2, 1,    True,  "EUR", "dn", deliverable=False),
+    _P("EUR", "COP", 2, 1,    True,  "EUR", "dn", deliverable=False),
+    _P("EUR", "ARS", 2, 1e-2, True,  "EUR", "dn", deliverable=False),
+    _P("EUR", "TRY", 1, 1e-4, True,  "EUR", "dn"),   # T+1
+    _P("EUR", "ZAR", 2, 1e-4, True,  "EUR", "dn"),
+    _P("EUR", "ILS", 2, 1e-4, True,  "EUR", "dn"),
+    _P("EUR", "SGD", 2, 1e-4, True,  "EUR", "dn"),
+    _P("EUR", "HKD", 2, 1e-4, True,  "EUR", "dn"),
+    _P("EUR", "CNH", 2, 1e-4, True,  "EUR", "dn"),
+    _P("EUR", "KRW", 2, 1,    True,  "EUR", "dn", deliverable=False),
+    _P("EUR", "INR", 2, 1e-2, True,  "EUR", "dn", deliverable=False),
+    _P("EUR", "TWD", 2, 1e-3, True,  "EUR", "dn", deliverable=False),
+    _P("EUR", "MYR", 2, 1e-4, True,  "EUR", "dn", deliverable=False),
+    _P("EUR", "THB", 2, 1e-2, True,  "EUR", "dn"),
+    _P("EUR", "IDR", 2, 1,    True,  "EUR", "dn", deliverable=False),
+    _P("EUR", "PHP", 1, 1e-4, True,  "EUR", "dn", deliverable=False),
+    _P("EUR", "VND", 2, 1,    True,  "EUR", "dn", deliverable=False),
 ]}
 
 

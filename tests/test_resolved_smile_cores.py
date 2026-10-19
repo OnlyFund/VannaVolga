@@ -9,7 +9,9 @@ from wrapped_vol_resolver import WrappedVolResolver
 
 @pytest.mark.parametrize("pair,expiry", [
     ("EURUSD", "2028-10-02"),
-    ("USDMXN", "2026-12-02"),
+    # Beyond 1Y, where the legacy classes' forward-delta pillars and the core
+    # agree (the core reads spot delta up to 1Y for every pair).
+    ("USDMXN", "2028-10-02"),
 ])
 @pytest.mark.parametrize("model", ["vv", "vv-sabr"])
 def test_no_broker_core_matches_legacy_at_pillars_and_stays_close_between(

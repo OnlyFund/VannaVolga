@@ -41,7 +41,7 @@ def test_pillars_independent_quantlib_delta(pair, expiry):
                                   .1 * ctx.time ** .5)
     assert pillars.strikes[2] == pytest.approx(calc.atmStrike(ql.DeltaVolQuote.AtmDeltaNeutral))
     if pair == "USDMXN":
-        assert ctx.delta_convention == "forward"
+        assert ctx.delta_convention == "spot"     # EM too: spot delta up to 1Y
     if pair == "USDJPY":
         assert ctx.forward_divisor == 100
 

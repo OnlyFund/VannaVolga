@@ -128,7 +128,7 @@ def _cache_for(market):
 #: cache in the session, and Streamlit does not reload root modules such as
 #: ``wrapped_vol_resolver``, so objects built by an older build can outlive a
 #: code change; a new version starts a fresh cache instead of reusing them.
-SURFACE_CACHE_VERSION = 4
+SURFACE_CACHE_VERSION = 5
 
 
 def is_fallback(diagnostics):

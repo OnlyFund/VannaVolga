@@ -48,7 +48,8 @@ def priced(markets):
     ("EURUSD", "2027-10-15", "spot"),
     ("EURUSD", "2027-12-15", "forward"),     # beyond the 1Y cutoff
     ("USDJPY", "2027-04-15", "spot"),
-    ("USDMXN", "2026-11-17", "forward"),     # EM: forward at every tenor
+    ("USDMXN", "2026-11-17", "spot"),        # EM too: spot up to 1Y (as Bloomberg)
+    ("USDMXN", "2027-12-15", "forward"),     # and forward beyond
     ("eur/usd", date(2026, 11, 17), "spot"),
 ])
 def test_delta_convention_follows_the_pair_and_tenor(pair, expiry, expected):
@@ -76,9 +77,10 @@ def test_lines_carry_spot_forward_and_pair_deltas(markets, priced):
                 result[f"{prefix}delta"] / factor, rel=1e-12)
     assert eurusd["delta_convention"] == usdjpy["delta_convention"] == "S"
     assert eurusd["pair_delta"] == eurusd["spot_delta"]
-    assert usdmxn["delta_convention"] == "F"
-    assert usdmxn["pair_delta"] == usdmxn["fwd_delta"]
-    assert usdmxn["fixed_pair_delta"] == usdmxn["fixed_fwd_delta"]
+    # Every pair quotes spot delta up to 1Y, EM included.
+    assert usdmxn["delta_convention"] == "S"
+    assert usdmxn["pair_delta"] == usdmxn["spot_delta"]
+    assert usdmxn["fixed_pair_delta"] == usdmxn["fixed_spot_delta"]
 
 
 def test_forward_reporting_converts_the_other_way(markets, priced):
@@ -145,12 +147,14 @@ def test_line_tables_show_the_pair_convention(markets, priced):
     rows, _, _ = pricer.resolve_line_inputs(markets, pd.DataFrame(
         [line(), line("USDJPY", premium_ccy="BASE"), line("USDMXN")]))
     shown = _with_line_results(rows.reset_index(drop=True), priced)
-    assert list(shown["delta_convention"]) == ["S", "S", "F"]
-    assert shown.at[2, "delta"] == f"{priced[2]['fwd_delta']:,.0f}"
-    assert shown.at[2, "fixed_delta"] == f"{priced[2]['fixed_fwd_delta']:,.0f}"
+    assert list(shown["delta_convention"]) == ["S", "S", "S"]
+    # Each line shows its pair delta (spot up to 1Y for every pair now).
+    assert shown.at[2, "delta"] == f"{priced[2]['pair_delta']:,.0f}"
+    assert shown.at[2, "fixed_delta"] == f"{priced[2]['fixed_pair_delta']:,.0f}"
+    assert shown.at[2, "delta"] == f"{priced[2]['spot_delta']:,.0f}"
     assert shown.at[0, "delta"] == f"{priced[0]['spot_delta']:,.0f}"
     items = pair_convention_rows(priced)
-    assert items[2]["delta"] == priced[2]["fwd_delta"] and items[0]["delta"] == priced[0]["delta"]
+    assert items[2]["delta"] == priced[2]["pair_delta"] and items[0]["delta"] == priced[0]["delta"]
     assert pair_convention_rows([{"delta": 1.0}]) == [{"delta": 1.0}]
 
 
