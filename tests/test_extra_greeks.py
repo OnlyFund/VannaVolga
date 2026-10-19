@@ -58,7 +58,7 @@ def unit_inputs(markets, pair="EURUSD", strike=1.18, expiry="2026-12-17"):
 def test_catalogue_lists_every_greek_once_in_groups():
     assert list(catalog.CATALOG)[:8] == list(catalog.BASE_GREEKS)
     assert set(catalog.EXTRA_GREEKS) == {*catalog.DECAY_GREEKS, "gamma_vol",
-                                         *catalog.WEIGHTED_GREEKS}
+                                         *catalog.WEIGHTED_GREEKS, *catalog.THETA_PARTS}
     assert "theta_decay" not in catalog.CATALOG
     assert all(greek.group in catalog.GROUPS for greek in catalog.CATALOG.values())
     assert catalog.columns(["vega", "gamma_vol"]) == ["fixed_vega", "vega",

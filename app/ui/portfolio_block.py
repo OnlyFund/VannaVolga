@@ -641,10 +641,11 @@ def render_portfolio_block(portfolio_tab, market_pair, pairs=()):
         for greek_name in greeks:
             # Theta is a P&L amount in the pair's premium currency; the other
             # Greeks are in the base currency.
-            unit = "prem ccy" if greek_name == "theta" else None
+            premium_ccy = greek_name in catalog.PREMIUM_CCY_GREEKS
+            unit = "prem ccy" if premium_ccy else None
             unit_help = (
                 " In the premium currency: USD when USD is the term currency, "
-                "otherwise the base currency." if greek_name == "theta" else ""
+                "otherwise the base currency." if premium_ccy else ""
             )
             greek = catalog.CATALOG[greek_name]
             editor_column_config[f"fixed_{greek_name}"] = (

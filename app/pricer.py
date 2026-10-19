@@ -619,7 +619,10 @@ def aggregate_by_pair(results, hedge_trades=(), greeks=GREEK_NAMES):
                                ("fixed_fwd_delta", trade.get("fwd_delta")),
                                ("fwd_delta", trade.get("fwd_delta")),
                                ("fixed_theta", trade.get("theta", 0.0)),
-                               ("theta", trade.get("theta", 0.0))):
+                               ("theta", trade.get("theta", 0.0)),
+                               # A forward's roll is carry (``theta_carry``).
+                               ("fixed_theta_carry", trade.get("theta", 0.0)),
+                               ("theta_carry", trade.get("theta", 0.0))):
             if column in aggregation and amount is not None:
                 aggregation.loc[matches, column] += float(amount)
     return aggregation

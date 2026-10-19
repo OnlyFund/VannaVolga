@@ -18,7 +18,9 @@ USD_COLUMNS = (("mtm_base", "mtm_usd"), ("pnl_base", "pnl_usd"),
 #: Theta is in the pair's premium currency (USD when USD is the term currency,
 #: else the base currency; ``pricing.greeks.theta_currency``), so these
 #: convert from that currency, not from base.
-THETA_USD_COLUMNS = (("theta", "theta_usd"), ("fixed_theta", "fixed_theta_usd"))
+THETA_USD_COLUMNS = tuple((column, f"{column}_usd")
+                          for name in ("theta", "theta_static", "theta_vol_roll", "theta_carry")
+                          for column in (name, f"fixed_{name}"))
 ALL_USD_COLUMNS = USD_COLUMNS + THETA_USD_COLUMNS
 
 

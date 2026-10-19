@@ -13,7 +13,13 @@ the ``EXTRA_GREEKS`` only when a report asks for them
 * cross (``gamma_vol``): change in gamma per vol point, all quoted vols
   scaled together (``Greeks.cross_greeks``);
 * weighted (``weighted_gamma``, ``weighted_vega``): gamma and vega times the
-  expiry weight ``0.25 / T**0.4`` (``Greeks.weighted_greeks.scale_t``).
+  expiry weight ``0.25 / T**0.4`` (``Greeks.weighted_greeks.scale_t``);
+* theta parts (``theta_static``, ``theta_vol_roll``, ``theta_carry``): theta
+  split into its static day decay (vol, forward and rates held: what
+  Bloomberg reports as theta), the strike vol's overnight move and the
+  forward points' and rates' roll. Each family's parts add up to its theta:
+  sticky theta holds the quotes and the forward, so its carry is zero.
+  Hedge forwards' roll is carry. Premium currency, as theta.
 
 ``CONVENTION_GREEKS`` (``spot_delta``, ``fwd_delta``) come with every priced
 line at no extra cost (``pricing.greeks.convention_deltas``) but are shown
@@ -48,13 +54,20 @@ _DECAY = tuple(Greek(f"{name}_decay", _DECAY_LABELS[name], "change per business 
 _CROSS = (Greek("gamma_vol", "Gamma per vol", "gamma change per vol point", "cross"),)
 _WEIGHTED = (Greek("weighted_gamma", "Weighted gamma", "gamma x 0.25/T^0.4", "weighted"),
              Greek("weighted_vega", "Weighted vega", "vega x 0.25/T^0.4", "weighted"))
+_THETA_PARTS = (Greek("theta_static", "Theta static", "premium ccy per day", "theta"),
+                Greek("theta_vol_roll", "Theta vol roll", "premium ccy per day", "theta"),
+                Greek("theta_carry", "Theta carry", "premium ccy per day", "theta"))
 
-CATALOG = OrderedDict((greek.name, greek) for greek in (*_BASE, *_DECAY, *_CROSS, *_WEIGHTED))
+CATALOG = OrderedDict((greek.name, greek)
+                      for greek in (*_BASE, *_DECAY, *_CROSS, *_WEIGHTED, *_THETA_PARTS))
 EXTRA_GREEKS = tuple(name for name in CATALOG
                      if name not in BASE_GREEKS and name not in CONVENTION_GREEKS)
 DECAY_GREEKS = tuple(greek.name for greek in _DECAY)
 WEIGHTED_GREEKS = tuple(greek.name for greek in _WEIGHTED)
-GROUPS = ("first order", "decay", "cross", "weighted")
+THETA_PARTS = tuple(greek.name for greek in _THETA_PARTS)
+#: Greeks in the premium currency (theta and its parts); the rest are base.
+PREMIUM_CCY_GREEKS = ("theta", *THETA_PARTS)
+GROUPS = ("first order", "decay", "cross", "weighted", "theta")
 #: Display tags of the two families (``fixed_<name>`` and ``<name>``), after
 #: the Greek so a narrow column still shows which Greek it is.
 STICKY_DELTA = "sticky"

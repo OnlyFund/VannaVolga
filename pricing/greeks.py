@@ -428,6 +428,38 @@ def calculate_greeks(
     return result
 
 
+def _theta_parts_term(market, next_market, common, mods, next_valuation):
+    """``(static, vol roll)`` of a line's smile theta, in the term currency.
+
+    Static: tomorrow's price with today's strike vol, forward points and
+    rates (the calendar-day decay). Vol roll: tomorrow's price at the strike
+    vol on the next-day surface instead. The rest of the smile theta is carry.
+    """
+    def strike_vol(surface, valuation):
+        pm = PerturbedMarket(
+            base_market=surface, mods=mods, K=common["k"], expiry_date=common["expiry_date"],
+            valuation_date=valuation, CallPut=common["CallPut"], deltaBase=common["deltaBase"],
+            atm_type=common["atm_type"], pricing_model=common["pricing_model"])
+        return pm.shift_spot(delta_spot=0.0, new_spot=surface.s)
+
+    def price(vol, valuation):
+        return BlackScholes(
+            S=market.s, K=common["k"], fwd_pts=market.fwd_pts, v=vol,
+            expiry_date=common["expiry_date"], valuation_date=valuation,
+            CallPut=common["CallPut"], BuySell=common["BuySell"], Notional=common["Notional"],
+            deltaBase=common["deltaBase"], fwd_divisor=market.forward_divisor,
+            term_discount=market.term_discount,
+            **(discount_kwargs(market, common["expiry_date"], valuation)
+               if market.wrapped_smile else {}),
+        ).price()
+
+    tomorrow = _date_text(next_valuation)
+    vol_today = strike_vol(market, common["valuation_date"])
+    vol_tomorrow = strike_vol(next_market, tomorrow)
+    held = price(vol_today, tomorrow)
+    return held - price(vol_today, common["valuation_date"]), price(vol_tomorrow, tomorrow) - held
+
+
 def calculate_extra_greeks(
     market, row, names, base_greeks, pricing_model, atm_type, delta_base, mods,
     next_market=None, next_valuation=None,
@@ -442,7 +474,7 @@ def calculate_extra_greeks(
     """
     from Greeks.cross_greeks import CrossGreeks
     from Greeks.weighted_greeks import scale_t
-    from pricing.greek_catalog import DECAY_GREEKS, WEIGHTED_GREEKS, extras
+    from pricing.greek_catalog import DECAY_GREEKS, THETA_PARTS, WEIGHTED_GREEKS, extras
 
     wanted = extras(names)
     values, problems = {}, {}
@@ -496,6 +528,38 @@ def calculate_extra_greeks(
                 values["gamma_vol"] = (up[1] - dn[1]) / (2 * eps)
             except Exception as exc:
                 failed("gamma_vol", f"gamma per vol failed: {exc}")
+
+    parts = [name for name in wanted if name in THETA_PARTS]
+    if parts:
+        reason = None
+        if next_market is None or next_valuation is None:
+            reason = "no next-business-day market"
+        elif expired or _date_text(next_valuation) >= expiry:
+            for name in parts:
+                values[f"fixed_{name}"] = values[name] = 0.0
+        else:
+            try:
+                common = _greek_inputs(market, row, pricing_model, atm_type, delta_base)
+                static, roll = _theta_parts_term(market, next_market, common, mods, next_valuation)
+                # The premium currency theta is in (calculate_greeks): term
+                # amounts as they are, base ones at today's spot.
+                if theta_currency(row, market) != _pair_code(row, market)[3:]:
+                    static, roll = static / market.s, roll / market.s
+                smile_theta, fixed_theta = base_greeks.get("theta"), base_greeks.get("fixed_theta")
+                if smile_theta is None or fixed_theta is None:
+                    raise ValueError("no theta to split")
+                split = {
+                    "theta_static": (static, static),
+                    "theta_vol_roll": (float(fixed_theta) - static, roll),
+                    "theta_carry": (0.0, float(smile_theta) - static - roll),
+                }
+                for name in parts:
+                    values[f"fixed_{name}"], values[name] = split[name]
+            except Exception as exc:
+                reason = f"theta split failed: {exc}"
+        if reason:
+            for name in parts:
+                failed(name, reason)
 
     weighted = [name for name in wanted if name in WEIGHTED_GREEKS]
     if weighted:

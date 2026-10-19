@@ -267,6 +267,10 @@ def _add_forward_pnl(level, position, market, valuation_date,
         )
         level["fixed_theta"] += theta
         level["theta"] += theta
+        # A forward's roll is carry, when the ladder shows the theta parts.
+        for key in ("fixed_theta_carry", "theta_carry"):
+            if key in level and level[key] is not None:
+                level[key] += theta
 
 
 def _calculate_reference_ladder(
@@ -596,7 +600,8 @@ def render_spot_ladder(tab, results, errors, current_spot, greeks=GREEK_NAMES):
             "pnl_base": st.column_config.NumberColumn("P&L (base)", format="%.0f"),
         }
         for column in shown:
-            label = greek_label(column, "prem ccy" if column in ("theta", "fixed_theta")
+            from pricing.greek_catalog import PREMIUM_CCY_GREEKS, greek_of
+            label = greek_label(column, "prem ccy" if greek_of(column) in PREMIUM_CCY_GREEKS
                                 else None)
             config[column] = st.column_config.NumberColumn(label, format="%.0f")
 
