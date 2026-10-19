@@ -23,8 +23,11 @@ EXPIRIES = pd.to_datetime(["2026-10-08", "2026-11-04", "2026-12-03"])  # tenor r
 
 
 def app_curve(events=None, vol_rows=None, forward_rows=None, pair=PAIR, valuation_date=T0,
-              spot=1.1, broker_strangle=False, atm=None, weights=None):
-    """The app's market builder (``MarketContext``) on a three-pillar curve."""
+              spot=1.1, broker_strangle=False, atm=None, weights=None, theta_vol_roll="tenor"):
+    """The app's market builder (``MarketContext``) on a three-pillar curve.
+
+    These tests cover the tenor roll's mechanics, so theta's next-day market
+    uses the tenor roll unless ``theta_vol_roll`` says otherwise."""
     if vol_rows is None:
         vol_rows = pd.DataFrame(dict(
             tenor=TENORS, expiry=EXPIRIES, atm=[8., 9., 11.], rr_25=[-.5] * 3,
@@ -39,7 +42,8 @@ def app_curve(events=None, vol_rows=None, forward_rows=None, pair=PAIR, valuatio
     context = MarketContext(
         pair, valuation_date, spot, pair_divisor(PAIR), broker_strangle,
         vol_rows, forward_rows, event_rows, settings=PricingSettings(
-            delta_reporting=None, **({} if weights is None else {"variance_weights": weights})),
+            delta_reporting=None, theta_vol_roll=theta_vol_roll,
+            **({} if weights is None else {"variance_weights": weights})),
     )
     return dict(
         context=context, market_for_expiry=context.market_for_expiry,
@@ -369,3 +373,42 @@ def test_theta_is_reported_in_the_premium_currency(monkeypatch):
     for key in ("theta", "fixed_theta"):
         assert in_usd[key] == pytest.approx(in_eur[key] * market.s, rel=1e-12)
     assert in_usd["vega"] == pytest.approx(in_eur["vega"], rel=1e-12)
+
+
+def test_theta_holds_forward_vols_by_default():
+    # Tomorrow's total variance to an expiry is today's minus the day that
+    # passes (today's next-day node), per smile vol; forward points still roll.
+    curve = app_curve(theta_vol_roll="forward")
+    build, context = curve["market_for_expiry"], curve["context"]
+    expiry = "2026-11-17"
+    today, tomorrow = build(expiry), build(expiry, as_of=T1, allow_short_end=True)
+    passed = build(T1, allow_short_end=True)
+    days, gone = (date(2026, 11, 17) - T0).days, (T1 - T0).days
+    expected = np.sqrt((today.v_atm ** 2 * days - passed.v_atm ** 2 * gone) / (days - gone))
+    assert tomorrow.v_atm == pytest.approx(expected, abs=1e-10)
+    tenor = app_curve(theta_vol_roll="tenor")["market_for_expiry"](expiry, as_of=T1,
+                                                                   allow_short_end=True)
+    assert tomorrow.fwd_pts == pytest.approx(tenor.fwd_pts)      # carry unchanged
+    assert tomorrow.v_atm != pytest.approx(tenor.v_atm)
+    assert context.settings.theta_vol_roll == "forward"
+
+
+def test_an_upward_curve_rolls_a_fixed_expiry_up_with_forward_vols_held():
+    # 8 / 9 / 11 vol pillars: the passing front days are cheaper than the
+    # average to December, so the remaining vol rises overnight.
+    build = app_curve(theta_vol_roll="forward")["market_for_expiry"]
+    today = build("2026-12-03")
+    tomorrow = build("2026-12-03", as_of=T1, allow_short_end=True)
+    assert tomorrow.v_atm > today.v_atm
+
+
+def test_forward_vols_fall_back_to_the_tenor_roll_when_no_variance_is_left(monkeypatch):
+    curve = app_curve(theta_vol_roll="forward")
+    context = curve["context"]
+
+    def boom(*args, **kwargs):
+        raise ValueError("no forward variance left in the ATM vol")
+    monkeypatch.setattr(context, "_forward_vol_quotes", boom)
+    tomorrow = context.market_for_expiry("2026-11-17", as_of=T1, allow_short_end=True)
+    tenor = app_curve()["market_for_expiry"]("2026-11-17", as_of=T1, allow_short_end=True)
+    assert tomorrow.v_atm == pytest.approx(tenor.v_atm, abs=1e-12)

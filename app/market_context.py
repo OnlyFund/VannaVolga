@@ -81,6 +81,28 @@ def interpolate_delivery_curve(rows, date_column, value_column, target_date, nam
     return float(np.interp(target, curve["_date"], curve["_value"]))
 
 
+THETA_VOL_ROLLS = ("forward", "tenor")
+_WING_QUOTES = ("PUT_10", "PUT_25", "ATM", "CALL_25", "CALL_10")
+
+
+def wing_vols(market):
+    """The five smile vols (10D/25D put, ATM, 25D/10D call) from a market's quotes."""
+    atm, rr25, bf25, rr10, bf10 = (market.v_atm, market.rr_25, market.bf_25,
+                                   market.rr_10, market.bf_10)
+    return {"PUT_10": atm + bf10 - rr10 / 2, "PUT_25": atm + bf25 - rr25 / 2, "ATM": atm,
+            "CALL_25": atm + bf25 + rr25 / 2, "CALL_10": atm + bf10 + rr10 / 2}
+
+
+def quotes_from_wings(wings):
+    """ATM / RR / BF quotes back from the five smile vols."""
+    atm = wings["ATM"]
+    return {"v_atm": atm,
+            "rr_25": wings["CALL_25"] - wings["PUT_25"],
+            "bf_25": (wings["CALL_25"] + wings["PUT_25"]) / 2.0 - atm,
+            "rr_10": wings["CALL_10"] - wings["PUT_10"],
+            "bf_10": (wings["CALL_10"] + wings["PUT_10"]) / 2.0 - atm}
+
+
 @dataclass(frozen=True)
 class PricingSettings:
     """Model and convention choices shared by every expiry of a market."""
@@ -97,9 +119,16 @@ class PricingSettings:
     #: time clock (``market_data.variance_calendar``); ``CALENDAR`` weights
     #: every day 1, the calendar-day clock used before.
     variance_weights: tuple = DEFAULT_WEIGHTS
+    #: The next-day market theta reprices on: ``"forward"`` holds today's
+    #: forward vols (tomorrow's variance to an expiry is today's minus the day
+    #: that passes); ``"tenor"`` keeps each tenor's quotes on its rolled date.
+    theta_vol_roll: str = "forward"
 
     def problems(self):
         found = []
+        if self.theta_vol_roll not in THETA_VOL_ROLLS:
+            found.append(f"theta vol roll must be one of {', '.join(THETA_VOL_ROLLS)}, "
+                         f"not {self.theta_vol_roll!r}")
         weights = tuple(self.variance_weights)
         if len(weights) != 4 or not all(isinstance(w, (int, float)) and math.isfinite(w)
                                         and 0.0 <= w <= 1.0 for w in weights):
@@ -312,6 +341,50 @@ class MarketContext:
     def market_for_expiry(self, expiry, as_of=None, allow_short_end=False, spot_value=None):
         """Build a MarketData object for ``expiry`` from the market tables.
 
+        With ``as_of`` after the valuation date (theta's next day) the forward
+        points and rates roll as described in ``_market_for_expiry`` (carry).
+        The vol quotes, by default (``PricingSettings.theta_vol_roll`` =
+        ``"forward"``), hold today's forward vols. Each of the five smile vols
+        keeps today's total variance to the expiry minus the variance of the
+        days that pass (today's ``as_of`` node), so on an upward-sloping curve
+        the passing low-vol day raises the remaining vol. A weekend passes with
+        almost no variance on the variance-day clock. If that cannot be formed
+        (non-positive remaining variance, or a failure), the sticky-tenor quotes
+        are kept and the reason is recorded in the diagnostics.
+        """
+        market = self._market_for_expiry(expiry, as_of, allow_short_end, spot_value)
+        if (as_of is None or self.settings.theta_vol_roll != "forward"
+                or naive_date(as_of) <= naive_date(self.valuation_date)
+                or naive_date(expiry) <= naive_date(as_of)):
+            return market
+        try:
+            return market.copy_with(**self._forward_vol_quotes(expiry, as_of, spot_value))
+        except Exception as exc:
+            self.diagnostics.append((self.settings.pricing_model, "theta",
+                                     f"{self.currency_pair} {naive_date(expiry):%Y-%m-%d}: "
+                                     f"theta on tenor-rolled quotes ({exc})"))
+            return market
+
+    def _forward_vol_quotes(self, expiry, as_of, spot_value=None):
+        """Quotes at ``expiry`` seen from ``as_of`` with today's forward vols held."""
+        valuation = naive_date(self.valuation_date)
+        whole = wing_vols(self._market_for_expiry(expiry, spot_value=spot_value))
+        passed = wing_vols(self._market_for_expiry(as_of, allow_short_end=True,
+                                                   spot_value=spot_value))
+        total_days = (naive_date(expiry) - valuation).days
+        passed_days = (naive_date(as_of) - valuation).days
+        remaining = total_days - passed_days
+        wings = {}
+        for name in _WING_QUOTES:
+            variance = whole[name] ** 2 * total_days - passed[name] ** 2 * passed_days
+            if not (variance > 0 and np.isfinite(variance)):
+                raise ValueError(f"no forward variance left in the {name} vol")
+            wings[name] = math.sqrt(variance / remaining)
+        return quotes_from_wings(wings)
+
+    def _market_for_expiry(self, expiry, as_of=None, allow_short_end=False, spot_value=None):
+        """Build a MarketData object for ``expiry`` from the market tables.
+
         With ``as_of`` after the valuation date the curves are rolled to it
         (sticky tenor): pillar expiries and forward deliveries move with their
         tenors while every tenor keeps its quotes, so a fixed expiry picks up
@@ -331,7 +404,7 @@ class MarketContext:
         curve_date = naive_date(valuation_date if as_of is None else as_of)
         requested_date = naive_date(expiry)
         if requested_date == curve_date and allow_short_end and as_of is not None:
-            return self.market_for_expiry(expiry, spot_value=spot_value)
+            return self._market_for_expiry(expiry, spot_value=spot_value)
         rows = self.vol_rows.copy()
         if rows.empty:
             raise ValueError("Enter at least one volatility expiry")
