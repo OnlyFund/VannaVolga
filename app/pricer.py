@@ -87,11 +87,44 @@ def market_for_pair(markets, pair, mismatch=None):
     return markets
 
 
-def price_line(markets, line_number, source_row, mods, extras=()):
+#: How a line reprices at a spot moved away from the market data (the
+#: Portfolio's spot edit): along the smile dynamics (the betas, as the smile
+#: delta and the Risk ladder do) or with the vol quotes held.
+SMILE_PATH, QUOTES_HELD = "smile", "quotes"
+SPOT_PATHS = (SMILE_PATH, QUOTES_HELD)
+
+
+def _moved_spot_markets(context, row, market, next_market, mods, settings):
+    """The line's markets at a moved spot, along the smile dynamics.
+
+    Returns ``(market, next_market, base_market, note)``. ``base_market`` (at
+    the market-data spot) anchors the smile-path delta and gamma; ``None``
+    when nothing moves. On failure the quotes are held and ``note`` says why,
+    so the line still prices.
+    """
+    from app.reports.spot_ladder import _has_dynamics, move_quotes_with_spot
+    anchor = context.__dict__.get("spot_anchor")
+    if anchor is None or float(anchor) == float(market.s) or not _has_dynamics(mods):
+        return market, next_market, None, None
+    try:
+        base_market = context.market_for_expiry(row["expiry"], spot_value=float(anchor))
+        moved, moved_next = move_quotes_with_spot(
+            base_market, market, next_market, row, mods,
+            settings.pricing_model, settings.atm_type, settings.delta_base)
+        return moved, moved_next, base_market, None
+    except Exception as exc:
+        return market, next_market, None, (
+            f"quotes held: smile dynamics failed at the moved spot ({exc})")
+
+
+def price_line(markets, line_number, source_row, mods, extras=(), spot_path=SMILE_PATH):
     """Price one trade line.
 
     Returns ``(line_number, result, error, resolved_strike)``: exactly one of
     ``result`` (the line's row for the pricer grid) and ``error`` is set.
+    At a moved spot (``MarketContext.with_spot``) the line reprices along the
+    smile dynamics by default (``spot_path``), so its P&L and smile delta
+    match the Risk ladder at that spot; ``QUOTES_HELD`` holds the quotes.
     """
     resolved_strike = None
     try:
@@ -135,6 +168,10 @@ def price_line(markets, line_number, source_row, mods, extras=()):
         next_market = context.market_for_expiry(
             row["expiry"], as_of=next_valuation, allow_short_end=True
         )
+        held_market, base_market, spot_note = market, None, None
+        if spot_path == SMILE_PATH:
+            market, next_market, base_market, spot_note = _moved_spot_markets(
+                context, row, market, next_market, mods, settings)
         # A typed vol prices the line on its own copy of the smile, shifted
         # so the strike's vol is the typed one: the Greeks and an auto premium
         # (the dealt price) come from it, MTM from the market, so P&L is the
@@ -174,6 +211,29 @@ def price_line(markets, line_number, source_row, mods, extras=()):
             # Only for a typed vol, as for extras.
             **value_args,
         )
+        spot_fields = {}
+        if base_market is not None:
+            # Smile delta and gamma along the ladder's path from the market-data
+            # spot, so the line's delta matches the Risk ladder at this spot.
+            spot_fields["spot_path"] = SMILE_PATH
+            try:
+                from pricing.greeks import smile_path_delta_gamma
+                # A digital's are its vanilla legs' (as the ladder sums them).
+                if option_type == DIGITAL:
+                    from pricing.digital import leg_rows
+                    path_rows = [pd.Series(leg) for leg in leg_rows(
+                        row, pricing_result.get("payout_ccy", currency_pair[:3]) == currency_pair[:3])]
+                else:
+                    path_rows = [row]
+                deltas = [smile_path_delta_gamma(base_market, held_market, path_row, mods,
+                                                 settings.pricing_model, settings.atm_type,
+                                                 settings.delta_base) for path_row in path_rows]
+                pricing_result["delta"] = sum(d for d, _ in deltas)
+                pricing_result["gamma"] = sum(g for _, g in deltas)
+            except Exception as exc:
+                spot_fields["spot_path_note"] = f"smile-path delta unavailable ({exc})"
+        elif spot_note:
+            spot_fields = {"spot_path": QUOTES_HELD, "spot_path_note": spot_note}
         if vol_fields:
             vol_fields["vol_spread"] = pricing_result["vol_pct"] - vol_fields["mkt_vol_pct"]
             # The premium at the typed vol (what an auto premium is).
@@ -197,6 +257,7 @@ def price_line(markets, line_number, source_row, mods, extras=()):
             **identity,
             **pricing_result,
             **vol_fields,
+            **spot_fields,
             "strike": resolved_strike,
             "call_put": row["call_put"],
             "buy_sell": row["buy_sell"],
@@ -239,13 +300,14 @@ def _numbered(rows):
             for number, row in enumerate(rows, start=1)]
 
 
-def price_lines(markets, rows, mods, extras=()):
+def price_lines(markets, rows, mods, extras=(), spot_path=SMILE_PATH):
     """Price every line; returns ``(results, errors)`` in line order.
 
-    ``extras`` adds on-demand Greeks (``pricing.greek_catalog.EXTRA_GREEKS``).
+    ``extras`` adds on-demand Greeks (``pricing.greek_catalog.EXTRA_GREEKS``);
+    ``spot_path`` is how a moved spot reprices (``price_line``).
     """
     calculated = sorted(
-        (price_line(markets, number, row, mods, extras)
+        (price_line(markets, number, row, mods, extras, spot_path)
          for number, row in _numbered(rows)),
         key=lambda item: item[0],
     )

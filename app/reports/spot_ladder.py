@@ -57,6 +57,40 @@ def _option_greeks(base_market, market, next_market, row, pricing_model, atm_typ
     return greeks, greek_market, greek_next
 
 
+def move_quotes_with_spot(base_market, market, next_market, row, mods, pricing_model,
+                          atm_type, delta_base):
+    """``(market, next_market)`` with the vol quotes moved by the smile dynamics
+    from ``base_market``'s spot to ``market``'s; raises if the dynamics fail.
+
+    The strike's vol on the moved quotes is the smile-path vol the ladder's
+    P&L uses (``_solve_smile_vol``), so pricing on them gives the same value.
+    The Portfolio's spot edit reprices this way too (``app.pricer``).
+    """
+    from surface_models.smile_extension import SmileExtension
+    common = _greek_inputs(base_market, row, pricing_model, atm_type, delta_base)
+    shifted = deepcopy(mods)
+    if isinstance(shifted, dict):
+        shifted["shifted_spot"] = float(market.s)
+    else:
+        setattr(shifted, "shifted_spot", float(market.s))
+    extension = SmileExtension(
+        market=base_market, K=common["k"], expiry_date=common["expiry_date"],
+        valuation_date=common["valuation_date"], CallPut=common["CallPut"], mods=shifted,
+        pricing_model=pricing_model, atm_conv=common["atm_type"],
+        deltaBase=common["deltaBase"], reference_spot=float(base_market.s),
+    )
+    skews = extension.get_local_skews()
+    quotes = extension.extend_wings_convexity(extension.get_new_pillar_vols(skews), skews)
+    change = {name: float(quotes[name]) - float(getattr(base_market, name)) for name in QUOTES}
+    if not all(np.isfinite(value) for value in change.values()):
+        raise ValueError("smile dynamics gave non-finite quotes")
+    moved = market.copy_with(**{name: getattr(market, name) + change[name] for name in QUOTES})
+    if next_market is not None:
+        next_market = next_market.copy_with(
+            **{name: getattr(next_market, name) + change[name] for name in QUOTES})
+    return moved, next_market
+
+
 def _smile_moved_markets(base_market, market, next_market, row, mods, pricing_model,
                          atm_type, delta_base):
     """The scenario's markets with their vol quotes moved by the smile dynamics.
@@ -70,27 +104,8 @@ def _smile_moved_markets(base_market, market, next_market, row, mods, pricing_mo
     if not _has_dynamics(mods) or float(market.s) == float(base_market.s):
         return market, next_market
     try:
-        from surface_models.smile_extension import SmileExtension
-        common = _greek_inputs(base_market, row, pricing_model, atm_type, delta_base)
-        shifted = deepcopy(mods)
-        if isinstance(shifted, dict):
-            shifted["shifted_spot"] = float(market.s)
-        else:
-            setattr(shifted, "shifted_spot", float(market.s))
-        extension = SmileExtension(
-            market=base_market, K=common["k"], expiry_date=common["expiry_date"],
-            valuation_date=common["valuation_date"], CallPut=common["CallPut"], mods=shifted,
-            pricing_model=pricing_model, atm_conv=common["atm_type"],
-            deltaBase=common["deltaBase"], reference_spot=float(base_market.s),
-        )
-        skews = extension.get_local_skews()
-        quotes = extension.extend_wings_convexity(extension.get_new_pillar_vols(skews), skews)
-        change = {name: float(quotes[name]) - float(getattr(base_market, name)) for name in QUOTES}
-        moved = market.copy_with(**{name: getattr(market, name) + change[name] for name in QUOTES})
-        if next_market is not None:
-            next_market = next_market.copy_with(
-                **{name: getattr(next_market, name) + change[name] for name in QUOTES})
-        return moved, next_market
+        return move_quotes_with_spot(base_market, market, next_market, row, mods,
+                                     pricing_model, atm_type, delta_base)
     except Exception as exc:
         logger.warning("Ladder smile dynamics failed at spot %s; Greeks on quoted smile: %s",
                        market.s, exc)

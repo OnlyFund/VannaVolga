@@ -201,6 +201,9 @@ class MarketContext:
             raise MarketContextError(
                 f"{self.currency_pair} spot must be a finite positive number, not {spot!r}")
         moved = copy.copy(self)
+        # The market-data spot stays the anchor of the smile dynamics, however
+        # often the spot is moved (``app.pricer``: the Portfolio's spot edit).
+        moved.spot_anchor = self.__dict__.get("spot_anchor", self.spot)
         moved.spot = number
         return moved
 

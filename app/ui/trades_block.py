@@ -289,6 +289,18 @@ _SPOT_EDITOR = "_portfolio_spot_editor_version"
 TOTAL_ROW = "Total (USD)"
 
 
+#: How an edited spot reprices (``pricer.SPOT_PATHS``): the Portfolio's choice.
+SPOT_PATH = "_portfolio_spot_path"
+SPOT_PATH_LABELS = {pricer.SMILE_PATH: "along the smile dynamics",
+                    pricer.QUOTES_HELD: "with the vol quotes held"}
+
+
+def spot_path():
+    """The chosen spot path; anything unknown falls back to the smile dynamics."""
+    value = st.session_state.get(SPOT_PATH, pricer.SMILE_PATH)
+    return value if value in pricer.SPOT_PATHS else pricer.SMILE_PATH
+
+
 def spot_overrides():
     return dict(st.session_state.get(SPOT_OVERRIDES, {}))
 
@@ -361,13 +373,15 @@ def render_portfolio(tab, market_set, mods):
         clicked = st.button("Price selection", type="primary", key="price_book",
                             disabled=not selected)
         # A moved or refreshed spot reprices the selection already priced.
-        respot = bool(cached) and cached[0] == ids and cached[1] != overrides
+        # The cache is keyed by the spots and how a moved spot reprices.
+        spot_key = (overrides, spot_path())
+        respot = bool(cached) and cached[0] == ids and cached[1] != spot_key
         if clicked or respot:
             extras = chosen_extras(st.session_state.get(_PAIR_COLUMNS, DEFAULT_COLUMNS))
             results, forwards, errors = service.price_trades(
                 market_set.with_spots(overrides), selected, mods,
-                extras=extras)
-            cached = (ids, overrides, results, forwards, errors)
+                extras=extras, spot_path=spot_path())
+            cached = (ids, spot_key, results, forwards, errors)
             st.session_state["_portfolio_book_result"] = cached
         if not cached:
             return
@@ -377,6 +391,11 @@ def render_portfolio(tab, market_set, mods):
             return
         for error in errors:
             st.error("Not priced — " + error)
+        # A line whose smile dynamics failed at the moved spot priced with the
+        # quotes held: said, never hidden.
+        for result in results:
+            if result.get("spot_path_note"):
+                st.warning(f"{result.get('trade_id', 'A line')}: {result['spot_path_note']}")
         problems = {name: reason for result in results
                     for name, reason in result.get("greek_problems", {}).items()}
         for name, reason in problems.items():
@@ -503,8 +522,15 @@ def _pair_view(totals, market, overrides, valuation_date=None):
         st.button("Refresh spot", key="refresh_portfolio_spot", on_click=refresh_spots,
                   help="Reprice at the market data spots.")
     with note_col:
+        st.radio("Edited spots reprice", list(SPOT_PATH_LABELS), key=SPOT_PATH,
+                 format_func=SPOT_PATH_LABELS.get, horizontal=True,
+                 help="Along the smile dynamics (default): the vol quotes move with spot "
+                      "by the Model tab's betas, as the smile delta and the Risk ladder "
+                      "assume, so the P&L matches them. With the quotes held: the sticky "
+                      "path, for comparison.")
         if moved:
-            st.info("Priced at Portfolio spots: " + ", ".join(moved) + ".")
+            st.info("Priced at Portfolio spots " + SPOT_PATH_LABELS[spot_path()] + ": "
+                    + ", ".join(moved) + ".")
     shown = [*FIXED_COLUMNS, *(c for c in optional if c in chosen and c in totals)]
     # Spot is a text cell so the total row stays blank; edits are parsed back.
     frame = _display(totals[shown].to_dict("records"), first=shown,
