@@ -4,6 +4,8 @@ import logging
 from copy import copy, deepcopy
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from app.progress import current
+
 import numpy as np
 import pandas as pd
 
@@ -224,7 +226,6 @@ def _run_scenarios(scenarios, scenario_workers, calculate_scenario, stage="spot 
     Progress (``app.progress.current``) is reported on this thread as each
     scenario finishes, never from the workers.
     """
-    from app.progress import current
     if not scenarios:
         return []
     report = current()
@@ -351,7 +352,10 @@ def _calculate_reference_ladder(
         for position in forward_positions or ()
     ]
     scenarios = []
-    for ladder_spot in ladder_spots:
+    # Building each spot's markets (today's and tomorrow's) is most of a
+    # ladder's time: reported as its own stage.
+    report = current()
+    for done, ladder_spot in enumerate(ladder_spots, start=1):
         try:
             option_markets = {
                 index: market_for_expiry(row["expiry"], spot_value=ladder_spot)
@@ -377,6 +381,7 @@ def _calculate_reference_ladder(
             )
         except Exception as exc:
             scenarios.append((ladder_spot, None, None, None, exc))
+        report(done, len(ladder_spots), "markets")
 
     def calculate_scenario(scenario):
         ladder_spot, option_markets, next_markets, forward_markets, setup_error = scenario
@@ -458,10 +463,12 @@ def _calculate_optimized_ladder(
             for index, row in specs
         ]
         scenario_markets = {}
-        for ladder_spot, index, row in scenario_pairs:
+        report = current()
+        for done, (ladder_spot, index, row) in enumerate(scenario_pairs, start=1):
             scenario_markets[(float(ladder_spot), index)] = _cached_market(
                 markets, market_for_expiry, row["expiry"], None, ladder_spot
             )
+            report(done, len(scenario_pairs), "markets")
 
         def solve_scenario_vol(scenario):
             ladder_spot, index, row = scenario
@@ -491,7 +498,8 @@ def _calculate_optimized_ladder(
 
     next_valuation = _next_valuation(specs, valuation_date)
     scenarios = []
-    for ladder_spot in ladder_spots:
+    report = current()
+    for done, ladder_spot in enumerate(ladder_spots, start=1):
         option_markets = {
             index: scenario_markets[(float(ladder_spot), index)]
             for index, _ in specs
@@ -504,6 +512,7 @@ def _calculate_optimized_ladder(
             for index, row in specs
         }
         scenarios.append((ladder_spot, option_markets, next_markets))
+        report(done, len(ladder_spots), "next-day markets")
 
     def calculate_scenario(scenario):
         ladder_spot, option_markets, next_markets = scenario
