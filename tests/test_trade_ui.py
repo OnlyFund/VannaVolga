@@ -282,3 +282,13 @@ def test_portfolio_filters_have_no_counterparty(monkeypatch):
     labels.clear()
     assert len(block._filters(trades, "portfolio")) == 1         # the Blotter keeps it
     assert labels == ["Currency pair", "Book", "Counterparty", "Product"]
+
+
+def test_forward_lines_show_value_not_risk_columns():
+    from app.ui.trades_block import FORWARD_LINE_COLUMNS
+    for column in ("spot_delta", "fwd_delta", "delta_offset", "settlement_term",
+                   "settlement_base", "bs_delta", "bs_gamma", "theta"):
+        assert column not in FORWARD_LINE_COLUMNS
+    for column in ("mtm_base", "pnl_base", "outright", "forward_rate", "rho", "book",
+                   "counterparty"):
+        assert column in FORWARD_LINE_COLUMNS

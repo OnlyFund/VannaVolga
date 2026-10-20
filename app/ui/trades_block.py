@@ -574,6 +574,12 @@ def pair_convention_rows(results):
             for row in results]
 
 
+#: The Portfolio's forward line columns, in order (``_line_items``).
+FORWARD_LINE_COLUMNS = ("trade_id", "expiry", "value_date", "direction", "base_amount",
+                        "forward_rate", "outright", "mtm_term", "mtm_base", "pnl_term",
+                        "pnl_base", "rho", "book", "counterparty")
+
+
 def _line_items(results, forwards):
     """One pair's options and forwards, by trade id."""
     pairs = sorted({row["currency_pair"] for row in (*results, *forwards)})
@@ -601,9 +607,16 @@ def _line_items(results, forwards):
                    "totals add spot-equivalent delta and gamma.")
     if hedges:
         st.markdown("**Forwards**")
-        amounts = ("base_amount", "delta_offset", "mtm_term", "mtm_base", "pnl_term",
-                   "pnl_base", "theta")
-        st.dataframe(red_negatives(_display(hedges, first=("trade_id", "expiry", "direction"),
-                                            amounts=amounts, rates=("forward_rate",))
-                                   .drop(columns=["currency_pair"]), amounts),
-                     use_container_width=True, hide_index=True)
+        amounts = ("base_amount", "mtm_term", "mtm_base", "pnl_term", "pnl_base", "rho")
+        frame = _display(hedges, amounts=amounts, rates=("forward_rate", "outright"))
+        # The line view keeps what identifies a forward and its value; its
+        # deltas, settlement and sticky-strike Greeks are in the pair totals.
+        frame = frame[[c for c in FORWARD_LINE_COLUMNS if c in frame]]
+        if "value_date" in frame:            # hedges have none: blank, not "None"
+            frame["value_date"] = frame["value_date"].map(
+                lambda day: "" if day is None or (not isinstance(day, str) and pd.isna(day))
+                else str(day))
+        st.dataframe(red_negatives(frame, amounts), use_container_width=True, hide_index=True,
+                     column_config={"forward_rate": st.column_config.TextColumn("Rate"),
+                                    "outright": st.column_config.TextColumn("Outright"),
+                                    "rho": st.column_config.TextColumn("Rho (term ccy)")})
