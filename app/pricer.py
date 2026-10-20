@@ -620,11 +620,13 @@ def aggregate_by_pair(results, hedge_trades=(), greeks=GREEK_NAMES):
         wanted = [column for column in wanted if column in carried]
     columns = ["currency_pair", "mtm_base", "pnl_base", *wanted]
     if results:
-        aggregation = (
-            pd.DataFrame(results)[columns]
-            .groupby("currency_pair", as_index=False, sort=True)
-            .sum(min_count=1)
-        )
+        frame = pd.DataFrame(results)[columns]
+        numeric = [column for column in columns if column != "currency_pair"]
+        frame[numeric] = frame[numeric].apply(pd.to_numeric, errors="coerce")
+        # A Greek missing on any line (unavailable, ``greek_problems``) leaves
+        # its pair total blank rather than a partial sum.
+        aggregation = frame.groupby("currency_pair", as_index=False, sort=True).agg(
+            lambda values: values.sum(min_count=1, skipna=False))
     else:
         # Forwards alone still give their pairs a row.
         aggregation = pd.DataFrame(columns=columns)

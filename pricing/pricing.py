@@ -220,10 +220,11 @@ class Pricable:
         strike, vol, unit_mtm = price_option(
             market, row, pricing_model, atm_type, delta_base
         )
+        base_problems = {}
         unit_greeks = calculate_greeks(
             market, row, None, pricing_model, atm_type, delta_base, mods,
             next_market=next_market, next_valuation=next_valuation,
-            option_value_term=unit_mtm,
+            option_value_term=unit_mtm, problems=base_problems,
         )
         greek_problems = {}
         if extras:
@@ -269,8 +270,10 @@ class Pricable:
                 None if pnl_term_quote is None or premium_quote is None
                 else pnl_term_quote + premium_quote
             )
-        # Only with extras requested: results without them stay exactly as before.
-        problems = {"greek_problems": greek_problems} if extras else {}
+        # Only with extras requested, or a base Greek unavailable: results
+        # without either stay exactly as before.
+        greek_problems = {**base_problems, **greek_problems}
+        problems = {"greek_problems": greek_problems} if extras or base_problems else {}
         auto = {"premium_auto": True, "auto_premium": abs(signed_premium)} if auto_premium else {}
         if value_market is not None:
             auto["value_at_vol"] = value_at_vol

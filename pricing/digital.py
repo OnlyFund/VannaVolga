@@ -137,7 +137,7 @@ class DigitalPricable:
         unit["notional"] = 1.0
         _, vol, _ = price_option(market, unit, pricing_model, atm_type, delta_base)
         result = {
-            **({"greek_problems": problems} if extras else {}),
+            **({"greek_problems": problems} if extras or problems else {}),
             **({"premium_auto": True, "auto_premium": abs(signed_premium)} if auto_premium else {}),
             **constant,
             **total,

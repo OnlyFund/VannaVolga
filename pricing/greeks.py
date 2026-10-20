@@ -374,9 +374,16 @@ def _greek_inputs(market, row, pricing_model, atm_type, delta_base):
     )
 
 
+#: Base Greeks a line can do without: one that fails is ``None`` with the
+#: reason in ``problems`` instead of failing the line (its price and other
+#: Greeks still show). Delta, gamma and theta are not here: hedges, the
+#: convention deltas and the P&L roll depend on them.
+ISOLATED_GREEKS = ("vega", "vanna", "volga", "rega", "sega")
+
+
 def calculate_greeks(
     market, row, mode, pricing_model, atm_type, delta_base, mods,
-    next_market=None, next_valuation=None, option_value_term=None,
+    next_market=None, next_valuation=None, option_value_term=None, problems=None,
 ):
     """Calculate Greeks with optional spot/forward quote-delta reporting.
 
@@ -389,6 +396,9 @@ def calculate_greeks(
     Theta is reported in the pair's conventional premium currency
     (:func:`theta_currency`); every other Greek is in the base currency.
     Smile pillar conventions are independent of this reporting adjustment.
+    ``problems`` (a dict), when given, collects ``{name: reason}`` for an
+    ``ISOLATED_GREEKS`` Greek that failed (``None`` in both families);
+    without it a failure raises, as before.
     """
     expiry = _date_text(row["expiry"])
     valuation = _date_text(row["valuation"])
@@ -411,10 +421,19 @@ def calculate_greeks(
         "rega": FixedRega,
         "sega": FixedSega,
     }
+    def guarded(family, name, compute):
+        if problems is None or name not in ISOLATED_GREEKS:
+            return compute()
+        try:
+            return compute()
+        except Exception as exc:     # this Greek only: the line still prices
+            problems[name] = f"{family} {name} failed: {exc}"
+            return None
+
     fixed = {}
     for name, calculator_cls in calculators.items():
         if name == "vanna":
-            fixed[name] = fixed_vanna(
+            fixed[name] = guarded("sticky", name, lambda: fixed_vanna(
                 market=market,
                 strike=common["k"],
                 expiry=expiry,
@@ -425,16 +444,17 @@ def calculate_greeks(
                 atm_type=atm_type,
                 pricing_model=pricing_model,
                 delta_base=delta_base,
-            )
+            ))
         else:
-            fixed[name] = calculator_cls(**common).calculate()
+            fixed[name] = guarded("sticky", name,
+                                  lambda cls=calculator_cls: cls(**common).calculate())
 
     smile_calculator = SmileGreeks(mods=mods, **common)
     smile = {
         "delta": smile_calculator.delta(),
         "gamma": smile_calculator.gamma(),
-        "vega": smile_calculator.vega(),
-        "vanna": smile_vanna(
+        "vega": guarded("smile", "vega", smile_calculator.vega),
+        "vanna": guarded("smile", "vanna", lambda: smile_vanna(
             market=market,
             strike=common["k"],
             expiry=expiry,
@@ -446,14 +466,19 @@ def calculate_greeks(
             pricing_model=pricing_model,
             delta_base=delta_base,
             mods=mods,
-        ),
-        "volga": smile_calculator.volga(),
+        )),
+        "volga": guarded("smile", "volga", smile_calculator.volga),
         "theta": _rolled_smile_theta(
             market, next_market, common, mods, next_valuation
         ) if next_market is not None and next_valuation is not None else None,
-        "rega": smile_calculator.rega(),
-        "sega": smile_calculator.sega(),
+        "rega": guarded("smile", "rega", smile_calculator.rega),
+        "sega": guarded("smile", "sega", smile_calculator.sega),
     }
+    if problems:
+        # A Greek that failed in one family is unavailable in both: a
+        # sticky value next to a missing smile one would mislead.
+        for name in problems:
+            fixed[name] = smile[name] = None
     if market.delta_reporting is not None or base_premium:
         if option_value_term is None:
             option_value_term = smile_calculator._price_given_market(market)

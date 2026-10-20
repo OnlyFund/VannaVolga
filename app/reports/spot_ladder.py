@@ -47,9 +47,12 @@ def _option_greeks(base_market, market, next_market, row, pricing_model, atm_typ
     """
     greek_market, greek_next = _smile_moved_markets(
         base_market, market, next_market, row, mods, pricing_model, atm_type, delta_base)
+    # A vol Greek that cannot be computed is blank on the level (as an
+    # extra is), not the level's failure.
     greeks = calculate_greeks(
         greek_market, row, None, pricing_model, atm_type, delta_base, mods,
         next_market=greek_next, next_valuation=next_valuation, option_value_term=mtm,
+        problems={},
     )
     if _has_dynamics(mods) and float(market.s) != float(base_market.s):
         try:
@@ -197,8 +200,9 @@ def _add_option_greeks(level, greeks, market, row, extras, pricing_model, atm_ty
     rather than failing the level.
     """
     for greek_name in GREEK_NAMES:
-        level[f"fixed_{greek_name}"] += greeks[f"fixed_{greek_name}"]
-        level[greek_name] += greeks[greek_name]
+        for column in (f"fixed_{greek_name}", greek_name):
+            value = greeks[column]
+            level[column] += np.nan if value is None else value     # unavailable: blank
     if not extras:
         return
     values, _ = calculate_extra_greeks(
