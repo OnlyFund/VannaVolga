@@ -357,7 +357,11 @@ def render_portfolio(tab, market_set, mods):
         st.subheader("Portfolio")
         if not _store_banner(store, problem):
             return
-        live = store.trades(status=LIVE)
+        # The book as of the valuation date: a trade booked later is not in it.
+        live, later = service.book_on(store.trades(status=LIVE), market_set.valuation_date)
+        note = service.not_booked_note(later, market_set.valuation_date)
+        if note:
+            st.info(note)
         selected = _filters(live, "portfolio", by_counterparty=False)
         # The Risk tab reports on this same selection.
         st.session_state["_portfolio_selection"] = [t.trade_id for t in selected]

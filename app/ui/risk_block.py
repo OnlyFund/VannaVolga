@@ -32,13 +32,16 @@ def _formatted(frame, decimals=0):
     return frame.applymap(cell)
 
 
-def _selection(store):
+def _selection(store, valuation_date):
+    """The Portfolio selection in the book on ``valuation_date``, and the
+    note naming trades booked after it (``service.book_on``)."""
     ids = st.session_state.get("_portfolio_selection")
-    trades = store.trades()
-    if ids is None:
-        return trades
-    wanted = set(ids)
-    return [trade for trade in trades if trade.trade_id in wanted]
+    trades, later = service.book_on(store.trades(), valuation_date)
+    if ids is not None:
+        wanted = set(ids)
+        trades = [trade for trade in trades if trade.trade_id in wanted]
+        later = [trade for trade in later if trade.trade_id in wanted]
+    return trades, service.not_booked_note(later, valuation_date)
 
 
 def risk_options(trades, pair, include_exotics=False):
@@ -76,7 +79,9 @@ def render_risk(tab, market_set, mods, ladder_mode):
         st.subheader("Risk")
         if not _store_banner(store, problem):
             return
-        trades = _selection(store)
+        trades, note = _selection(store, market_set.valuation_date)
+        if note:
+            st.info(note)
         if not trades:
             st.info("No live trades selected: choose trades in the Portfolio tab.")
             return

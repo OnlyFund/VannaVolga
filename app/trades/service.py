@@ -2,6 +2,9 @@
 
 * ``book_lines`` turns Pricer lines into booked option trades, optionally
   with delta-hedge forwards linked to the options they hedge;
+* ``book_on`` is the book as of a valuation date: a trade booked after it
+  (trade date later) is not in it, so an earlier date never sees a hedge
+  booked today (its delta and P&L belong to the dates from its booking on);
 * ``select_trades`` reads a filtered book; ``price_trades`` prices it
   through a ``MarketSet``, options as Pricer lines and forwards as hedge
   positions, each result carrying its ``trade_id``;
@@ -155,19 +158,48 @@ def select_trades(store, status=LIVE, currency_pair=None, book=None, counterpart
                         as_of=as_of, live_on=live_on)
 
 
+def book_on(trades, valuation_date):
+    """``(in_book, not_yet_booked)``: ``trades`` split by whether they were
+    booked by ``valuation_date`` (trade date on or before it).
+
+    The trade date is the booking date. Amendments and cancels apply to
+    every date (they correct the record) until lifecycle events carry their
+    own effective dates.
+    """
+    valuation = as_date(valuation_date)
+    in_book = [trade for trade in trades if trade.trade_date <= valuation]
+    later = [trade for trade in trades if trade.trade_date > valuation]
+    return in_book, later
+
+
+def not_booked_note(trades, valuation_date):
+    """One line naming the trades booked after ``valuation_date``, or ``None``."""
+    if not trades:
+        return None
+    shown = ", ".join(f"{t.trade_id} ({t.trade_date:%d-%b-%Y})" for t in trades[:8])
+    more = f" and {len(trades) - 8} more" if len(trades) > 8 else ""
+    return (f"{len(trades)} trade{'s' if len(trades) > 1 else ''} booked after "
+            f"{as_date(valuation_date):%d-%b-%Y} not in the book on that date: {shown}{more}")
+
+
 def price_trades(markets, trades, mods, extras=(), spot_path=pricer.SMILE_PATH):
     """Price booked trades; returns ``(option results, forward rows, errors)``.
 
     Each result carries its ``trade_id``. Expired or cancelled trades are
-    skipped with a note, never priced. ``extras`` adds on-demand Greeks;
-    ``spot_path`` is how a moved spot reprices (``pricer.price_line``).
+    skipped with a note, never priced, and so is a trade booked after the
+    valuation date (``book_on``): it is not in that date's book.
+    ``extras`` adds on-demand Greeks; ``spot_path`` is how a moved spot
+    reprices (``pricer.price_line``).
     """
     valuation = as_date(markets.valuation_date)
     options, forwards, errors = [], [], []
     for trade in trades:
         if trade.status != LIVE:
             continue
-        if trade.expiry <= valuation:
+        if trade.trade_date > valuation:
+            errors.append(f"{trade.trade_id}: booked {trade.trade_date}, after the valuation "
+                          f"date {valuation}; not in that date's book")
+        elif trade.expiry <= valuation:
             errors.append(f"{trade.trade_id}: expired on {trade.expiry}")
         elif trade.is_option:
             options.append(trade.to_pricer_row())
