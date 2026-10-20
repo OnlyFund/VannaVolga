@@ -112,6 +112,7 @@ def market(snapshot, pair, broker_strangle=None, event_rows=None, tenors=APP_TEN
     from app.market_service import pair_divisor
     from app.market_store import market_payload
     from app.usd_spots import pair_spot
+    from market_data.fwd_tickers import SHORT_TENORS
     from market_data.universe import broker_strangle as quoted_broker_strangle
 
     if broker_strangle is None:
@@ -133,8 +134,11 @@ def market(snapshot, pair, broker_strangle=None, event_rows=None, tenors=APP_TEN
     vols = vols[vols["tenor"].isin(both)].drop(columns=["delivery_date"])
     forwards = forwards[forwards["tenor"].isin(both)]
     events = pd.DataFrame(columns=list(EVENT_COLUMNS)) if event_rows is None else event_rows
+    # The short swaps date value-dated deals around spot (``short_points``).
+    quoted = snapshot.forward_points.get(pair, {})
+    short_points = {tenor: quoted[tenor] for tenor in SHORT_TENORS if tenor in quoted}
     payload = market_payload(pair, snapshot.date, spot, pair_divisor(pair),
-                             broker_strangle, vols, forwards, events)
+                             broker_strangle, vols, forwards, events, short_points)
     return payload, notes
 
 

@@ -145,6 +145,64 @@ def roll_forward_rows(forward_rows, rolled_vol_rows, pair, valuation, as_of, del
     return rolled
 
 
+def short_end_nodes(pair, curve_date, short_points):
+    """``[(delivery, fwd_pts, tenor)]``: the quoted short swaps as forward nodes.
+
+    Swap points are far minus near, and spot has zero points, so walking back
+    from spot the day before it is spot less TN (less ON for a T+1 pair,
+    whose ON ends at spot) and today is spot less TN and ON; the day after
+    spot is spot plus SN. A swap whose dates do not meet spot on the pair's
+    calendar is left out, as is a T+1 pair's TN (it would start at spot).
+    """
+    import QuantLib as ql
+    from helper_functions.fx_conventions import joint_calendar, spot_date
+
+    points = short_points or {}
+    today = _ql_date(curve_date)
+    calendar = joint_calendar(pair)
+    tomorrow = calendar.advance(today, ql.Period(1, ql.Days), ql.Following)
+    day_after = calendar.advance(tomorrow, ql.Period(1, ql.Days), ql.Following)
+    spot = spot_date(pair, today)
+
+    def stamp(day):
+        return pd.Timestamp(day.year(), day.month(), day.dayOfMonth())
+
+    nodes = []
+    on, tn, sn = points.get("ON"), points.get("TN"), points.get("SN")
+    if tomorrow == spot:
+        if on is not None:
+            nodes.append((stamp(today), -on, "ON"))
+    elif day_after == spot and tn is not None:
+        nodes.append((stamp(tomorrow), -tn, "TN"))
+        if on is not None:
+            nodes.append((stamp(today), -(on + tn), "ON"))
+    if sn is not None:
+        nodes.append((stamp(calendar.advance(spot, ql.Period(1, ql.Days), ql.Following)),
+                      sn, "SN"))
+    return nodes
+
+
+def with_short_end(curve_rows, pair, curve_date, short_points):
+    """``curve_rows`` (anchored at spot) with the short swaps as dated rows.
+
+    Their term rate is the curve's first, as the spot anchor's. Value-dated
+    deals only: option and hedge forwards keep the spot-to-pillar curve.
+    """
+    nodes = short_end_nodes(pair, curve_date, short_points)
+    if not nodes:
+        return curve_rows
+    dates = pd.to_datetime(curve_rows["delivery_date"], errors="coerce")
+    ordered = sorted(dates.dropna())
+    template = curve_rows.loc[dates.idxmin()].to_dict()
+    # Short nodes sit before the first quoted pillar (the row after spot).
+    limit = ordered[1] if len(ordered) > 1 else ordered[0]
+    extra = [dict(template, tenor=tenor, delivery_date=day, fwd_pts=float(value))
+             for day, value, tenor in nodes if day < limit and day not in set(ordered)]
+    if not extra:
+        return curve_rows
+    return pd.concat([pd.DataFrame(extra), curve_rows], ignore_index=True)
+
+
 def anchor_forward_rows(forward_rows, pair, curve_date):
     """Prepend the spot-date point so short deliveries interpolate.
 

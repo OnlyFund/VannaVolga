@@ -11,6 +11,7 @@ O/N and 1M points) but its USD pair has forward points.
 """
 
 from helper_functions.fx_conventions import CCY, get_pair, spot_date
+from market_data.fwd_tickers import SHORT_TENORS
 from market_data.market_tables import _ql_date, tenor_dates
 
 
@@ -19,7 +20,9 @@ def implied_rates(ccy, pair, valuation_date, spot, forward_points, other_curve):
     the pair's ``forward_points`` (``{tenor: pips}``) and the other leg's
     depo curve (``{tenor: decimal rate}``).
 
-    Tenors missing either the forward points or the other leg's rate are left out.
+    Tenors missing either the forward points or the other leg's rate are left
+    out, and so are the short swaps (``ON``/``TN``/``SN``): they are not
+    spot-to-tenor points.
     """
     base, term = pair[:3], pair[3:]
     if ccy not in (base, term):
@@ -29,7 +32,7 @@ def implied_rates(ccy, pair, valuation_date, spot, forward_points, other_curve):
     rates = {}
     for tenor, points in forward_points.items():
         other = other_curve.get(tenor)
-        if other is None:
+        if other is None or tenor in SHORT_TENORS:
             continue
         _, delivery = tenor_dates(pair, valuation_date, tenor)
         delivery = _ql_date(delivery)

@@ -9,7 +9,7 @@ import pandas as pd
 from xbbg.blp import bdh
 
 from market_data.depo_tickers import TENORS, depo_tickers
-from market_data.fwd_tickers import TENORS as FWD_TENORS, fwd_ticker
+from market_data.fwd_tickers import SHORT_TENORS, TENORS as FWD_TENORS, fwd_ticker
 from market_data.store import open_market_data_store
 from market_data.universe import (  # noqa: F401  (re-exported for callers)
     BASE_EXCEPTIONS, CCY_LIST, COMMON_CCY, CURRENCIES, EM_BASE, EM_CROSSES, FX_UNIVERSE, G10,
@@ -143,12 +143,15 @@ def fetch_vols(valuation_date, pairs=FX_UNIVERSE):
 
 
 def fetch_forward_points(valuation_date, pairs=FX_UNIVERSE):
-    """``{pair: {tenor: points}}`` quoted on ``valuation_date``, tenors ``1W`` ... ``1Y``.
+    """``{pair: {tenor: points}}`` quoted on ``valuation_date``, tenors ``1W`` ... ``1Y``
+    plus the short swaps ``ON``/``TN``/``SN`` where quoted.
 
     One request for the whole universe on that single date. Missing tenors
-    are left out (not filled), with a printed note.
+    are left out (not filled), with a printed note; a missing short swap
+    only means deals inside spot are valued at spot.
     """
-    tickers = [fwd_ticker(pair, tenor) for pair in pairs for tenor in FWD_TENORS]
+    tenors = list(FWD_TENORS) + list(SHORT_TENORS)
+    tickers = [fwd_ticker(pair, tenor) for pair in pairs for tenor in tenors]
     df = bdh(tickers=tickers,
              flds=['last price'],
              start_date=valuation_date,
@@ -162,14 +165,17 @@ def fetch_forward_points(valuation_date, pairs=FX_UNIVERSE):
 
     forwards = {}
     for pair in pairs:
-        points = {tenor: last(fwd_ticker(pair, tenor)) for tenor in FWD_TENORS}
+        points = {tenor: last(fwd_ticker(pair, tenor)) for tenor in tenors}
         quoted = {tenor: value for tenor, value in points.items() if value is not None}
-        if not quoted:
+        if not any(tenor in quoted for tenor in FWD_TENORS):
             print(f'No forward points for {pair} on {valuation_date}')
             continue
-        if len(quoted) < len(points):
-            missing = [tenor for tenor in FWD_TENORS if tenor not in quoted]
+        missing = [tenor for tenor in FWD_TENORS if tenor not in quoted]
+        if missing:
             print(f'{pair}: no forward points for {", ".join(missing)}; left out')
+        short = [tenor for tenor in SHORT_TENORS if tenor not in quoted]
+        if short:
+            print(f'{pair}: no {"/".join(short)} points; deals inside spot value at spot')
         forwards[pair] = quoted
     return forwards
 

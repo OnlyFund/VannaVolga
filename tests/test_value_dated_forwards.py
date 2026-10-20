@@ -91,7 +91,7 @@ def test_inside_spot_it_values_at_spot_and_says_so(markets):
     # Booked two days ago at spot: its value date (16-Oct) is before today's spot date.
     row = priced(markets, [deal(date(2026, 10, 16))])["TR-1"]
     assert row["outright"] == SPOT
-    assert "inside spot" in row["forward_note"] and "no TN/SN points" in row["forward_note"]
+    assert "inside spot" in row["forward_note"] and "ON/TN points are not quoted" in row["forward_note"]
 
 
 def test_a_deal_settling_before_the_next_business_day_loses_its_mtm_as_theta(markets):

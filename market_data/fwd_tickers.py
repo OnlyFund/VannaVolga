@@ -8,6 +8,10 @@ points / forward divisor (``helper_functions.fx_conventions``).
 #: App tenor -> Bloomberg tenor (Bloomberg quotes the year as 12M).
 TENORS = {'1W': '1W', '2W': '2W', '1M': '1M', '2M': '2M', '3M': '3M',
           '6M': '6M', '9M': '9M', '1Y': '12M'}
+#: The short swaps around spot, far minus near: ON today -> tomorrow, TN
+#: tomorrow -> the next day, SN spot -> the next day. They date value-dated
+#: deals inside spot and just after it, never pillars.
+SHORT_TENORS = {'ON': 'ON', 'TN': 'TN', 'SN': 'SN'}
 
 
 def fwd_code(pair):
@@ -19,4 +23,4 @@ def fwd_code(pair):
 
 
 def fwd_ticker(pair, tenor):
-    return f'{fwd_code(pair)}{TENORS[tenor]} Curncy'
+    return f'{fwd_code(pair)}{TENORS.get(tenor) or SHORT_TENORS[tenor]} Curncy'

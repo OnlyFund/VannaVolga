@@ -34,7 +34,7 @@ import pandas as pd
 from market_data import MarketData
 from market_data.variance_calendar import DEFAULT_WEIGHTS, pair_holidays, weighted_days
 from app.curve_roll import (
-    OVERNIGHT_TENORS, anchor_forward_rows, overnight_expiry, roll_forward_rows,
+    OVERNIGHT_TENORS, anchor_forward_rows, overnight_expiry, roll_forward_rows, with_short_end,
     roll_vol_rows,
 )
 from app.market_service import MarketService, pair_delivery
@@ -162,7 +162,7 @@ class MarketContext:
 
     def __init__(self, currency_pair, valuation_date, spot, forward_divisor,
                  broker_strangle, vol_rows, forward_rows, event_rows=None,
-                 settings=None, market_service=None, diagnostics=None):
+                 settings=None, market_service=None, diagnostics=None, short_points=None):
         problems = []
         pair = str(currency_pair or "").replace("/", "").replace(" ", "").strip().upper()
         if not re.fullmatch(r"[A-Z]{6}", pair):
@@ -194,6 +194,9 @@ class MarketContext:
         self.forward_divisor = forward_divisor
         self.broker_strangle = bool(broker_strangle)
         self.vol_rows, self.forward_rows, self.event_rows = vol_rows, forward_rows, event_rows
+        #: Quoted ON/TN/SN swap points (``app.market_store.SHORT_TENORS``);
+        #: only value-dated deals read them (``market_for_delivery``).
+        self.short_points = dict(short_points or {})
         self.settings = settings
         if diagnostics is None:
             diagnostics = DiagnosticsCollector()
@@ -221,6 +224,7 @@ class MarketContext:
             loaded["forward_divisor"], loaded["broker_strangle"], loaded["vol_rows"],
             loaded["forward_rows"], loaded["event_rows"], settings=settings,
             market_service=market_service, diagnostics=diagnostics,
+            short_points=loaded.get("short_points"),
         )
 
     def with_spot(self, spot):
@@ -309,27 +313,31 @@ class MarketContext:
         the valuation date (theta) the curve rolls as in ``market_for_expiry``
         while the delivery stays fixed.
 
-        A delivery inside the curve's spot date (before its first point:
-        yesterday's spot deal, or theta's next day) has no TN/SN points yet;
-        it takes zero points (forward = spot) and the first term rate, and
-        the market's ``forward_note`` says so.
+        The market's quoted short swaps (``short_points``) are nodes too: a
+        delivery before spot takes spot less TN (tomorrow) or less TN and ON
+        (today), the day after spot spot plus SN. A delivery inside spot
+        without the points it needs (before the curve's first node) takes
+        zero points (forward = spot) and the first term rate, and the
+        market's ``forward_note`` says so.
         """
         valuation_date = naive_date(self.valuation_date)
         curve_date = valuation_date if as_of is None else naive_date(as_of)
         delivery = naive_date(delivery)
         if delivery < curve_date:
             raise ValueError("Value date must not be before the valuation date")
+        rows = with_short_end(self.forward_curve(valuation_date), self.currency_pair,
+                              valuation_date, self.short_points)
         if curve_date == valuation_date:
-            curve_rows = self.forward_curve(curve_date)
+            curve_rows = rows
         else:
-            rows = self.forward_curve(valuation_date)
             curve_rows = roll_forward_rows(rows, None, self.currency_pair, valuation_date,
                                            curve_date, self.delivery)
         first = pd.to_datetime(curve_rows["delivery_date"], errors="coerce").min()
         note = None
         if pd.notna(first) and delivery < naive_date(first):
             note = (f"value date {delivery:%Y-%m-%d} is inside spot "
-                    f"({naive_date(first):%Y-%m-%d}): no TN/SN points, valued at spot")
+                    f"({naive_date(first):%Y-%m-%d}) and its ON/TN points are not "
+                    f"quoted: valued at spot")
             fwd_pts = 0.0
             term_rate = interpolate_delivery_curve(curve_rows, "delivery_date",
                                                    "term_discount", first, "Term discount rate")

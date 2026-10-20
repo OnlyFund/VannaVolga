@@ -15,6 +15,13 @@ from app.market_store import (
 from app.smile_service import DiagnosticsCollector
 
 
+def active_short_points(currency_pair):
+    """The loaded market's ON/TN/SN points while its pair is the active one."""
+    if st.session_state.get("_short_points_pair") != currency_pair:
+        return None
+    return st.session_state.get("short_points") or None
+
+
 def _store_active_market(library, currency_pair, payload):
     """Keep the market set's copy of the active pair in step with its edits.
 
@@ -353,7 +360,7 @@ def render_market_block(markets_tab, valuation_date, apply_loaded_market):
         market_payload = build_market_payload(
             currency_pair, valuation_date, spot, forward_divisor,
             st.session_state.get("broker_strangle", True),
-            vol_rows, forward_rows, event_rows,
+            vol_rows, forward_rows, event_rows, active_short_points(currency_pair),
         )
         _store_active_market(library, currency_pair, market_payload)
 

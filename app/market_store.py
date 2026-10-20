@@ -57,10 +57,19 @@ def _records(frame):
     return json.loads(frame.to_json(orient="records", date_format="iso"))
 
 
+#: The short swaps a market may carry (``short_points``): far minus near
+#: points, ON today -> tomorrow, TN tomorrow -> the next day, SN spot -> the
+#: next day. Only value-dated deals read them.
+SHORT_TENORS = ("ON", "TN", "SN")
+
+
 def market_payload(currency_pair, valuation_date, spot, forward_divisor,
-                   broker_strangle, vol_rows, forward_rows, event_rows):
-    """Return the JSON-ready single-pair market dict."""
-    return {
+                   broker_strangle, vol_rows, forward_rows, event_rows, short_points=None):
+    """Return the JSON-ready single-pair market dict.
+
+    ``short_points`` (``{"ON"|"TN"|"SN": points}``) is written only when given.
+    """
+    payload = {
         "format": SINGLE_FORMAT,
         "currency_pair": normalize_pair(currency_pair),
         "valuation_date": pd.Timestamp(valuation_date).strftime("%Y-%m-%d"),
@@ -72,6 +81,30 @@ def market_payload(currency_pair, valuation_date, spot, forward_divisor,
         "forward_points": _records(forward_rows),
         "event_calendar": _records(event_rows),
     }
+    if short_points:
+        payload["short_points"] = {tenor: float(value) for tenor, value in short_points.items()}
+    return payload
+
+
+def _short_points(payload):
+    """The market's ``short_points``, checked; ``{}`` when it has none."""
+    short = payload.get("short_points") or {}
+    if not isinstance(short, dict):
+        raise ValueError("short_points must map ON/TN/SN to points")
+    unknown = set(short).difference(SHORT_TENORS)
+    if unknown:
+        raise ValueError("short_points may only hold ON, TN and SN, not "
+                         + ", ".join(sorted(map(str, unknown))))
+    checked = {}
+    for tenor, value in short.items():
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            number = float("nan")
+        if not np.isfinite(number):
+            raise ValueError(f"short_points.{tenor} must be a finite number")
+        checked[tenor] = number
+    return checked
 
 
 def bundle_payload(markets, valuation_date=None):
@@ -91,8 +124,8 @@ def validate_market(payload):
 
     Raises ``ValueError`` describing the first problem found. The result maps
     ``currency_pair``, ``valuation_date``, ``spot``, ``forward_divisor``,
-    ``broker_strangle`` and the ``vol_rows``/``forward_rows``/``event_rows``
-    frames.
+    ``broker_strangle``, the ``vol_rows``/``forward_rows``/``event_rows``
+    frames and ``short_points`` (``{}`` when the market has none).
     """
     if not isinstance(payload, dict):
         raise ValueError("Market entry must be a JSON object")
@@ -163,6 +196,7 @@ def validate_market(payload):
         "spot": spot_value,
         "forward_divisor": divisor_value,
         **frames,
+        "short_points": _short_points(payload),
     }
 
 

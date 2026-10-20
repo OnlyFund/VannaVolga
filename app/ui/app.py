@@ -17,7 +17,7 @@ from app.curve_roll import next_business_day
 from app.smile_service import (
     SURFACE_CACHE_VERSION, DiagnosticsCollector, SurfaceCache, bind_cache,
 )
-from app.ui.market_block import render_market_block
+from app.ui.market_block import active_short_points, render_market_block
 from app.ui.model_block import render_model_tab
 from app.option_types import LABELS as OPTION_TYPE_LABELS, VANILLA, option_type_of
 from app.premium_side import BASE, TERM, premium_side
@@ -136,6 +136,8 @@ def render_app():
         loaded["_active_market_pair"] = loaded["currency_pair"]
         # The market's own BF flag, not the pair default, for this pair.
         loaded["_broker_strangle_pair"] = loaded["currency_pair"]
+        # Its ON/TN/SN points too: another pair typed in never takes them.
+        loaded["_short_points_pair"] = loaded["currency_pair"]
         st.session_state._pending_market_load = loaded
 
     pending_market = st.session_state.pop("_pending_market_load", None)
@@ -340,6 +342,7 @@ def render_app():
         currency_pair, valuation_date, spot, forward_divisor, broker_strangle,
         vol_rows, forward_rows, event_rows, settings=settings,
         market_service=market_service, diagnostics=diagnostics,
+        short_points=active_short_points(currency_pair),
     )
     if getattr(market_context, "reason", None):
         with markets_tab:
