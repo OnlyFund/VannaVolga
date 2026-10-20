@@ -21,7 +21,8 @@ the ``EXTRA_GREEKS`` only when a report asks for them
   sticky theta holds the quotes and the forward, so its carry is zero.
   Hedge forwards' roll is carry. Premium currency, as theta.
 * rates (``rho``, ``phi``): domestic/term and foreign/base rate sensitivities
-  per +10bp, in base currency, including the parity-consistent forward move.
+  per +10bp, each in its rate's currency (rho term, phi base; ``CCY_TAGS``),
+  including the parity-consistent forward move.
   Smile betas respond to the equivalent log-forward move, not actual spot.
 
 ``CONVENTION_GREEKS`` (``spot_delta``, ``fwd_delta``) come with every priced
@@ -60,8 +61,12 @@ _WEIGHTED = (Greek("weighted_gamma", "Weighted gamma", "gamma x 0.25/T^0.4", "we
 _THETA_PARTS = (Greek("theta_static", "Theta static", "premium ccy per day", "theta"),
                 Greek("theta_vol_roll", "Theta vol roll", "premium ccy per day", "theta"),
                 Greek("theta_carry", "Theta carry", "premium ccy per day", "theta"))
-_RATES = (Greek("rho", "Rho (domestic)", "base ccy per 10bp term rate", "rates"),
-          Greek("phi", "Phi (foreign)", "base ccy per 10bp base rate", "rates"))
+#: Each rate Greek is in the currency of the rate it moves (``CCY_TAGS``):
+#: rho in the term currency, phi in the base. Never in USD, never summed
+#: across pairs (``DIRECTIONAL``).
+_RATES = (Greek("rho", "Rho", "term ccy per 10bp term rate", "rates"),
+          Greek("phi", "Phi", "base ccy per 10bp base rate", "rates"))
+CCY_TAGS = {"rho": "term ccy", "phi": "base ccy"}
 
 CATALOG = OrderedDict((greek.name, greek)
                       for greek in (*_BASE, *_DECAY, *_CROSS, *_WEIGHTED, *_THETA_PARTS, *_RATES))
@@ -131,6 +136,7 @@ def label(column, unit=None):
     greek = CATALOG.get(name[6:] if fixed else name)
     if greek is None:
         return column
+    tag = CCY_TAGS.get(greek.name)
     tags = [STICKY_DELTA if fixed else SMILE, *(["USD"] if usd else []),
-            *([unit] if unit else [])]
+            *([unit] if unit else []), *([tag] if tag and not usd else [])]
     return f"{greek.label} ({', '.join(tags)})"

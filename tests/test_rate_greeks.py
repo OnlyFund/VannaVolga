@@ -140,7 +140,8 @@ def test_rate_extras_exposed_and_expiry_is_zero():
     values, problems = calculate_extra_greeks(
         mkt, row, ["rho", "phi"], {}, "vv", "dn", True, {})
     assert problems == {}
-    assert values["rho"] == pytest.approx(FixedRho(**common(mkt)).calculate())
+    # rho in its rate's (term) currency: the calculator's base value at spot.
+    assert values["rho"] == pytest.approx(FixedRho(**common(mkt)).calculate() * mkt.s)
     assert values["phi"] == pytest.approx(FixedPhi(**common(mkt)).calculate())
     row["valuation"] = EXPIRY
     values, problems = calculate_extra_greeks(
@@ -164,8 +165,20 @@ def test_forward_rate_risks_match_analytic_linear_contract():
     t = year_fraction(EXPIRY, VALUATION)
     f = mkt.s + mkt.fwd_pts / mkt.forward_divisor
     dd = exp(-.05 * t)
-    assert result["rho"] == pytest.approx(-700e6 * 17.2 * t * dd * .001 / mkt.s,
+    assert result["rho"] == pytest.approx(-700e6 * 17.2 * t * dd * .001,       # term ccy
                                          rel=1e-6)
     assert result["phi"] == pytest.approx(700e6 * f * t * dd * .001 / mkt.s, rel=1e-6)
     assert result["fixed_rho"] == result["rho"]
     assert result["fixed_phi"] == result["phi"]
+
+
+def test_rate_greeks_are_in_their_rates_currency_never_usd_never_summed():
+    from app.usd_spots import ALL_USD_COLUMNS
+    from pricing import greek_catalog as catalog
+    assert catalog.label("rho") == "Rho (smile, term ccy)"
+    assert catalog.label("fixed_rho") == "Rho (sticky, term ccy)"
+    assert catalog.label("phi") == "Phi (smile, base ccy)"
+    assert catalog.label("vega") == "Vega (smile)"                  # others unchanged
+    converted = {column for pair in ALL_USD_COLUMNS for column in pair}
+    for column in ("rho", "fixed_rho", "phi", "fixed_phi"):
+        assert column not in converted and catalog.is_directional(column)

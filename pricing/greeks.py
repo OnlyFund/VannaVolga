@@ -59,7 +59,8 @@ def calculate_forward_theta(position, market, next_market, valuation, next_valua
 
 
 def calculate_forward_rate_risks(position, market, valuation, names=("rho", "phi")):
-    """The forward's base-currency rate sensitivities per +10bp, both families."""
+    """The forward's rate sensitivities per +10bp, both families: rho (term
+    rate) in the term currency, phi (base rate) in the base currency."""
     from perturbed_market import PerturbedMarket as QuotePerturbedMarket
 
     values = {}
@@ -74,8 +75,9 @@ def calculate_forward_rate_risks(position, market, valuation, names=("rho", "phi
                                delivery_date=getattr(position, "value_date", None))
                   for step in (0.001, -0.001))
         risk = (position.value(up, valuation)["mtm_term"]
-                - position.value(dn, valuation)["mtm_term"]) / (2 * market.s)
-        values[name] = values[f"fixed_{name}"] = risk
+                - position.value(dn, valuation)["mtm_term"]) / 2
+        # Each in its rate's currency: phi converts to base at spot.
+        values[name] = values[f"fixed_{name}"] = risk if name == "rho" else risk / market.s
     return values
 
 
@@ -526,7 +528,10 @@ def calculate_extra_greeks(
                     calculator = FixedRho if name == "rho" else FixedPhi
                     fixed_risk = calculator(**common).calculate()
                     smile_risk = getattr(smile, name)()
-                    values[f"fixed_{name}"], values[name] = fixed_risk, smile_risk
+                    # The calculators report base currency; rho is in its
+                    # rate's (term) currency: back at spot.
+                    scale = market.s if name == "rho" else 1.0
+                    values[f"fixed_{name}"], values[name] = fixed_risk * scale, smile_risk * scale
                 except (ValueError, RuntimeError, FloatingPointError, OverflowError) as exc:
                     failed(name, f"{name} failed: {exc}")
 
