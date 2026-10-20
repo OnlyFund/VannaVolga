@@ -15,7 +15,7 @@ PRICING_MODELS = ("vv", "vv-sabr")
 #: Slider range and step per beta: (minimum, maximum, step).
 BETA_RANGES = {"beta_atm": (0.0, 5.0, 0.05), "beta_rr": (0.0, 2.0, 0.05),
                "beta_bf": (0.0, 2.0, 0.05)}
-DEFAULTS = {"pricing_model": "vv", "beta_atm": 0.7, "beta_rr": 1.2, "beta_bf": 0.0}
+DEFAULTS = {"pricing_model": "vv", "beta_atm": 0.7, "beta_rr": 0.5, "beta_bf": 0.0}
 #: Settings the app fixes (shown, not editable).
 FIXED_SETTINGS = (
     ("ATM convention", "Delta-neutral (dn)"),

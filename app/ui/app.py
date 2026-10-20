@@ -33,6 +33,7 @@ from app.hedge_delta import HEDGE_DELTA, HEDGE_MODE
 from app.vol_override import VOL_INPUT, VOL_MODE
 from app.ui.trades_block import render_blotter, render_portfolio, trade_store
 from app.ui.risk_block import render_risk
+from app.ui.spot_forward_block import render_spot_forward_block
 from app.ui import market_picker
 from app.ui.store_sync import LAYERS, render_store_status, sync_store_markets
 from app.market_layers import origins as store_origins, unavailable as store_unavailable
@@ -662,6 +663,11 @@ def render_app():
                 "fixed strike on the rolled skew. Pair totals include forward-hedge "
                 "roll theta (sticky and smile) when a hedge is enabled."
             )
+
+    # Spot and forward deals: their own grid under the options.
+    render_spot_forward_block(portfolio_tab, market_set, store, can_book,
+                              market_context.currency_pair, default_book,
+                              default_counterparty)
 
     render_blotter(blotter_tab)
     render_portfolio(book_tab, market_set, mods)

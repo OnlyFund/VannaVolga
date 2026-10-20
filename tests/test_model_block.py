@@ -5,8 +5,9 @@ from app.ui import model_block
 from app.ui.model_block import DEFAULTS, model_settings, render_model_tab
 
 
-def test_defaults_are_the_former_sidebar_defaults():
-    assert DEFAULTS == {"pricing_model": "vv", "beta_atm": 0.7, "beta_rr": 1.2, "beta_bf": 0.0}
+def test_the_default_model_and_betas():
+    # Defaults 2026-10-20: beta_rr 0.5 (was 1.2). Golden tests pin their own betas.
+    assert DEFAULTS == {"pricing_model": "vv", "beta_atm": 0.7, "beta_rr": 0.5, "beta_bf": 0.0}
     assert model_settings({}) == DEFAULTS
 
 

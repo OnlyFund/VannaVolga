@@ -208,6 +208,8 @@ def _plain(trade):
     terms = trade.terms()
     terms["trade_date"] = trade.trade_date.isoformat()
     terms["expiry"] = trade.expiry.isoformat()
+    if trade.value_date is not None:
+        terms["value_date"] = trade.value_date.isoformat()
     return terms
 
 
