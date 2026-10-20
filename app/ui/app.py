@@ -298,6 +298,13 @@ def render_app():
     book_tab, risk_tab, portfolio_tab, blotter_tab, markets_tab, model_tab = st.tabs(
         ["Portfolio", "Risk", "Pricer", "Blotter", "Markets", "Model"]
     )
+    # The Pricer tab's two sections get fixed containers up front: the
+    # options part grows and shrinks (results, errors, hedges), and without
+    # them the Spot / forward elements would shift position between runs,
+    # leaving grayed-out copies at their old places while a run is going.
+    with portfolio_tab:
+        options_area, spot_forward_area = st.container(), st.container()
+    portfolio_tab = options_area
     # Global model settings (Model tab); invalid or missing values fall back
     # to the defaults. The app fixes the rest.
     model = render_model_tab(model_tab)
@@ -665,7 +672,7 @@ def render_app():
             )
 
     # Spot and forward deals: their own grid under the options.
-    render_spot_forward_block(portfolio_tab, market_set, store, can_book,
+    render_spot_forward_block(spot_forward_area, market_set, store, can_book,
                               market_context.currency_pair, default_book,
                               default_counterparty)
 
