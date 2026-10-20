@@ -134,8 +134,10 @@ def test_stored_trades_of_types_not_priced_yet_are_reported(markets, tmp_path):
 
 def _version_1_store(path):
     """A store as schema 1 wrote it, holding one option."""
-    schema = (_SCHEMA.replace("    option_type TEXT,\n", "").replace("    payout_ccy TEXT,\n", ""))
-    assert "option_type" not in schema
+    schema = _SCHEMA
+    for column in ("option_type", "payout_ccy", "value_date", "amount_ccy"):
+        schema = schema.replace(f"    {column} TEXT,\n", "")
+    assert "option_type" not in schema and "value_date" not in schema
     db = sqlite3.connect(str(path))
     db.executescript(schema + "INSERT INTO schema_info (version) VALUES (1);")
     db.execute(
@@ -156,8 +158,9 @@ def test_a_version_1_store_migrates_and_its_trades_are_vanillas(tmp_path):
     (trade,) = store.trades()
     assert trade.option_type is None and trade.is_vanilla
     assert trade.strike == 1.15 and trade.premium == 1000.0
-    assert store._schema_version() == SCHEMA_VERSION == 2
-    assert list((tmp_path / "backups").glob("*before_schema_2*"))
+    assert store._schema_version() == SCHEMA_VERSION == 3     # 1 -> 2 -> 3 in one go
+    assert list((tmp_path / "backups").glob("*before_schema_3*"))
+    assert (trade.value_date, trade.amount_ccy) == (None, None)
     # New types book alongside it.
     store.book(Booking(trades=(option(option_type="digital", payout_ccy="USD"),)))
     assert [t.option_type for t in store.trades()] == [None, "digital"]

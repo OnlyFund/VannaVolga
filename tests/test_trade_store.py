@@ -314,3 +314,110 @@ def test_book_accepts_a_booking_from_reloaded_code(store):
 
     booked = store.book(ReloadedBooking((option(),)))
     assert len(booked) == 1 and booked[0].trade_id
+
+
+# -- schema 3: standalone spot/forward deals -----------------------------------
+
+def deal(**changes):
+    """A standalone forward: a value date, no option behind it."""
+    terms = dict(product_type=FX_FORWARD, currency_pair="EURUSD", trade_date=TRADE_DATE,
+                 expiry=None, value_date=date(2026, 12, 17), buy_sell="BUY", notional=1e6,
+                 contract_rate=1.17, book="SPOT", counterparty="BANK")
+    terms.update(changes)
+    return Trade(**terms)
+
+
+def test_a_value_dated_forward_expires_on_its_value_date():
+    clean = deal(value_date="2026-12-17", amount_ccy="usd").normalized()
+    assert (clean.expiry, clean.value_date, clean.amount_ccy) == (
+        date(2026, 12, 17), date(2026, 12, 17), "USD")
+    assert deal(expiry=date(2026, 12, 17)).normalized().expiry == date(2026, 12, 17)
+    with pytest.raises(TradeValidationError, match="must equal its value date"):
+        deal(expiry=date(2026, 12, 16)).normalized()
+    with pytest.raises(TradeValidationError, match="value date 2026-10-15 must be after"):
+        deal(value_date=TRADE_DATE).normalized()
+    with pytest.raises(TradeValidationError, match="value date must be a date"):
+        deal(value_date="1M").normalized()
+    with pytest.raises(TradeValidationError, match="amount currency must be EUR or USD"):
+        deal(amount_ccy="JPY").normalized()
+    with pytest.raises(TradeValidationError, match="only a forward has a value date"):
+        option(value_date=date(2026, 12, 17)).normalized()
+    with pytest.raises(TradeValidationError, match="only a forward has a value date"):
+        option(amount_ccy="EUR").normalized()
+
+
+@pytest.mark.parametrize("buy_sell, amount_ccy, notional, base, term", [
+    ("BUY", None, 1e6, 1e6, -1.17e6),          # base by default
+    ("BUY", "EUR", 1e6, 1e6, -1.17e6),
+    ("SELL", "EUR", 1e6, -1e6, 1.17e6),
+    ("BUY", "USD", 1.17e6, -1e6, 1.17e6),      # buying term is selling base
+    ("SELL", "USD", 1.17e6, 1e6, -1.17e6),
+])
+def test_the_entered_leg_gives_both_signed_amounts(buy_sell, amount_ccy, notional, base, term):
+    trade = deal(buy_sell=buy_sell, amount_ccy=amount_ccy, notional=notional).normalized()
+    assert trade.signed_base_amount() == pytest.approx(base)
+    assert trade.signed_term_amount() == pytest.approx(term)
+    assert trade.signed_term_amount() == pytest.approx(-trade.signed_base_amount() * 1.17)
+
+
+def test_deals_round_trip_and_amend_their_value_date(store):
+    booked, term = store.book([deal(), deal(amount_ccy="USD", buy_sell="SELL", notional=2.34e6)])
+    assert store.get(booked.trade_id) == booked
+    assert store.get(term.trade_id) == term and term.signed_base_amount() == pytest.approx(2e6)
+    moved = store.amend(booked.trade_id, 1, {"value_date": date(2027, 1, 19)})
+    assert (moved.value_date, moved.expiry) == (date(2027, 1, 19), date(2027, 1, 19))
+    assert store.get(booked.trade_id) == moved
+    hedge, = store.book([forward(-1e6)])
+    assert (hedge.value_date, hedge.amount_ccy) == (None, None)
+
+
+def test_a_term_entered_hedge_sums_in_base(store):
+    call, hedge = store.book(Booking(
+        (option(), forward(0, buy_sell="BUY", notional=1.125e6, amount_ccy="USD")),
+        hedges={1: [HedgeAllocation(0, -1e6)]}))
+    assert hedge.signed_base_amount() == pytest.approx(-1e6)
+
+
+def test_a_schema_2_store_migrates_with_a_backup_and_reads_as_before(tmp_path, clock):
+    import app.trades.store as store_module
+    path = tmp_path / "trades.sqlite"
+    raw = sqlite3.connect(str(path))
+    v2 = store_module._SCHEMA.replace("    value_date TEXT,\n    amount_ccy TEXT,\n", "")
+    assert "value_date" not in v2
+    raw.close()
+    raw = sqlite3.connect(str(path))
+    raw.executescript(v2 + "INSERT INTO schema_info (version) VALUES (2);"
+                      "INSERT INTO sequences (name, next) VALUES ('trade', 2);")
+    raw.execute("INSERT INTO trade_versions (trade_id, version, action, recorded_at, status, "
+                "product_type, currency_pair, trade_date, expiry, buy_sell, notional, "
+                "contract_rate) VALUES ('TR-000001', 1, 'new', '2026-10-15T09:00:00.000000Z', "
+                "'live', 'fx_forward', 'EURUSD', '2026-10-15', '2026-11-17', 'SELL', 1e6, 1.125)")
+    raw.commit()
+    raw.close()
+    store, problem = open_trade_store(path, clock=clock)
+    assert problem is None and not store.read_only
+    assert store._schema_version() == 3
+    assert (tmp_path / "backups" / "trades_before_schema_3.sqlite").exists()
+    trade = store.get("TR-000001")
+    assert (trade.value_date, trade.amount_ccy, trade.signed_base_amount()) == (None, None, -1e6)
+    booked, = store.book([deal()])
+    assert store.get(booked.trade_id).value_date == date(2026, 12, 17)
+    store.close()
+
+
+def test_a_value_dated_forward_is_not_priced_on_the_option_expiry_convention():
+    from app.trades import service
+    from app.market_set import MarketSet
+    from golden.app_harness import load_markets
+    from market_data import Modifications
+    markets = MarketSet.from_payloads(load_markets("MARKETS_20261015.json"), TRADE_DATE)
+    trade = replace_id(deal().normalized(), "TR-000009")
+    with pytest.raises(TradeValidationError, match="not valued yet"):
+        trade.to_position()
+    _, forwards, errors = service.price_trades(markets, [trade], Modifications())
+    assert forwards == [] and errors == ["TR-000009: value-dated forwards are not valued yet"]
+
+
+def replace_id(trade, trade_id):
+    from dataclasses import replace
+    return replace(trade, trade_id=trade_id)

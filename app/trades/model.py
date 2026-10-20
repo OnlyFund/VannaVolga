@@ -15,6 +15,16 @@ Two products for now:
   base amount assigned to each, so one forward can hedge several options
   at the same pair and expiry.
 
+  A hedge forward has no ``value_date``: its ``expiry`` is the option expiry
+  it hedges and it delivers on that expiry's delivery date. A standalone
+  spot or forward deal has a ``value_date`` (its delivery date); its
+  ``expiry`` is set to the same date so it stays live until it settles.
+
+  ``amount_ccy`` is the leg the amount was entered in: the base currency
+  (the default, also when it is missing) or the term currency. ``buy_sell``
+  and ``notional`` are that leg as entered: buying 1.17m USD of EURUSD at
+  1.17 is selling 1m EUR (``signed_base_amount``).
+
 Versions: a trade is never edited in place. Booking writes version 1; an
 amendment or cancellation writes the next version. ``status`` is "live" or
 "cancelled"; matured is derived from the valuation date, never stored.
@@ -45,6 +55,7 @@ ACTIONS = (NEW, AMEND, CANCEL)
 AMENDABLE = (
     "currency_pair", "trade_date", "book", "counterparty", "strike", "expiry",
     "call_put", "buy_sell", "notional", "premium", "premium_ccy", "contract_rate",
+    "value_date", "amount_ccy",
 )
 
 
@@ -88,6 +99,10 @@ class Trade:
     option_type: Optional[str] = None
     #: Binary-payout options only: the currency the payout is paid in.
     payout_ccy: Optional[str] = None
+    #: Standalone forwards only: the delivery date (``expiry`` equals it).
+    value_date: Optional[date] = None
+    #: Forwards only: the currency ``notional`` was entered in; None is base.
+    amount_ccy: Optional[str] = None
 
     @property
     def base(self):
@@ -191,6 +206,25 @@ class Trade:
             if self.option_type not in (None, "") or self.payout_ccy not in (None, ""):
                 problems.append("a forward has no option type or payout currency")
             premium, premium_ccy = 0.0, None
+        value_date, amount_ccy = None, text(self.amount_ccy).upper() or None
+        if self.value_date not in (None, ""):
+            value_date = day("value date", self.value_date)
+        if product == FX_FORWARD:
+            if value_date is not None:
+                if self.expiry in (None, ""):
+                    expiry = value_date
+                    problems[:] = [p for p in problems if not p.startswith("expiry ")]
+                    if trade_date and expiry <= trade_date:
+                        problems.append(f"value date {expiry} must be after the trade date "
+                                        f"{trade_date}")
+                elif expiry is not None and expiry != value_date:
+                    problems.append(f"a value-dated forward's expiry {expiry} must equal its "
+                                    f"value date {value_date}")
+            if amount_ccy is not None and len(pair) == 6 and amount_ccy not in (pair[:3], pair[3:]):
+                problems.append(f"amount currency must be {pair[:3]} or {pair[3:]}, "
+                                f"not {amount_ccy!r}")
+        elif value_date is not None or amount_ccy is not None:
+            problems.append("only a forward has a value date or amount currency")
         status = text(self.status).lower() or LIVE
         if status not in STATUSES:
             problems.append(f"status must be live or cancelled, not {self.status!r}")
@@ -203,6 +237,7 @@ class Trade:
             premium_ccy=premium_ccy, strike=strike, call_put=call_put or None,
             contract_rate=contract_rate, book=text(self.book), counterparty=text(self.counterparty),
             status=status, option_type=option_type, payout_ccy=payout_ccy,
+            value_date=value_date, amount_ccy=amount_ccy,
         )
 
     def amended(self, **changes):
@@ -211,11 +246,33 @@ class Trade:
         if unknown:
             raise TradeValidationError(
                 f"{self.trade_id}: cannot amend {', '.join(sorted(unknown))}")
+        if "value_date" in changes and "expiry" not in changes and changes["value_date"]:
+            # A value-dated forward's expiry follows its value date.
+            changes = dict(changes, expiry=None)
         return replace(self, **changes).normalized()
 
+    @property
+    def term_entered(self):
+        """The amount was entered in the term currency (forwards only)."""
+        return bool(self.amount_ccy) and self.amount_ccy == self.term != self.base
+
     def signed_base_amount(self):
-        """Base amount received (+) or paid (-); forwards only."""
-        return self.notional if self.buy_sell == "BUY" else -self.notional
+        """Base amount received (+) or paid (-); forwards only.
+
+        A term-entered amount converts at the contract rate with the sign
+        flipped: buying term currency is selling base.
+        """
+        sign = 1.0 if self.buy_sell == "BUY" else -1.0
+        if self.term_entered:
+            return -sign * self.notional / self.contract_rate
+        return sign * self.notional
+
+    def signed_term_amount(self):
+        """Term amount received (+) or paid (-) at the contract rate; forwards only."""
+        sign = 1.0 if self.buy_sell == "BUY" else -1.0
+        if self.term_entered:
+            return sign * self.notional
+        return -sign * self.notional * self.contract_rate
 
     def to_pricer_row(self):
         """The trade as a Pricer line (options only)."""
@@ -235,6 +292,9 @@ class Trade:
         from pricing.fx_forward import FxForwardPosition
         if not self.is_forward:
             raise TradeValidationError(f"{self.trade_id}: only forwards are positions")
+        if self.value_date is not None:
+            raise TradeValidationError(
+                f"{self.trade_id}: value-dated forwards are not valued yet")
         return FxForwardPosition(
             currency_pair=self.currency_pair, expiry=self.expiry,
             base_amount=self.signed_base_amount(), contract_rate=self.contract_rate,
