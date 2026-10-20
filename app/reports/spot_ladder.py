@@ -2,7 +2,7 @@
 
 import logging
 from copy import copy, deepcopy
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 import pandas as pd
@@ -218,15 +218,29 @@ def _scenario_worker_count(scenario_workers, scenario_count):
     return min(scenario_count, 2)
 
 
-def _run_scenarios(scenarios, scenario_workers, calculate_scenario):
-    """Run pure, independent scenario calculations in stable input order."""
+def _run_scenarios(scenarios, scenario_workers, calculate_scenario, stage="spot ladder"):
+    """Run pure, independent scenario calculations in stable input order.
+
+    Progress (``app.progress.current``) is reported on this thread as each
+    scenario finishes, never from the workers.
+    """
+    from app.progress import current
     if not scenarios:
         return []
-    worker_count = _scenario_worker_count(scenario_workers, len(scenarios))
+    report = current()
+    total = len(scenarios)
+    worker_count = _scenario_worker_count(scenario_workers, total)
     if worker_count == 1:
-        return [calculate_scenario(scenario) for scenario in scenarios]
+        results = []
+        for done, scenario in enumerate(scenarios, start=1):
+            results.append(calculate_scenario(scenario))
+            report(done, total, stage)
+        return results
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        return list(executor.map(calculate_scenario, scenarios))
+        futures = [executor.submit(calculate_scenario, scenario) for scenario in scenarios]
+        for done, _ in enumerate(as_completed(futures), start=1):
+            report(done, total, stage)
+        return [future.result() for future in futures]
 
 
 def _add_option_pnl(level, row, mtm_term, spot):
@@ -465,7 +479,7 @@ def _calculate_optimized_ladder(
             )
 
         for key, vol in _run_scenarios(
-            scenario_pairs, scenario_workers, solve_scenario_vol
+            scenario_pairs, scenario_workers, solve_scenario_vol, stage="smile vols"
         ):
             vols[key] = vol
     except Exception:
@@ -553,13 +567,29 @@ def calculate_spot_ladder(
     rows, ladder_spots, valuation_date, market_for_expiry, resolve_expiry,
     pricing_model, atm_type, delta_base, mods, mode="shadow",
     forward_positions=(), scenario_workers=None, extras=(), market_for_delivery=None,
+    progress=None,
 ):
     """Calculate a ladder in reference, shadow, or optimized mode.
 
     ``extras`` adds on-demand Greeks (``pricing.greek_catalog``) to every level.
     ``market_for_delivery`` (``MarketContext.market_for_delivery``) values
     forwards with a ``value_date`` at their own delivery date.
+    ``progress(done, total, stage)`` is told as scenarios finish, per stage
+    (``app.progress``).
     """
+    from app.progress import reporting
+    with reporting(progress):
+        return _calculate_spot_ladder(
+            rows, ladder_spots, valuation_date, market_for_expiry, resolve_expiry,
+            pricing_model, atm_type, delta_base, mods, mode, forward_positions,
+            scenario_workers, extras, market_for_delivery)
+
+
+def _calculate_spot_ladder(
+    rows, ladder_spots, valuation_date, market_for_expiry, resolve_expiry,
+    pricing_model, atm_type, delta_base, mods, mode, forward_positions,
+    scenario_workers, extras, market_for_delivery,
+):
     if mode not in {"reference", "shadow", "optimized"}:
         raise ValueError("Spot-ladder mode must be reference, shadow, or optimized")
 

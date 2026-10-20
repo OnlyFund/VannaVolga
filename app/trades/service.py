@@ -182,15 +182,19 @@ def not_booked_note(trades, valuation_date):
             f"{as_date(valuation_date):%d-%b-%Y} not in the book on that date: {shown}{more}")
 
 
-def price_trades(markets, trades, mods, extras=(), spot_path=pricer.SMILE_PATH):
+def price_trades(markets, trades, mods, extras=(), spot_path=pricer.SMILE_PATH,
+                 progress=None):
     """Price booked trades; returns ``(option results, forward rows, errors)``.
 
     Each result carries its ``trade_id``. Expired or cancelled trades are
     skipped with a note, never priced, and so is a trade booked after the
     valuation date (``book_on``): it is not in that date's book.
     ``extras`` adds on-demand Greeks; ``spot_path`` is how a moved spot
-    reprices (``pricer.price_line``).
+    reprices (``pricer.price_line``); ``progress(done, total, trade id)`` is
+    told after each trade (``app.progress``).
     """
+    from app.progress import safe
+    report = safe(progress)
     valuation = as_date(markets.valuation_date)
     options, forwards, errors = [], [], []
     for trade in trades:
@@ -205,12 +209,17 @@ def price_trades(markets, trades, mods, extras=(), spot_path=pricer.SMILE_PATH):
             options.append(trade.to_pricer_row())
         else:
             forwards.append(trade)
+    total = len(options) + len(forwards)
+
+    def option_done(done, _count, _label):
+        report(done, total, options[done - 1]["trade_id"])
     results, line_errors = pricer.price_lines(markets, options, mods, extras=extras,
-                                              spot_path=spot_path)
+                                              spot_path=spot_path, progress=option_done)
     by_row = {number: row["trade_id"] for number, row in enumerate(options, start=1)}
     errors += [_with_trade_id(message, by_row) for message in line_errors]
     forward_rows = []
-    for trade in forwards:
+    for done, trade in enumerate(forwards, start=len(options) + 1):
+        report(done, total, trade.trade_id)
         try:
             row = pricer.value_forward(markets, trade.currency_pair, trade.expiry,
                                        trade.signed_base_amount(), trade.contract_rate,

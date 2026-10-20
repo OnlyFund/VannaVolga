@@ -11,6 +11,7 @@ from pricing import greek_catalog
 from app.option_types import VANILLA, label as option_type_label
 from app.premium_side import SIDES, premium_currency, premium_side
 from app.trades import service
+from app.ui.progress_bar import ProgressBar
 from app.trades.model import AMENDABLE, CANCELLED, FX_FORWARD, FX_OPTION, LIVE
 from app.trades.store import TradeStoreError, open_trade_store
 
@@ -382,9 +383,10 @@ def render_portfolio(tab, market_set, mods):
         respot = bool(cached) and cached[0] == ids and cached[1] != spot_key
         if clicked or respot:
             extras = chosen_extras(st.session_state.get(_PAIR_COLUMNS, DEFAULT_COLUMNS))
-            results, forwards, errors = service.price_trades(
-                market_set.with_spots(overrides), selected, mods,
-                extras=extras, spot_path=spot_path())
+            with ProgressBar("Pricing selection") as bar:
+                results, forwards, errors = service.price_trades(
+                    market_set.with_spots(overrides), selected, mods,
+                    extras=extras, spot_path=spot_path(), progress=bar)
             cached = (ids, spot_key, results, forwards, errors)
             st.session_state["_portfolio_book_result"] = cached
         if not cached:

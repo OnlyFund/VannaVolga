@@ -301,17 +301,21 @@ def _numbered(rows):
             for number, row in enumerate(rows, start=1)]
 
 
-def price_lines(markets, rows, mods, extras=(), spot_path=SMILE_PATH):
+def price_lines(markets, rows, mods, extras=(), spot_path=SMILE_PATH, progress=None):
     """Price every line; returns ``(results, errors)`` in line order.
 
     ``extras`` adds on-demand Greeks (``pricing.greek_catalog.EXTRA_GREEKS``);
-    ``spot_path`` is how a moved spot reprices (``price_line``).
+    ``spot_path`` is how a moved spot reprices (``price_line``);
+    ``progress(done, total, label)`` is told after each line (``app.progress``).
     """
-    calculated = sorted(
-        (price_line(markets, number, row, mods, extras, spot_path)
-         for number, row in _numbered(rows)),
-        key=lambda item: item[0],
-    )
+    from app.progress import safe
+    report = safe(progress)
+    numbered = list(_numbered(rows))
+    calculated = []
+    for done, (number, row) in enumerate(numbered, start=1):
+        calculated.append(price_line(markets, number, row, mods, extras, spot_path))
+        report(done, len(numbered), f"line {number}")
+    calculated.sort(key=lambda item: item[0])
     results = [item[1] for item in calculated if item[1] is not None]
     errors = [item[2] for item in calculated if item[2] is not None]
     return results, errors

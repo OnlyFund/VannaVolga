@@ -11,6 +11,7 @@ from app.option_types import DIGITAL, PRICED, VANILLA
 from app.reports import risk_grid
 from app.reports.spot_ladder import calculate_spot_ladder, render_spot_ladder
 from app.trades import service
+from app.ui.progress_bar import ProgressBar
 from app.ui.greek_picker import render_greek_picker
 from app.ui.negatives import red_negatives
 from app.ui.trades_block import _store_banner, trade_store
@@ -184,8 +185,9 @@ def _risk_lines(market_set, pair, options, hedges, include_hedges, fixed, mods,
            repr(st.session_state.get("_surface_fingerprints", {}).get(pair)), extras)
     cached = st.session_state.get("_risk_pricing")
     if not cached or cached[0] != key:
-        results, forwards, errors = service.price_trades(market_set, [*options, *hedges], mods,
-                                                         extras=extras)
+        with ProgressBar(f"Pricing {pair} risk") as bar:
+            results, forwards, errors = service.price_trades(
+                market_set, [*options, *hedges], mods, extras=extras, progress=bar)
         cached = (key, results, forwards, errors)
         st.session_state["_risk_pricing"] = cached
     _, results, forwards, errors = cached
@@ -220,11 +222,11 @@ def _spot_ladder(tab, market_set, context, options, hedges, mods, ladder_mode):
                   "value_date": h.value_date}
                  for h in hedges]
     settings = context.settings
-    with st.spinner("Calculating spot ladder..."):
+    with ProgressBar("Calculating spot ladder") as bar:
         results, errors = calculate_spot_ladder(
             list(rows.iterrows()), spots, market_set.valuation_date, context.market_for_expiry,
             context.resolve_market_expiry, settings.pricing_model, settings.atm_type,
             settings.delta_base, mods, mode=ladder_mode, forward_positions=positions,
             extras=greek_catalog.extras(greeks),
-            market_for_delivery=getattr(context, "market_for_delivery", None))
+            market_for_delivery=getattr(context, "market_for_delivery", None), progress=bar)
     render_spot_ladder(tab, results, errors, spot, greeks)

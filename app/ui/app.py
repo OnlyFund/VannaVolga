@@ -34,6 +34,7 @@ from app.vol_override import VOL_INPUT, VOL_MODE
 from app.ui.trades_block import render_blotter, render_portfolio, trade_store
 from app.ui.risk_block import render_risk
 from app.ui.spot_forward_block import render_spot_forward_block
+from app.ui.progress_bar import ProgressBar
 from app.ui import market_picker
 from app.ui.store_sync import LAYERS, render_store_status, sync_store_markets
 from app.market_layers import origins as store_origins, unavailable as store_unavailable
@@ -522,9 +523,10 @@ def render_app():
         )
         # Pricing reads no session state, but stays on the script thread so
         # progress and diagnostics belong to this run.
-        results, errors = pricer.price_lines(
-            market_set, edited_rows, mods,
-            extras=greek_catalog.extras(chosen_greeks(PRICER_GREEKS_KEY)))
+        with portfolio_tab, ProgressBar("Pricing lines") as bar:
+            results, errors = pricer.price_lines(
+                market_set, edited_rows, mods,
+                extras=greek_catalog.extras(chosen_greeks(PRICER_GREEKS_KEY)), progress=bar)
         # Auto lines show the premium their pricing found (P&L zero), and
         # market lines the vol they priced at.
         edited_rows = apply_auto_premiums(edited_rows, results)
