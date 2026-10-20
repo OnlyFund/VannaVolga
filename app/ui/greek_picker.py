@@ -31,11 +31,16 @@ def render_greek_picker(key, default=catalog.BASE_GREEKS, label="Greeks"):
         st.session_state[key] = catalog.known(default)
     chosen = st.multiselect(
         label, list(catalog.CATALOG), key=key, format_func=_option_label,
-        help="Each Greek shows as a sticky-delta column (smile quotes unchanged as spot "
-             "moves) and a smile column (smile moved by the betas). Decay is the "
-             "change to the next business day; gamma per vol is gamma's change per vol "
-             "point; weighted Greeks are scaled by 0.25/T^0.4. Extras are computed "
-             "when you price.")
+        help="Three spot regimes. Sticky delta: the smile quotes held in delta space "
+             "(betas 0/0/0), the (sticky) column. Smile: the smile moved by the Model "
+             "tab's betas, the (smile) column. Sticky strike: the vol at the strike "
+             "frozen, the Black-Scholes group (BS delta, BS delta incl. premium, BS "
+             "gamma), one column each, close to betas 1/1/1 (not beta ATM 1 alone). "
+             "Sticky-delta and smile deltas include the premium where the pair's "
+             "convention does (e.g. USDJPY); BS delta never, BS delta incl. premium "
+             "always. Decay is the change to the next business day; gamma per vol is "
+             "gamma's change per vol point; weighted Greeks are scaled by 0.25/T^0.4. "
+             "Extras are computed when you price.")
     if not chosen:
         st.caption("No Greeks chosen: showing " + ", ".join(
             catalog.CATALOG[name].label for name in catalog.known(default)) + ".")

@@ -25,6 +25,22 @@ the ``EXTRA_GREEKS`` only when a report asks for them
   including the parity-consistent forward move.
   Smile betas respond to the equivalent log-forward move, not actual spot.
 
+* Black-Scholes, sticky strike (``bs_delta``, ``bs_delta_prem``,
+  ``bs_gamma``): plain Black-Scholes at the line's vol at its strike,
+  frozen as spot moves (the Bloomberg screen): spot delta without and with
+  the premium (delta less value / spot), and that delta's change per 1%
+  spot. One column each: no sticky-delta / smile pair. A forward's are its
+  spot delta (no premium, no gamma).
+
+Three spot regimes (``REGIMES``): sticky delta (``fixed_`` columns: the
+smile quotes held in delta space, as betas 0/0/0), smile (unprefixed: the
+smile moved by the betas) and sticky strike (the vol at the strike frozen:
+close to betas 1/1/1 to first order, not beta ATM 1 alone, which moves the
+ATM along the skew while the wings keep their spread to it). Sticky-delta
+and smile deltas include the premium where the pair's convention does
+(premium-adjusted pairs, e.g. USDJPY); BS delta never does, BS delta incl.
+premium always.
+
 ``CONVENTION_GREEKS`` (``spot_delta``, ``fwd_delta``) come with every priced
 line at no extra cost (``pricing.greeks.convention_deltas``) but are shown
 only when picked. ``delta`` itself is spot-equivalent in every total; a
@@ -67,9 +83,19 @@ _THETA_PARTS = (Greek("theta_static", "Theta static", "premium ccy per day", "th
 _RATES = (Greek("rho", "Rho", "term ccy per 10bp term rate", "rates"),
           Greek("phi", "Phi", "base ccy per 10bp base rate", "rates"))
 CCY_TAGS = {"rho": "term ccy", "phi": "base ccy"}
+_STICKY_STRIKE = (
+    Greek("bs_delta", "BS delta", "base ccy, spot, vol at strike frozen, no premium",
+          "Black-Scholes (sticky strike)"),
+    Greek("bs_delta_prem", "BS delta incl. premium", "base ccy, spot, less value / spot",
+          "Black-Scholes (sticky strike)"),
+    Greek("bs_gamma", "BS gamma", "base ccy per 1% spot, vol at strike frozen",
+          "Black-Scholes (sticky strike)"))
+#: Greeks with one value, not a sticky-delta / smile pair: one column each.
+SINGLE_FAMILY = frozenset(greek.name for greek in _STICKY_STRIKE)
 
 CATALOG = OrderedDict((greek.name, greek)
-                      for greek in (*_BASE, *_DECAY, *_CROSS, *_WEIGHTED, *_THETA_PARTS, *_RATES))
+                      for greek in (*_BASE, *_DECAY, *_CROSS, *_WEIGHTED, *_THETA_PARTS, *_RATES,
+                                    *_STICKY_STRIKE))
 EXTRA_GREEKS = tuple(name for name in CATALOG
                      if name not in BASE_GREEKS and name not in CONVENTION_GREEKS)
 DECAY_GREEKS = tuple(greek.name for greek in _DECAY)
@@ -77,7 +103,14 @@ WEIGHTED_GREEKS = tuple(greek.name for greek in _WEIGHTED)
 THETA_PARTS = tuple(greek.name for greek in _THETA_PARTS)
 #: Greeks in the premium currency (theta and its parts); the rest are base.
 PREMIUM_CCY_GREEKS = ("theta", *THETA_PARTS)
-GROUPS = ("first order", "decay", "cross", "weighted", "theta", "rates")
+GROUPS = ("first order", "decay", "cross", "weighted", "theta", "rates", "Black-Scholes (sticky strike)")
+#: The three ways the app lets the smile respond to spot (see the module doc).
+REGIMES = {
+    "sticky delta": "smile quotes held in delta space (betas 0/0/0): the (sticky) columns",
+    "smile": "the smile moved by the Model tab's betas: the (smile) columns",
+    "sticky strike": "the vol at the strike frozen (plain Black-Scholes): the BS columns; "
+                     "close to betas 1/1/1, not beta ATM 1 alone",
+}
 #: Display tags of the two families (``fixed_<name>`` and ``<name>``), after
 #: the Greek so a narrow column still shows which Greek it is.
 STICKY_DELTA = "sticky"
@@ -85,8 +118,10 @@ SMILE = "smile"
 
 
 def columns(names):
-    """``fixed_<name>``, ``<name>`` for each Greek, in order."""
-    return [column for name in names for column in (f"fixed_{name}", name)]
+    """``fixed_<name>``, ``<name>`` for each Greek, in order; ``<name>`` alone
+    for a single-family Greek (``SINGLE_FAMILY``)."""
+    return [column for name in names
+            for column in ((name,) if name in SINGLE_FAMILY else (f"fixed_{name}", name))]
 
 
 def known(names):
@@ -105,7 +140,7 @@ def extras(names):
 #: means different things across pairs (EURUSD up is USD down, USDJPY up is
 #: USD up), so these never add up across pairs. A decay of one is one too.
 DIRECTIONAL = frozenset({"delta", "spot_delta", "fwd_delta", "pair_delta", "vanna", "rega",
-                         "rho", "phi"})
+                         "rho", "phi", "bs_delta", "bs_delta_prem"})
 
 
 def is_directional(column):
@@ -137,6 +172,9 @@ def label(column, unit=None):
     if greek is None:
         return column
     tag = CCY_TAGS.get(greek.name)
+    if greek.name in SINGLE_FAMILY:
+        extra = [*(["USD"] if usd else []), *([unit] if unit else [])]
+        return f"{greek.label} ({', '.join(extra)})" if extra else greek.label
     tags = [STICKY_DELTA if fixed else SMILE, *(["USD"] if usd else []),
             *([unit] if unit else []), *([tag] if tag and not usd else [])]
     return f"{greek.label} ({', '.join(tags)})"

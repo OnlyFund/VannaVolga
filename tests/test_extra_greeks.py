@@ -59,7 +59,7 @@ def test_catalogue_lists_every_greek_once_in_groups():
     assert list(catalog.CATALOG)[:8] == list(catalog.BASE_GREEKS)
     assert set(catalog.EXTRA_GREEKS) == {*catalog.DECAY_GREEKS, "gamma_vol",
                                          *catalog.WEIGHTED_GREEKS, *catalog.THETA_PARTS,
-                                         "rho", "phi"}
+                                         "rho", "phi", *catalog.SINGLE_FAMILY}
     assert "theta_decay" not in catalog.CATALOG
     assert all(greek.group in catalog.GROUPS for greek in catalog.CATALOG.values())
     assert catalog.columns(["vega", "gamma_vol"]) == ["fixed_vega", "vega",

@@ -409,6 +409,8 @@ def value_forward(markets, pair, expiry, base_amount, contract_rate, extras=(),
                                         next_valuation)
     from pricing.greeks import calculate_forward_rate_risks
     rate_risks = calculate_forward_rate_risks(position, market, valuation_date, extras)
+    spot_delta = base_amount * forward_delta_factor(
+        market.copy_with(delta_reporting="spot"), expiry, valuation_date, delivery=value_date)
     return {
         "currency_pair": pair,
         "expiry": expiry,
@@ -417,9 +419,7 @@ def value_forward(markets, pair, expiry, base_amount, contract_rate, extras=(),
         "forward_rate": contract_rate,
         "delta_offset": base_amount * delta_factor,
         # A forward's forward delta is its amount; its spot delta the offset.
-        "spot_delta": base_amount * forward_delta_factor(
-            market.copy_with(delta_reporting="spot"), expiry, valuation_date,
-            delivery=value_date),
+        "spot_delta": spot_delta,
         "fwd_delta": base_amount,
         "mtm_term": value["mtm_term"],
         "mtm_base": value["mtm_base"],
@@ -431,6 +431,8 @@ def value_forward(markets, pair, expiry, base_amount, contract_rate, extras=(),
         "settlement_term": value["settlement_term"],
         "settlement_base": value["settlement_base"],
         "forward_note": getattr(market, "forward_note", None),
+        # Sticky strike: a forward's delta is its spot delta, no premium, no gamma.
+        "bs_delta": spot_delta, "bs_delta_prem": spot_delta, "bs_gamma": 0.0,
         **rate_risks,
     }
 
@@ -649,6 +651,9 @@ def aggregate_by_pair(results, hedge_trades=(), greeks=GREEK_NAMES):
                                ("rho", trade.get("rho")),
                                ("fixed_phi", trade.get("phi")),
                                ("phi", trade.get("phi")),
+                               ("bs_delta", trade.get("bs_delta")),
+                               ("bs_delta_prem", trade.get("bs_delta_prem")),
+                               ("bs_gamma", trade.get("bs_gamma")),
                                ("fixed_theta", trade.get("theta", 0.0)),
                                ("theta", trade.get("theta", 0.0)),
                                # A forward's roll is carry (``theta_carry``).

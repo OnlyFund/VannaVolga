@@ -446,8 +446,8 @@ def _greek_columns(names):
     converted to USD."""
     usd = dict(usd_spots.ALL_USD_COLUMNS)
     return [column for name in names
-            for column in (f"fixed_{name}", name,
-                           *(usd[c] for c in (f"fixed_{name}", name) if c in usd))]
+            for family in (greek_catalog.columns([name]),)
+            for column in (*family, *(usd[c] for c in family if c in usd))]
 
 
 def extra_columns():

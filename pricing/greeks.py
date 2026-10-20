@@ -328,6 +328,31 @@ def _rolled_smile_theta(market, next_market, common, mods, next_valuation):
     return term_theta / market.s
 
 
+def sticky_strike_greeks(market, common, mods):
+    """``{bs_delta, bs_delta_prem, bs_gamma}``: plain Black-Scholes at the
+    line's vol at its strike, held fixed as spot moves (sticky strike).
+
+    ``bs_delta`` is the spot delta ``DF_base * N(d1)`` (Garman-Kohlhagen);
+    ``bs_delta_prem`` includes the premium, ``DF_base * K/F * N(d2)``, which
+    is ``bs_delta`` less the value / spot; ``bs_gamma`` is ``bs_delta``'s
+    change per 1% spot. All signed, at the notional, in the base currency.
+    """
+    smile = SmileGreeks(mods=mods, **common)
+    vol = smile._get_pm().shift_spot(new_spot=market.s)
+
+    def black_scholes(premium_included):
+        return BlackScholes(
+            S=market.s, K=smile.k, fwd_pts=market.fwd_pts, v=vol,
+            expiry_date=smile.expiry_date, valuation_date=smile.valuation_date,
+            CallPut=smile.CallPut, BuySell=smile.BuySell, Notional=smile.notional,
+            deltaBase=premium_included, fwd_divisor=market.forward_divisor,
+            term_discount=market.term_discount,
+            **dict(smile._discount_kwargs(), delta_convention="spot"))
+    plain = black_scholes(False)
+    return {"bs_delta": float(plain.delta()), "bs_gamma": float(plain.gamma()),
+            "bs_delta_prem": float(black_scholes(True).delta())}
+
+
 def _greek_inputs(market, row, pricing_model, atm_type, delta_base):
     """The Greek calculators' common keyword arguments for one line.
 
@@ -503,7 +528,9 @@ def calculate_extra_greeks(
     """
     from Greeks.cross_greeks import CrossGreeks
     from Greeks.weighted_greeks import scale_t
-    from pricing.greek_catalog import DECAY_GREEKS, THETA_PARTS, WEIGHTED_GREEKS, extras
+    from pricing.greek_catalog import (
+        DECAY_GREEKS, SINGLE_FAMILY, THETA_PARTS, WEIGHTED_GREEKS, extras,
+    )
 
     wanted = extras(names)
     values, problems = {}, {}
@@ -609,6 +636,22 @@ def calculate_extra_greeks(
         if reason:
             for name in parts:
                 failed(name, reason)
+
+    sticky_strike = [name for name in wanted if name in SINGLE_FAMILY]
+    if sticky_strike:
+        if expired:
+            for name in sticky_strike:
+                values[f"fixed_{name}"] = values[name] = 0.0
+        else:
+            try:
+                common = _greek_inputs(market, row, pricing_model, atm_type, delta_base)
+                found = sticky_strike_greeks(market, common, mods)
+                for name in sticky_strike:
+                    # One value; both keys so every reader finds it.
+                    values[f"fixed_{name}"] = values[name] = found[name]
+            except Exception as exc:
+                for name in sticky_strike:
+                    failed(name, f"sticky-strike Greeks failed: {exc}")
 
     weighted = [name for name in wanted if name in WEIGHTED_GREEKS]
     if weighted:

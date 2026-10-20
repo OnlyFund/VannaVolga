@@ -68,8 +68,11 @@ def render_model_tab(tab):
                          help="vv: Vanna-Volga. vv-sabr: Vanna-Volga with a SABR smile.")
             st.markdown("**Smile dynamics**")
             st.caption("How the smile moves with spot for the smile Greeks and the spot "
-                       "ladder. With every beta at 0 the smile Greeks equal the "
-                       "sticky-delta ones.")
+                       "ladder. Betas 0/0/0 are sticky delta (the smile Greeks equal the "
+                       "sticky-delta ones); 1/1/1 is close to sticky strike (the vol at "
+                       "a fixed strike barely moves, as in the Black-Scholes Greeks). "
+                       "Beta ATM 1 alone is not sticky strike: the ATM follows the skew "
+                       "but the wings keep their spread to it.")
             for key, (low, high, step) in BETA_RANGES.items():
                 st.slider(key, low, high, DEFAULTS[key], step, key=key)
             st.markdown("**Fixed by the app**")
