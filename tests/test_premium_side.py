@@ -103,3 +103,36 @@ def test_booking_stores_the_currency_the_side_stands_for(markets):
     booking, numbers, errors = booking_from_lines(markets, rows, MODS)
     assert errors == []
     assert [trade.premium_ccy for trade in booking.trades] == ["EUR", "JPY"]
+
+
+# -- the pair's convention (Pricer step 4) ------------------------------------
+
+@pytest.mark.parametrize("pair, side, code", [
+    ("EURUSD", TERM, "USD"), ("AUDUSD", TERM, "USD"), ("USDJPY", BASE, "USD"),
+    ("EURGBP", BASE, "EUR"), ("AUDJPY", BASE, "AUD"), ("", TERM, "")])
+def test_a_blank_premium_currency_is_the_pairs_convention(pair, side, code):
+    from app.premium_side import conventional_side
+    assert conventional_side(pair) == side
+    assert premium_side(pair, "") == (side, None) and premium_side(pair, None) == (side, None)
+    assert premium_currency(pair, "") == code
+
+
+def test_a_premium_on_convention_follows_a_pair_change_a_chosen_one_stays():
+    import pandas as pd
+    from app.ui.portfolio_block import _apply_editor_state
+    rows = pd.DataFrame([line(currency_pair="EURUSD", premium_ccy=TERM),     # convention
+                         line(currency_pair="EURUSD", premium_ccy=BASE),     # chosen
+                         line(currency_pair="EURUSD", premium_ccy=TERM)])
+    changed = _apply_editor_state(rows, {"edited_rows": {
+        0: {"currency_pair": "USDJPY"}, 1: {"currency_pair": "USDJPY"},
+        2: {"currency_pair": "USDJPY", "premium_ccy": TERM}}})          # chosen with it
+    sides = [premium_side(p, s)[0] for p, s in zip(changed["currency_pair"],
+                                                    changed["premium_ccy"])]
+    assert sides == [BASE, BASE, TERM]                  # USD (USDJPY's), EUR->USD base, JPY
+    assert changed.at[0, "premium_ccy"] == ""            # blank until the app fills the side
+
+
+def test_book_and_remove_sit_after_the_trade_details():
+    from app.ui.portfolio_block import TRADE_DETAIL_COLUMNS
+    assert TRADE_DETAIL_COLUMNS == ("currency_pair", "expiry", "option_type", "call_put",
+                                    "strike", "buy_sell", "notional", "payout_ccy")

@@ -5,7 +5,9 @@ import pandas as pd
 import streamlit as st
 
 from app.option_types import LABELS as OPTION_TYPE_LABELS, VANILLA
-from app.premium_side import BASE, SIDES, TERM, premium_currency
+from app.premium_side import (
+    BASE, SIDES, TERM, conventional_side, premium_currency, premium_side,
+)
 from app.pricer import AUTO, GREEK_NAMES, PREMIUM_MODE, TYPED
 from app.hedge_delta import HEDGE_DELTA, HEDGE_MODE, shown_pct
 from app.vol_override import MARKET, MAX_VOL, VOL_INPUT, VOL_MODE
@@ -84,6 +86,9 @@ LINE_INPUT_COLUMNS = (
 PRICED_INPUT_COLUMNS = (*LINE_INPUT_COLUMNS, "premium_ccy", PREMIUM_MODE, VOL_INPUT, VOL_MODE,
                         HEDGE_DELTA, HEDGE_MODE, "option_type", "payout_ccy")
 #: A line's terms: changing any of them resets its premium to auto.
+#: The trade's own details: the grid shows Book? and Remove right after them.
+TRADE_DETAIL_COLUMNS = ("currency_pair", "expiry", "option_type", "call_put", "strike",
+                        "buy_sell", "notional", "payout_ccy")
 TERM_COLUMNS = ("currency_pair", "expiry", "call_put", "strike", "buy_sell", "notional",
                 "premium_ccy", "option_type", "payout_ccy")
 
@@ -317,6 +322,14 @@ def _apply_editor_state(rows, editor_state):
         updated[BOOK_COLUMN] = False
     for raw_index, changes in editor_state.get("edited_rows", {}).items():
         index = int(raw_index)
+        if (0 <= index < len(updated) and "currency_pair" in changes
+                and "premium_ccy" not in changes and "premium_ccy" in updated.columns):
+            # A premium on its old pair's convention follows to the new
+            # pair's (blank is the convention); a chosen one is kept.
+            old_pair = updated.iat[index, updated.columns.get_loc("currency_pair")]
+            old_side = updated.iat[index, updated.columns.get_loc("premium_ccy")]
+            if premium_side(old_pair, old_side)[0] == conventional_side(old_pair):
+                updated.iat[index, updated.columns.get_loc("premium_ccy")] = ""
         if 0 <= index < len(updated):
             for column, value in changes.items():
                 if column in updated.columns:
@@ -588,9 +601,11 @@ def render_portfolio_block(portfolio_tab, market_pair, pairs=()):
                          "other term returns the line to auto."),
                 "premium_ccy": st.column_config.SelectboxColumn(
                     "Premium in",
-                    help="Premium paid or received in the pair's base or term currency.",
+                    help="Premium paid or received in the pair's base or term currency. "
+                         "A new line takes the pair's convention (USD when USD is the "
+                         "term currency, else the base), and follows it when its pair "
+                         "changes unless you chose otherwise.",
                     options=list(SIDES),
-                    default=TERM,
                     width="small",
                 ),
                 PREMIUM_CODE_COLUMN: st.column_config.TextColumn(
@@ -669,10 +684,16 @@ def render_portfolio_block(portfolio_tab, market_pair, pairs=()):
                      f"{convention_help}",
                 width="small",
             )
+        # Book? and Remove sit right after the trade's details.
+        details = [c for c in TRADE_DETAIL_COLUMNS if c in editor_input]
+        column_order = [*details, BOOK_COLUMN, REMOVE_COLUMN,
+                        *(c for c in editor_input.columns
+                          if c not in (*details, BOOK_COLUMN, REMOVE_COLUMN))]
         edited_rows = st.data_editor(
             red_negatives(editor_input, LINE_RESULT_COLUMNS),
             num_rows="dynamic",
             use_container_width=True,
+            column_order=column_order,
             column_config=editor_column_config,
             hide_index=True,
             disabled=[*LINE_RESULT_COLUMNS, TRADE_ID_COLUMN, PREMIUM_CODE_COLUMN,

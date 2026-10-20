@@ -168,7 +168,7 @@ def render_app():
             "buy_sell": "BUY",
             "notional": "1m",
             "premium": 0.0,
-            "premium_ccy": TERM,
+            "premium_ccy": "",              # the pair's convention
             "option_type": OPTION_TYPE_LABELS[VANILLA],
             "payout_ccy": BASE,
         }])
@@ -187,13 +187,15 @@ def render_app():
     if "premium" not in st.session_state.option_rows:
         st.session_state.option_rows["premium"] = 0.0
     # The grid holds the premium currency as BASE/TERM; lines from before
-    # (currency codes) convert, and a code outside the line's pair falls
-    # back to TERM with a note.
+    # (currency codes) convert, a code outside the line's pair falls back to
+    # TERM with a note, and a blank (a new line) takes the pair's convention,
+    # the market pair's for a line without one, as pricing does.
     if "premium_ccy" not in st.session_state.option_rows:
         st.session_state.option_rows["premium_ccy"] = TERM
-    sides = [premium_side(pair, value) for pair, value in zip(
-        st.session_state.option_rows["currency_pair"],
-        st.session_state.option_rows["premium_ccy"])]
+    market_pair = str(st.session_state.currency_pair).upper()
+    sides = [premium_side(pair if isinstance(pair, str) and pair.strip() else market_pair, value)
+             for pair, value in zip(st.session_state.option_rows["currency_pair"],
+                                    st.session_state.option_rows["premium_ccy"])]
     st.session_state.option_rows["premium_ccy"] = [side for side, _ in sides]
     premium_notes = [f"Line {number}: {note}"
                      for number, (_, note) in enumerate(sides, start=1) if note]
