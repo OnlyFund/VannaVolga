@@ -56,15 +56,24 @@ def import_csv(path, store=None, note=""):
 
 
 def event_table(event_set, pair):
-    """The pair's events as the app's event table (``event_date``,
-    ``variance_days``), one row per date with same-day events added up."""
+    """The pair's events as the app's event table (``event_date``, ``event``,
+    ``variance_days``): one named row per event, by date. Same-day events
+    stay separate rows; the variance days add them up."""
     rows = (event_set.events.get(pair, []) if event_set is not None else [])
-    frame = pd.DataFrame(rows, columns=["event_date", "event", "variance_days"])
+    return event_rows_table(rows)
+
+
+def event_rows_table(rows):
+    """``[(date, event, variance_days)]`` as the app's event table, by date then name."""
+    frame = pd.DataFrame(list(rows), columns=["event_date", "event", "variance_days"])
     if frame.empty:
-        return pd.DataFrame(columns=["event_date", "variance_days"])
-    summed = frame.groupby("event_date", as_index=False)["variance_days"].sum()
-    summed["event_date"] = pd.to_datetime(summed["event_date"])
-    return summed[["event_date", "variance_days"]]
+        return pd.DataFrame({"event_date": pd.Series(dtype="datetime64[ns]"),
+                             "event": pd.Series(dtype=object),
+                             "variance_days": pd.Series(dtype=float)})
+    frame["event_date"] = pd.to_datetime(frame["event_date"])
+    frame["event"] = frame["event"].fillna("").astype(str)
+    frame["variance_days"] = pd.to_numeric(frame["variance_days"])
+    return frame.sort_values(["event_date", "event"]).reset_index(drop=True)
 
 
 def main(argv=None):

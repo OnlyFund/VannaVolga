@@ -138,10 +138,15 @@ def validate_market(payload):
     frames = {
         "vol_rows": pd.DataFrame(payload["vol_data"]),
         "forward_rows": pd.DataFrame(payload["forward_points"]),
+        # Events carry a name since 2026-10; files from before load with
+        # blank names.
         "event_rows": pd.DataFrame(
-            payload["event_calendar"], columns=["event_date", "variance_days"]
+            payload["event_calendar"], columns=["event_date", "event", "variance_days"]
         ),
     }
+    frames["event_rows"]["event"] = frames["event_rows"]["event"].map(
+        lambda value: "" if value is None or (not isinstance(value, str) and pd.isna(value))
+        else str(value).strip())
     if "term_discount" not in frames["forward_rows"]:
         # Keep saved market files from earlier app versions loadable.
         frames["forward_rows"]["term_discount"] = DEFAULT_TERM_DISCOUNT
@@ -197,6 +202,8 @@ def validate_market(payload):
         "forward_divisor": divisor_value,
         **frames,
         "short_points": _short_points(payload),
+        # Where the events came from (a store market names its calendar).
+        "event_source": str(payload.get("event_source") or ""),
     }
 
 

@@ -32,9 +32,18 @@ are separate rows whose variance days add up. A market is **pinned** to one
 event set (the latest at its fetch), so it always prices with the same
 events; ``pin_events`` re-pins it explicitly and every pin is recorded.
 
+Each currency pair also keeps its own **event calendar versions**
+(``pair_event_versions``: ``pair``, ``version``, ``saved_at``, ``user``,
+``note``; rows ``pair_events``): every save is a new version, never an
+overwrite, so changes in event weights can be followed over time. A market
+on a valuation date uses the pair's latest version saved on or before that
+date (``load_pair_events(as_of=...)``); a pair without one falls back to the
+market's pinned event set. Rows carry a ``currency`` (empty for now) so the
+calendars can later move to per-currency events without a redesign.
+
 Failsafes: a store written by an older schema (1: ``snapshots``; 2: markets
-without event sets) is copied to a timestamped backup and migrated in one
-transaction, all or nothing; a store written by a newer schema is refused
+without event sets; 3: without per-pair calendars) is copied to a
+timestamped backup and migrated in one transaction, all or nothing; a store written by a newer schema is refused
 rather than misread; event rows are validated as a whole and a set with any
 bad row is not stored.
 """
@@ -49,7 +58,7 @@ from pathlib import Path
 import pandas as pd
 
 DEFAULT_PATH = Path(__file__).resolve().parents[1] / "data" / "local" / "market_data.sqlite"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 SPOT, DEPO, FWD_PTS = "spot", "depo", "fwd_pts"
 VOL_FIELDS = ("atm", "rr_25", "bf_25", "rr_10", "bf_10")
 VOL_PREFIX = "vol_"
@@ -83,6 +92,27 @@ CREATE TABLE IF NOT EXISTS event_pins (
 );
 """
 
+_PAIR_EVENT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS pair_event_versions (
+    pair TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    saved_at TEXT NOT NULL,
+    user TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (pair, version)
+);
+CREATE TABLE IF NOT EXISTS pair_events (
+    pair TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    event_date TEXT NOT NULL,
+    event TEXT NOT NULL,
+    variance_days REAL NOT NULL,
+    currency TEXT,
+    PRIMARY KEY (pair, version, event_date, event),
+    FOREIGN KEY (pair, version) REFERENCES pair_event_versions (pair, version)
+);
+"""
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_info (version INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS markets (
@@ -103,7 +133,7 @@ CREATE TABLE IF NOT EXISTS quotes (
     PRIMARY KEY (market_id, kind, name, tenor)
 );
 CREATE INDEX IF NOT EXISTS quotes_series ON quotes (kind, name, tenor);
-""" + _EVENT_SCHEMA
+""" + _EVENT_SCHEMA + _PAIR_EVENT_SCHEMA
 
 _SNAPSHOT_FIELDS = ("market_id market_source date_time fetched_at note event_set_id "
                     "spots depo_curves vols forward_points")
@@ -123,6 +153,9 @@ Snapshot.__new__.__defaults__ = ("", None, {}, {}, {}, {})
 
 #: ``events`` is ``{pair: [(event_date, event, variance_days), ...]}`` in date order.
 EventSet = namedtuple("EventSet", "event_set_id source date_time note events")
+#: One saved version of a pair's calendar; ``rows`` is ``[(date, event,
+#: variance_days), ...]`` by date then name (empty: the pair has no events).
+PairEvents = namedtuple("PairEvents", "pair version saved_at user note rows")
 
 
 class MarketDataStoreError(RuntimeError):
@@ -157,7 +190,7 @@ def data_date_time(valuation_date, now=None):
     return close_date_time(valuation_date)
 
 
-def validate_events(rows):
+def validate_events(rows, what="event set not stored"):
     """``[(PAIR, YYYY-MM-DD, event, variance_days)]`` from ``rows`` of
     ``(pair, date, event, variance_days)``; raises ``ValueError`` listing
     every bad row (1-based), so a set is stored whole or not at all."""
@@ -170,14 +203,20 @@ def validate_events(rows):
             pair = str(pair or "").replace("/", "").replace(" ", "").upper()
             if not re.fullmatch(r"[A-Z]{6}", pair):
                 raise ValueError(f"pair {row[0]!r} is not two 3-letter currency codes")
-            stamp = pd.Timestamp(date)
+            try:
+                stamp = pd.Timestamp(date)
+            except (TypeError, ValueError):
+                stamp = pd.NaT
             if stamp is pd.NaT or pd.isna(stamp):
                 raise ValueError(f"date {date!r} is not a date")
             day = stamp.strftime("%Y-%m-%d")
             event = str(event or "").strip()
             if not event:
                 raise ValueError("event name is empty")
-            days = float(variance_days)
+            try:
+                days = float(variance_days)
+            except (TypeError, ValueError):
+                days = math.nan
             if not math.isfinite(days):
                 raise ValueError(f"variance days {variance_days!r} is not a finite number")
             if (pair, day, event) in seen:
@@ -187,9 +226,9 @@ def validate_events(rows):
         except (TypeError, ValueError) as exc:
             errors.append(f"row {number}: {exc}")
     if errors:
-        raise ValueError("event set not stored: " + "; ".join(errors))
+        raise ValueError(f"{what}: " + "; ".join(errors))
     if not clean:
-        raise ValueError("event set not stored: no events")
+        raise ValueError(f"{what}: no events")
     return clean
 
 
@@ -222,6 +261,8 @@ class MarketDataStore:
                 self._migrate_v1(db)
             elif "markets" in tables and "event_sets" not in tables:
                 self._migrate_v2(db)
+            elif "markets" in tables and "pair_event_versions" not in tables:
+                self._migrate_v3(db)
             with db:
                 db.executescript(_SCHEMA)
                 version = db.execute("SELECT MAX(version) FROM schema_info").fetchone()[0]
@@ -243,6 +284,32 @@ class MarketDataStore:
         shutil.copy2(str(self.path), str(backup))
         return backup
 
+    def _migrate_v3(self, db):
+        """Schema 3 -> 4: per-pair event calendar versions (empty).
+
+        Backed up first; one explicit transaction, rolled back on any error.
+        Markets and event sets are untouched.
+        """
+        version = db.execute("SELECT MAX(version) FROM schema_info").fetchone()[0]
+        if version is not None and version > SCHEMA_VERSION:
+            return                               # refused below as newer, unchanged
+        backup = self._backup(3)
+        db.isolation_level = None
+        try:
+            db.execute("BEGIN")
+            for statement in filter(str.strip, _PAIR_EVENT_SCHEMA.split(";")):
+                db.execute(statement)
+            db.execute("DELETE FROM schema_info")
+            db.execute("INSERT INTO schema_info VALUES (?)", (SCHEMA_VERSION,))
+            db.execute("COMMIT")
+        except Exception as exc:
+            db.execute("ROLLBACK")
+            raise MarketDataStoreError(
+                f"could not migrate {self.path} (unchanged; backup at {backup}): {exc}") from exc
+        finally:
+            db.isolation_level = ""
+        self.migrated_from = backup
+
     def _migrate_v2(self, db):
         """Schema 2 -> 3: event sets, and ``markets.event_set_id`` (unpinned).
 
@@ -256,6 +323,8 @@ class MarketDataStore:
                 db.execute(statement)
             db.execute("ALTER TABLE markets ADD COLUMN event_set_id INTEGER "
                        "REFERENCES event_sets (event_set_id)")
+            for statement in filter(str.strip, _PAIR_EVENT_SCHEMA.split(";")):
+                db.execute(statement)
             db.execute("DELETE FROM schema_info")
             db.execute("INSERT INTO schema_info VALUES (?)", (SCHEMA_VERSION,))
             db.execute("COMMIT")
@@ -403,6 +472,71 @@ class MarketDataStore:
                        (int(event_set_id), int(market_id)))
             db.execute("INSERT INTO event_pins VALUES (?, ?, ?, ?)",
                        (int(market_id), int(event_set_id), _iso(datetime.now()), reason))
+
+    # -- per-pair event calendars -----------------------------------------------
+
+    def save_pair_events(self, pair, rows, user="", note="", saved_at=None):
+        """Save ``rows`` (``(date, event, variance_days)``) as the pair's next
+        calendar version and return the version number.
+
+        Validated as a whole first (``validate_events``: a valid date, a
+        name, finite variance days, no duplicate); any bad row stores
+        nothing. An empty calendar is a version too (the pair's events were
+        all removed). Earlier versions are never changed.
+        """
+        import re
+        pair = str(pair or "").replace("/", "").replace(" ", "").upper()
+        if not re.fullmatch(r"[A-Z]{6}", pair):
+            raise ValueError(f"pair {pair!r} is not two 3-letter currency codes")
+        rows = list(rows)
+        clean = (validate_events([(pair, *row) for row in rows],
+                                 f"{pair} event calendar not saved") if rows else [])
+        with closing(self._connect()) as db, db:
+            version = db.execute("SELECT COALESCE(MAX(version), 0) + 1 FROM "
+                                 "pair_event_versions WHERE pair = ?", (pair,)).fetchone()[0]
+            db.execute("INSERT INTO pair_event_versions VALUES (?, ?, ?, ?, ?)",
+                       (pair, version, _iso(saved_at or datetime.now()), str(user or ""),
+                        str(note or "")))
+            db.executemany("INSERT INTO pair_events VALUES (?, ?, ?, ?, ?, NULL)",
+                           [(pair, version, day, event, days)
+                            for _, day, event, days in clean])
+        return version
+
+    def load_pair_events(self, pair, version=None, as_of=None):
+        """A saved version of the pair's calendar (``PairEvents``), or ``None``.
+
+        ``version`` picks one; else the latest, or with ``as_of`` the latest
+        saved on or before that date (a calendar saved later never reaches
+        an earlier valuation date).
+        """
+        pair = str(pair or "").replace("/", "").replace(" ", "").upper()
+        query, args = ("SELECT pair, version, saved_at, user, note FROM pair_event_versions "
+                       "WHERE pair = ?"), [pair]
+        if version is not None:
+            query += " AND version = ?"
+            args.append(int(version))
+        elif as_of is not None:
+            query += " AND substr(saved_at, 1, 10) <= ?"
+            args.append(_day(as_of))
+        with closing(self._connect()) as db:
+            head = db.execute(query + " ORDER BY version DESC LIMIT 1", args).fetchone()
+            if head is None:
+                return None
+            rows = db.execute("SELECT event_date, event, variance_days FROM pair_events "
+                              "WHERE pair = ? AND version = ? ORDER BY event_date, event",
+                              (head[0], head[1])).fetchall()
+        return PairEvents(*head, [tuple(row) for row in rows])
+
+    def pair_event_versions(self, pair):
+        """The pair's calendar versions, newest first: ``version, saved_at,
+        user, note, events``."""
+        pair = str(pair or "").replace("/", "").replace(" ", "").upper()
+        with closing(self._connect()) as db:
+            return pd.read_sql_query(
+                "SELECT v.version, v.saved_at, v.user, v.note, COUNT(e.event) AS events "
+                "FROM pair_event_versions v LEFT JOIN pair_events e "
+                "ON e.pair = v.pair AND e.version = v.version WHERE v.pair = ? "
+                "GROUP BY v.version ORDER BY v.version DESC", db, params=(pair,))
 
     def event_pins(self, market_id):
         """A market's pin history, oldest first."""

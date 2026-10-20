@@ -39,16 +39,21 @@ def market(store, event_set_id=None, date_time=f"{TODAY}T12:00:00"):
                       event_set_id=event_set_id)
 
 
-def test_csv_imports_as_a_set_with_same_day_events_added_up(store, tmp_path):
+def test_csv_imports_as_a_set_with_named_events(store, tmp_path):
     event_set_id = import_csv(write(tmp_path, GOOD_CSV), store)
     event_set = store.load_event_set(event_set_id)
     assert (event_set.source, event_set.note) == ("csv", "calendar.csv")
     assert event_set.events["EURUSD"] == [("2026-10-29", "CPI", 0.5),
                                           ("2026-11-06", "ECB speech", 0.25),
                                           ("2026-11-06", "NFP", 1.5)]
+    # One named row per event; same-day events stay separate (their
+    # variance days add up when the market counts them).
     table = event_table(event_set, "EURUSD")
-    assert list(table["event_date"].dt.strftime("%Y-%m-%d")) == ["2026-10-29", "2026-11-06"]
-    assert list(table["variance_days"]) == [0.5, 1.75]
+    assert list(table["event_date"].dt.strftime("%Y-%m-%d")) == [
+        "2026-10-29", "2026-11-06", "2026-11-06"]
+    assert list(table["event"]) == ["CPI", "ECB speech", "NFP"]
+    assert list(table["variance_days"]) == [0.5, 0.25, 1.5]
+    assert table.groupby("event_date")["variance_days"].sum().tolist() == [0.5, 1.75]
     assert event_table(event_set, "GBPUSD").empty
     assert list(store.event_sets()["events"]) == [4]
 
@@ -112,7 +117,8 @@ def test_markets_are_built_with_their_pinned_events(store, tmp_path):
     loaded = load_store_markets(TODAY, store=store)
     assert loaded.problem is None and sorted(loaded.payloads) == ["EURUSD", "USDJPY"]
     events = pd.DataFrame(loaded.payloads["EURUSD"]["event_calendar"])
-    assert list(events["variance_days"]) == [0.5, 1.75]
+    assert list(events["event"]) == ["CPI", "ECB speech", "NFP"]
+    assert list(events["variance_days"]) == [0.5, 0.25, 1.5]
     assert loaded.payloads["USDJPY"]["event_calendar"] == []
     assert f"event set {event_set_id} has no events for USDJPY; built without events" in loaded.notes
 
@@ -201,3 +207,24 @@ def test_a_failed_schema_2_migration_rolls_back(tmp_path, monkeypatch):
     assert "event_set_id" not in columns
     assert db.execute("SELECT MAX(version) FROM schema_info").fetchone()[0] == 2
     db.close()
+
+
+def test_named_events_count_like_the_summed_table_and_old_files_still_load():
+    # Separate same-day rows give the same variance days as one summed row,
+    # and a market file from before names existed loads with blank names.
+    from datetime import date
+    from app.market_context import MarketContext
+    from app.market_store import validate_market
+    from golden.app_harness import load_markets
+    payload = load_markets("MARKETS_20261015.json")["EURUSD"]
+    named = dict(payload, event_calendar=[
+        {"event_date": "2026-11-06", "event": "NFP", "variance_days": 1.5},
+        {"event_date": "2026-11-06", "event": "ECB speech", "variance_days": 0.25}])
+    summed = dict(payload, event_calendar=[{"event_date": "2026-11-06", "variance_days": 1.75}])
+    days = [MarketContext.from_payload(p).variance_days_between(date(2026, 10, 15),
+                                                                date(2026, 12, 1))
+            for p in (named, summed)]
+    assert days[0] == pytest.approx(days[1], abs=1e-12)
+    rows = validate_market(summed)["event_rows"]
+    assert list(rows.columns) == ["event_date", "event", "variance_days"]
+    assert list(rows["event"]) == [""]

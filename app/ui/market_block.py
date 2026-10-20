@@ -13,6 +13,7 @@ from app.market_store import (
     pair_broker_strangle, read_market_file, validate_market,
 )
 from app.smile_service import DiagnosticsCollector
+from app.ui.event_calendar_block import adopt_pending_event_rows, render_event_tools
 
 
 def active_short_points(currency_pair):
@@ -229,6 +230,7 @@ def render_market_block(markets_tab, valuation_date, apply_loaded_market):
         })
         event_rows = pd.DataFrame({
             "event_date": pd.Series(dtype="datetime64[ns]"),
+            "event": pd.Series(dtype=object),
             "variance_days": pd.Series(dtype=float),
         })
         return vol_rows, forward_rows, event_rows
@@ -260,6 +262,8 @@ def render_market_block(markets_tab, valuation_date, apply_loaded_market):
     )
     st.session_state.forward_rows = forward_input
 
+    # A table queued by the calendar tools (a CSV, a version) comes first.
+    adopt_pending_event_rows()
     event_input = st.session_state.event_rows.copy(deep=True)
     event_input["event_date"] = pd.to_datetime(
         event_input["event_date"], errors="coerce", utc=True
@@ -267,6 +271,13 @@ def render_market_block(markets_tab, valuation_date, apply_loaded_market):
     event_input["variance_days"] = pd.to_numeric(
         event_input["variance_days"], errors="coerce"
     )
+    # Each event is named (blank for events from before names existed).
+    names = event_input["event"] if "event" in event_input else pd.Series(
+        "", index=event_input.index)
+    event_input["event"] = names.map(
+        lambda value: "" if value is None or (not isinstance(value, str) and pd.isna(value))
+        else str(value))
+    event_input = event_input.reindex(columns=["event_date", "event", "variance_days"])
     st.session_state.event_rows = event_input
 
     with vol_tab:
@@ -347,10 +358,14 @@ def render_market_block(markets_tab, valuation_date, apply_loaded_market):
             args=("event_rows", "event_editor"),
             column_config={
                 "event_date": st.column_config.DateColumn("Event date", format="MM/DD/YYYY"),
+                "event": st.column_config.TextColumn(
+                    "Event", help="Name or description, e.g. US NFP. Several events on "
+                                  "one date are separate rows; their variance days add up."),
                 "variance_days": st.column_config.NumberColumn("Variance days", format="%.4f"),
             },
         )
         st.session_state.event_rows = event_rows.copy(deep=True)
+        render_event_tools(str(currency_pair).upper(), valuation_date, event_rows)
     
     with markets_tab:
         pair_token = "".join(ch for ch in currency_pair.upper() if ch.isalnum()) or "MARKET"

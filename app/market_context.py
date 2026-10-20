@@ -47,6 +47,10 @@ DELTA_REPORTING = (None, "forward", "spot")
 VOL_COLUMNS = ("tenor", "expiry", "atm", "rr_25", "bf_25", "rr_10", "bf_10")
 FORWARD_COLUMNS = ("delivery_date", "fwd_pts", "term_discount")
 EVENT_COLUMNS = ("event_date", "variance_days")
+#: The event table as the app shows and saves it: each event its own row,
+#: named (``event`` is optional on input: older files have no names). Same-day
+#: events add up in the variance days.
+EVENT_TABLE_COLUMNS = ("event_date", "event", "variance_days")
 
 
 class MarketContextError(ValueError):
