@@ -181,7 +181,8 @@ def price_trades(markets, trades, mods, extras=(), spot_path=pricer.SMILE_PATH):
     for trade in forwards:
         try:
             row = pricer.value_forward(markets, trade.currency_pair, trade.expiry,
-                                       trade.signed_base_amount(), trade.contract_rate)
+                                       trade.signed_base_amount(), trade.contract_rate,
+                                       extras=extras)
         except Exception as exc:
             errors.append(f"{trade.trade_id}: {exc}")
             continue

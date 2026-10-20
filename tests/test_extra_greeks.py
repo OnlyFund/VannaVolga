@@ -58,7 +58,8 @@ def unit_inputs(markets, pair="EURUSD", strike=1.18, expiry="2026-12-17"):
 def test_catalogue_lists_every_greek_once_in_groups():
     assert list(catalog.CATALOG)[:8] == list(catalog.BASE_GREEKS)
     assert set(catalog.EXTRA_GREEKS) == {*catalog.DECAY_GREEKS, "gamma_vol",
-                                         *catalog.WEIGHTED_GREEKS, *catalog.THETA_PARTS}
+                                         *catalog.WEIGHTED_GREEKS, *catalog.THETA_PARTS,
+                                         "rho", "phi"}
     assert "theta_decay" not in catalog.CATALOG
     assert all(greek.group in catalog.GROUPS for greek in catalog.CATALOG.values())
     assert catalog.columns(["vega", "gamma_vol"]) == ["fixed_vega", "vega",
@@ -199,7 +200,7 @@ def _ladder(markets, rows, spots, mode, extras):
 def test_ladder_extras_at_spot_match_the_pricer(markets):
     rows = pd.DataFrame([line(), line(strike="1.12", call_put="PUT", buy_sell="SELL")])
     resolved, _, _ = pricer.resolve_line_inputs(markets, rows, "EURUSD")
-    extras = ["vega_decay", "gamma_vol", "weighted_vega"]
+    extras = ["vega_decay", "gamma_vol", "weighted_vega", "rho", "phi"]
     priced, errors = pricer.price_lines(markets, resolved, MODS, extras=extras)
     assert errors == []
     spot = float(pricer.market_for_pair(markets, "EURUSD").spot)
@@ -210,6 +211,38 @@ def test_ladder_extras_at_spot_match_the_pricer(markets):
     for column in catalog.columns(extras):
         assert at_spot[column] == pytest.approx(sum(r[column] for r in priced), rel=1e-6), column
     assert levels[0]["gamma_vol"] != at_spot["gamma_vol"]          # moves with spot
+
+
+def test_rate_risks_include_forward_hedges_in_pair_totals_and_ladder(markets):
+    from app.reports.spot_ladder import calculate_spot_ladder
+    from pricing.fx_forward import FxForwardPosition
+    from pricing.greeks import calculate_forward_rate_risks
+
+    extras = ["rho", "phi"]
+    rows = pd.DataFrame([line()])
+    resolved, _, _ = pricer.resolve_line_inputs(markets, rows, "EURUSD")
+    results, errors = pricer.price_lines(markets, resolved, MODS, extras=extras)
+    assert errors == []
+    hedges, errors = pricer.hedge_trades_for(markets, results)
+    assert errors == [] and len(hedges) == 1
+    context = pricer.market_for_pair(markets, "EURUSD")
+    hedge = hedges[0]
+    position = FxForwardPosition("EURUSD", hedge["expiry"], hedge["base_amount"],
+                                 hedge["forward_rate"])
+    mkt = context.market_for_expiry(hedge["expiry"])
+    expected = calculate_forward_rate_risks(position, mkt, markets.valuation_date)
+    total = pricer.aggregate_by_pair(results, hedges, greeks=extras).iloc[0]
+    settings = context.settings
+    levels, errors = calculate_spot_ladder(
+        list(resolved.iterrows()), [float(context.spot)], markets.valuation_date,
+        context.market_for_expiry, context.resolve_market_expiry,
+        settings.pricing_model, settings.atm_type, settings.delta_base, MODS,
+        forward_positions=[position], mode="reference", extras=extras)
+    assert errors == []
+    for key in catalog.columns(extras):
+        assert hedge[key] == pytest.approx(expected[key])
+        assert total[key] == pytest.approx(results[0][key] + expected[key])
+        assert levels[0][key] == pytest.approx(total[key], rel=1e-6)
 
 
 def test_ladder_modes_agree_with_extras(markets):

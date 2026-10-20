@@ -38,9 +38,8 @@ class FixedGreekBase(ABC):
     def _discount_kwargs(self, market=None, valuation_date=None):
         """Return convention-discounting overrides, or ``{}`` for legacy behaviour.
 
-        Perturbed markets share the expiry, pair and rate of the base market,
-        so the base market's settings drive every bumped valuation and the
-        finite differences stay consistent. A valuation-date bump (theta) must
+        Pass the bumped market for rate risk so the discount factor changes
+        with the rate. A valuation-date bump (theta) must
         pass its own ``valuation_date`` so the discount factor rolls with it.
         """
         return discount_kwargs(
@@ -82,7 +81,7 @@ class FixedGreekBase(ABC):
             BuySell=self.BuySell,
             Notional=self.notional,
             deltaBase=self.deltaBase,
-            fwd_divisor=market.forward_divisor, term_discount=market.term_discount, **self._discount_kwargs()
+            fwd_divisor=market.forward_divisor, term_discount=market.term_discount, **self._discount_kwargs(market)
         ).price()
 
     def _delta_given_market(self, market: MarketData) -> float:
@@ -110,7 +109,7 @@ class FixedGreekBase(ABC):
             BuySell=self.BuySell,
             Notional=self.notional,
             deltaBase=self.deltaBase,
-            fwd_divisor=market.forward_divisor, term_discount=market.term_discount, **self._discount_kwargs()
+            fwd_divisor=market.forward_divisor, term_discount=market.term_discount, **self._discount_kwargs(market)
         ).delta()
 
     def _vega_given_market(self, market: MarketData) -> float:
@@ -137,7 +136,7 @@ class FixedGreekBase(ABC):
             BuySell=self.BuySell,
             Notional=self.notional,
             deltaBase=self.deltaBase,
-            fwd_divisor=market.forward_divisor, term_discount=market.term_discount, **self._discount_kwargs()
+            fwd_divisor=market.forward_divisor, term_discount=market.term_discount, **self._discount_kwargs(market)
         ).vega()
 
     # -------------------- Perturbation helpers --------------------
@@ -189,6 +188,30 @@ class FixedGreekBase(ABC):
 
 
 # -------------------- Standard Greeks --------------------
+class FixedRho(FixedGreekBase):
+    """Sticky-delta domestic/term rate derivative, scaled to a +10bp move."""
+
+    rate_currency = "domestic"
+
+    def calculate(self, eps=0.001):
+        if eps <= 0:
+            raise ValueError("Rate finite-difference step must be positive")
+        pm = PerturbedMarket(self.market)
+        up, dn = (
+            pm.bump_rate(self.rate_currency, step, self.expiry_date, self.valuation_date)
+            for step in (eps, -eps)
+        )
+        return self._to_base_ccy(
+            (self._price_given_market(up) - self._price_given_market(dn)) / (2 * eps) * 0.001
+        )
+
+
+class FixedPhi(FixedRho):
+    """Sticky-delta foreign/base rate derivative, scaled to a +10bp move."""
+
+    rate_currency = "foreign"
+
+
 class FixedDelta(FixedGreekBase):
     """Sticky-delta spot Greek with unchanged market smile quotes."""
 

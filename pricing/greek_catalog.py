@@ -20,6 +20,9 @@ the ``EXTRA_GREEKS`` only when a report asks for them
   forward points' and rates' roll. Each family's parts add up to its theta:
   sticky theta holds the quotes and the forward, so its carry is zero.
   Hedge forwards' roll is carry. Premium currency, as theta.
+* rates (``rho``, ``phi``): domestic/term and foreign/base rate sensitivities
+  per +10bp, in base currency, including the parity-consistent forward move.
+  Smile betas respond to the equivalent log-forward move, not actual spot.
 
 ``CONVENTION_GREEKS`` (``spot_delta``, ``fwd_delta``) come with every priced
 line at no extra cost (``pricing.greeks.convention_deltas``) but are shown
@@ -57,9 +60,11 @@ _WEIGHTED = (Greek("weighted_gamma", "Weighted gamma", "gamma x 0.25/T^0.4", "we
 _THETA_PARTS = (Greek("theta_static", "Theta static", "premium ccy per day", "theta"),
                 Greek("theta_vol_roll", "Theta vol roll", "premium ccy per day", "theta"),
                 Greek("theta_carry", "Theta carry", "premium ccy per day", "theta"))
+_RATES = (Greek("rho", "Rho (domestic)", "base ccy per 10bp term rate", "rates"),
+          Greek("phi", "Phi (foreign)", "base ccy per 10bp base rate", "rates"))
 
 CATALOG = OrderedDict((greek.name, greek)
-                      for greek in (*_BASE, *_DECAY, *_CROSS, *_WEIGHTED, *_THETA_PARTS))
+                      for greek in (*_BASE, *_DECAY, *_CROSS, *_WEIGHTED, *_THETA_PARTS, *_RATES))
 EXTRA_GREEKS = tuple(name for name in CATALOG
                      if name not in BASE_GREEKS and name not in CONVENTION_GREEKS)
 DECAY_GREEKS = tuple(greek.name for greek in _DECAY)
@@ -67,7 +72,7 @@ WEIGHTED_GREEKS = tuple(greek.name for greek in _WEIGHTED)
 THETA_PARTS = tuple(greek.name for greek in _THETA_PARTS)
 #: Greeks in the premium currency (theta and its parts); the rest are base.
 PREMIUM_CCY_GREEKS = ("theta", *THETA_PARTS)
-GROUPS = ("first order", "decay", "cross", "weighted", "theta")
+GROUPS = ("first order", "decay", "cross", "weighted", "theta", "rates")
 #: Display tags of the two families (``fixed_<name>`` and ``<name>``), after
 #: the Greek so a narrow column still shows which Greek it is.
 STICKY_DELTA = "sticky"

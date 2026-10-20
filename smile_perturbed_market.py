@@ -1,6 +1,7 @@
 from copy import deepcopy
 from surface_models.smile_extension import SmileExtension
 from market_data import Modifications, MarketData
+from perturbed_market import PerturbedMarket as QuotePerturbedMarket
 
 class PerturbedMarket:
     """Create perturbed smile volatilities for finite-difference Greeks.
@@ -80,6 +81,44 @@ class PerturbedMarket:
         return self._reprice_perturbed_market(self.base, mods=bumped_mods)
 
     # --- ATM bump ---
+    def rate_market(self, currency, delta_rate):
+        """Rate-bumped market with beta quote changes driven by log(F'/F).
+
+        The synthetic spot only drives the existing quote dynamics; actual
+        pricing retains the original spot and uses the rate-bumped forward.
+        Apply quote increments, not reconstructed quote levels, so broker
+        quotes and a zero-beta smile retain their original representation.
+        """
+        bumped = QuotePerturbedMarket(self.base).bump_rate(
+            currency, delta_rate, self.expiry_date, self.valuation_date)
+        forward = self.base.s + self.base.fwd_pts / self.base.forward_divisor
+        new_forward = bumped.s + bumped.fwd_pts / bumped.forward_divisor
+        mods = deepcopy(self.mods)
+        shifted = self.base.s * new_forward / forward
+        if isinstance(mods, dict):
+            mods["shifted_spot"] = shifted
+        else:
+            setattr(mods, "shifted_spot", shifted)
+        smile = SmileExtension(
+            market=self.base, K=self.K, expiry_date=self.expiry_date,
+            valuation_date=self.valuation_date, CallPut=self.CallPut, mods=mods,
+            pricing_model=self.pricing_model, deltaBase=self.deltaBase,
+            atm_conv=self.atm_type, reference_spot=self.base.s,
+            keep_smile_ratio=self.keep_smile_ratio,
+            preserve_ratio_mode=self.preserve_ratio_mode,
+        )
+        skews = smile.get_local_skews()
+        changed = smile.extend_wings_convexity(smile.get_new_pillar_vols(skews), skews)
+        if isinstance(mods, dict):
+            mods["shifted_spot"] = self.base.s
+        else:
+            setattr(mods, "shifted_spot", self.base.s)
+        unchanged = smile.extend_wings_convexity(smile.get_new_pillar_vols(skews), skews)
+        return bumped.copy_with(**{
+            name: getattr(self.base, name) + (changed[name] - unchanged[name])
+            for name in ("v_atm", "rr_25", "rr_10", "bf_25", "bf_10")
+        })
+
     def bump_vol(self, delta_vol: float = 0.01):
         """Bump ATM volatility by percentage points and return strike vol."""
         bumped_market = self.base.copy_with(v_atm=self.base.v_atm + delta_vol)

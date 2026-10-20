@@ -371,7 +371,7 @@ def build_delta_hedges(markets, rows, mods):
     return positions, errors
 
 
-def value_forward(markets, pair, expiry, base_amount, contract_rate):
+def value_forward(markets, pair, expiry, base_amount, contract_rate, extras=()):
     """MTM, delta and roll theta of one FX forward, as a hedge-trade row.
 
     ``delta_offset`` is the forward's delta in the units the Pricer reports
@@ -391,6 +391,8 @@ def value_forward(markets, pair, expiry, base_amount, contract_rate):
     next_valuation = next_business_day(pair, valuation_date)
     next_market = context.market_for_expiry(expiry, as_of=next_valuation, allow_short_end=True)
     theta = calculate_forward_theta(position, market, next_market, valuation_date, next_valuation)
+    from pricing.greeks import calculate_forward_rate_risks
+    rate_risks = calculate_forward_rate_risks(position, market, valuation_date, extras)
     return {
         "currency_pair": pair,
         "expiry": expiry,
@@ -407,6 +409,7 @@ def value_forward(markets, pair, expiry, base_amount, contract_rate):
         "pnl_term": value["mtm_term"],
         "pnl_base": value["mtm_base"],
         "theta": theta,
+        **rate_risks,
     }
 
 
@@ -444,6 +447,7 @@ def hedge_trades_for(markets, results):
     Returns ``(trades, errors)``. A hedge group that cannot be valued is
     reported and skipped; it never stops the other groups or the pricing.
     """
+    rates = [name for name in ("rho", "phi") if any(name in result for result in results)]
     grouped = {}
     for result in results:
         key = (result["currency_pair"], result["expiry"], float(result["_forward_rate"]))
@@ -458,7 +462,8 @@ def hedge_trades_for(markets, results):
                 market, expiry, markets.valuation_date)
             if np.isfinite(base_amount) and abs(base_amount) < 1e-12:
                 continue
-            trades.append(value_forward(markets, pair, expiry, base_amount, forward_rate))
+            trades.append(value_forward(markets, pair, expiry, base_amount, forward_rate,
+                                        extras=rates))
         except Exception as exc:
             errors.append("{} {} hedge: {}".format(pair, expiry, exc))
     return trades, errors
@@ -578,7 +583,7 @@ def aggregate_by_pair(results, hedge_trades=(), greeks=GREEK_NAMES):
 
     ``greeks`` picks the Greek columns; one the results do not carry (an
     extra not priced yet) is left out. Forward hedges add to MTM, P&L,
-    delta and theta only (sticky and smile alike: a forward has no smile).
+    delta, theta and requested rate risks (sticky and smile alike).
     """
     from pricing.greek_catalog import columns as greek_columns
     wanted = greek_columns(greeks)
@@ -618,6 +623,10 @@ def aggregate_by_pair(results, hedge_trades=(), greeks=GREEK_NAMES):
                                ("spot_delta", trade.get("spot_delta")),
                                ("fixed_fwd_delta", trade.get("fwd_delta")),
                                ("fwd_delta", trade.get("fwd_delta")),
+                               ("fixed_rho", trade.get("rho")),
+                               ("rho", trade.get("rho")),
+                               ("fixed_phi", trade.get("phi")),
+                               ("phi", trade.get("phi")),
                                ("fixed_theta", trade.get("theta", 0.0)),
                                ("theta", trade.get("theta", 0.0)),
                                # A forward's roll is carry (``theta_carry``).

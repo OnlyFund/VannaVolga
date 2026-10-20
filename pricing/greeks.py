@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
 from Greeks.fixed_greeks import (
     FixedDelta, FixedGamma, FixedVega, FixedVanna, FixedVolga,
     FixedTheta, FixedRega, FixedSega,
+    FixedRho, FixedPhi,
 )
 from Greeks.smile_greeks import SmileGreeks
 from pricing_utils.BlackScholes import BlackScholes
@@ -55,6 +56,26 @@ def calculate_forward_theta(position, market, next_market, valuation, next_valua
     if theta_currency(row, market) == _pair_code(row, market)[3:]:
         return term_theta
     return term_theta / market.s
+
+
+def calculate_forward_rate_risks(position, market, valuation, names=("rho", "phi")):
+    """The forward's base-currency rate sensitivities per +10bp, both families."""
+    from perturbed_market import PerturbedMarket as QuotePerturbedMarket
+
+    values = {}
+    if _date_text(position.expiry) <= _date_text(valuation):
+        return {key: 0.0 for name in names if name in ("rho", "phi")
+                for key in (name, f"fixed_{name}")}
+    pm = QuotePerturbedMarket(market)
+    for name, currency in (("rho", "domestic"), ("phi", "foreign")):
+        if name not in names:
+            continue
+        up, dn = (pm.bump_rate(currency, step, position.expiry, valuation)
+                  for step in (0.001, -0.001))
+        risk = (position.value(up, valuation)["mtm_term"]
+                - position.value(dn, valuation)["mtm_term"]) / (2 * market.s)
+        values[name] = values[f"fixed_{name}"] = risk
+    return values
 
 
 def forward_delta_factor(market, expiry, valuation):
@@ -485,6 +506,23 @@ def calculate_extra_greeks(
 
     expiry, valuation = _date_text(row["expiry"]), _date_text(row["valuation"])
     expired = year_fraction(expiry, valuation) == 0.0
+
+    rates = [name for name in wanted if name in ("rho", "phi")]
+    if rates:
+        if expired:
+            for name in rates:
+                values[f"fixed_{name}"] = values[name] = 0.0
+        else:
+            common = _greek_inputs(market, row, pricing_model, atm_type, delta_base)
+            smile = SmileGreeks(mods=mods, **common)
+            for name in rates:
+                try:
+                    calculator = FixedRho if name == "rho" else FixedPhi
+                    fixed_risk = calculator(**common).calculate()
+                    smile_risk = getattr(smile, name)()
+                    values[f"fixed_{name}"], values[name] = fixed_risk, smile_risk
+                except (ValueError, RuntimeError, FloatingPointError, OverflowError) as exc:
+                    failed(name, f"{name} failed: {exc}")
 
     decays = [name for name in wanted if name in DECAY_GREEKS]
     if decays:

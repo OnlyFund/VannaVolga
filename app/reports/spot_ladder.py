@@ -260,6 +260,11 @@ def _add_forward_pnl(level, position, market, valuation_date,
     delta = base_amount * forward_delta_factor(market, position.expiry, valuation_date)
     level["fixed_delta"] += delta
     level["delta"] += delta
+    from pricing.greeks import calculate_forward_rate_risks
+    for key, risk in calculate_forward_rate_risks(
+            position, market, valuation_date, names=level).items():
+        if key in level and level[key] is not None:
+            level[key] += risk
     if next_market is not None:
         # A forward has no smile: its roll goes into sticky and smile theta.
         theta = calculate_forward_theta(

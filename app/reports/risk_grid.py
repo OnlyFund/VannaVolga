@@ -185,7 +185,7 @@ def risk_lines(markets, pair, trades, results, forwards, include_hedges=False, f
                 continue
             values = {"notional": row["base_amount"], "delta": row["delta_offset"],
                       "mtm_base": row["mtm_base"], "theta": row["theta"]}
-            for greek in ("spot_delta", "fwd_delta"):
+            for greek in ("spot_delta", "fwd_delta", "rho", "phi"):
                 if row.get(greek) is not None:
                     values[greek] = row[greek]
             lines.append(RiskLine(row["trade_id"], pd.Timestamp(row["expiry"]).date(), None,

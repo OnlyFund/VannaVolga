@@ -39,9 +39,8 @@ class SmileGreeks:
     def _discount_kwargs(self, market=None):
         """Return convention-discounting overrides, or ``{}`` for legacy behaviour.
 
-        Perturbed markets share the expiry, pair and rate of the base market,
-        so the base market's settings drive every bumped valuation and the
-        finite differences stay consistent.
+        Rate risk must pass the bumped market so its changed term rate also
+        changes the settlement discount factor.
         """
         return discount_kwargs(
             self.market if market is None else market,
@@ -83,7 +82,7 @@ class SmileGreeks:
             BuySell=self.BuySell,
             Notional=self.notional,
             deltaBase=self.deltaBase,
-            fwd_divisor=market.forward_divisor, term_discount=market.term_discount, **self._discount_kwargs()
+            fwd_divisor=market.forward_divisor, term_discount=market.term_discount, **self._discount_kwargs(market)
         ).price()
 
     # --- Perturbed Market helper ---
@@ -102,6 +101,23 @@ class SmileGreeks:
         )
 
     # --- First-order Greeks ---
+    def _rate_risk(self, currency, eps):
+        if eps <= 0:
+            raise ValueError("Rate finite-difference step must be positive")
+        pm = self._get_pm()
+        up, dn = (pm.rate_market(currency, step) for step in (eps, -eps))
+        return self._to_base_ccy(
+            (self._price_given_market(up) - self._price_given_market(dn)) / (2 * eps) * 0.001
+        )
+
+    def rho(self, eps=0.001):
+        """Domestic/term rate derivative per +10bp, including forward betas."""
+        return self._rate_risk("domestic", eps)
+
+    def phi(self, eps=0.001):
+        """Foreign/base rate derivative per +10bp, including forward betas."""
+        return self._rate_risk("foreign", eps)
+
     def price_delta(self, eps=1e-4):
         """Return a finite-difference price delta for the current smile surface."""
         S = self.market.s
