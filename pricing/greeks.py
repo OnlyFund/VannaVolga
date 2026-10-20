@@ -70,7 +70,8 @@ def calculate_forward_rate_risks(position, market, valuation, names=("rho", "phi
     for name, currency in (("rho", "domestic"), ("phi", "foreign")):
         if name not in names:
             continue
-        up, dn = (pm.bump_rate(currency, step, position.expiry, valuation)
+        up, dn = (pm.bump_rate(currency, step, position.expiry, valuation,
+                               delivery_date=getattr(position, "value_date", None))
                   for step in (0.001, -0.001))
         risk = (position.value(up, valuation)["mtm_term"]
                 - position.value(dn, valuation)["mtm_term"]) / (2 * market.s)
@@ -78,15 +79,20 @@ def calculate_forward_rate_risks(position, market, valuation, names=("rho", "phi
     return values
 
 
-def forward_delta_factor(market, expiry, valuation):
-    """Delta reporting units per unit forward hedge notional."""
+def forward_delta_factor(market, expiry, valuation, delivery=None):
+    """Delta reporting units per unit forward hedge notional.
+
+    ``delivery``: a value-dated forward's own delivery date (else the
+    delivery follows from ``expiry``).
+    """
     if market.delta_reporting != "spot":
         return 1.0
     forward = market.s + market.fwd_pts / market.forward_divisor
-    overrides = discount_kwargs(market, expiry, valuation)
+    overrides = discount_kwargs(market, expiry, valuation, delivery=delivery)
+    end = expiry if delivery is None else delivery
     term_factor = overrides.get(
         "term_discount_factor",
-        exp(-market.term_discount * year_fraction(_date_text(expiry), _date_text(valuation))),
+        exp(-market.term_discount * year_fraction(_date_text(end), _date_text(valuation))),
     )
     return term_factor * forward / market.s
 

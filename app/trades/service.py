@@ -180,13 +180,9 @@ def price_trades(markets, trades, mods, extras=(), spot_path=pricer.SMILE_PATH):
     forward_rows = []
     for trade in forwards:
         try:
-            if trade.value_date is not None:
-                # Valued at its own delivery date in item 10 step 2; never on
-                # the option-expiry convention, which would shift delivery.
-                raise ValueError("value-dated forwards are not valued yet")
             row = pricer.value_forward(markets, trade.currency_pair, trade.expiry,
                                        trade.signed_base_amount(), trade.contract_rate,
-                                       extras=extras)
+                                       extras=extras, value_date=trade.value_date)
         except Exception as exc:
             errors.append(f"{trade.trade_id}: {exc}")
             continue

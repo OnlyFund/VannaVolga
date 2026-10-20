@@ -3,7 +3,7 @@ from numbers import Real
 
 from market_data import MarketData
 from helper_functions.fx_discounting import (
-    CCY, _to_date, _to_ql, option_discount, simple_discount_factor,
+    CCY, _to_date, _to_ql, delivery_discount, option_discount, simple_discount_factor,
 )
 from helper_functions.helper_functions import year_fraction
 
@@ -65,13 +65,16 @@ class PerturbedMarket:
     def bump_vol(self, delta_vol: float) -> MarketData:
         return self.base.copy_with(v_atm=self.base.v_atm + delta_vol)
 
-    def bump_rate(self, currency, delta_rate, expiry_date, valuation_date) -> MarketData:
+    def bump_rate(self, currency, delta_rate, expiry_date, valuation_date,
+                  delivery_date=None) -> MarketData:
         """Bump a domestic (term) or foreign (base) rate, keeping spot fixed.
 
         Rates and bumps are decimal (10bp = 0.001). Infer the base discount
         factor from F/S = D_base/D_term; a bump preserves the other currency's
         factor. Use simple deposit rates to delivery on each currency's basis
         when settlement discounting is enabled, else continuous rates to expiry.
+        ``delivery_date`` is a value-dated forward's own delivery date (else
+        the delivery follows from the expiry).
         """
         if currency not in ("domestic", "foreign"):
             raise ValueError("Rate currency must be 'domestic' or 'foreign'")
@@ -79,13 +82,17 @@ class PerturbedMarket:
                 or not isfinite(delta_rate)):
             raise ValueError("Rate bump must be finite")
         expiry, valuation = _to_date(expiry_date), _to_date(valuation_date)
+        if delivery_date is not None:
+            expiry = _to_date(delivery_date)
         if expiry <= valuation:
             raise ValueError("Rate risk requires an expiry after valuation")
         market = self.base
         forward = market.s + market.fwd_pts / market.forward_divisor
         rate = market.term_discount
         if market.settlement_discounting and market.currency_pair:
-            discount = option_discount(market.currency_pair, expiry, valuation, rate)
+            discount = (option_discount(market.currency_pair, expiry, valuation, rate)
+                        if delivery_date is None else
+                        delivery_discount(market.currency_pair, expiry, valuation, rate))
             if currency == "domestic":
                 rate += delta_rate
                 new_discount = simple_discount_factor(rate, discount.year_fraction)

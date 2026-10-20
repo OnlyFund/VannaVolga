@@ -292,12 +292,10 @@ class Trade:
         from pricing.fx_forward import FxForwardPosition
         if not self.is_forward:
             raise TradeValidationError(f"{self.trade_id}: only forwards are positions")
-        if self.value_date is not None:
-            raise TradeValidationError(
-                f"{self.trade_id}: value-dated forwards are not valued yet")
         return FxForwardPosition(
             currency_pair=self.currency_pair, expiry=self.expiry,
             base_amount=self.signed_base_amount(), contract_rate=self.contract_rate,
+            value_date=self.value_date,
         )
 
     def terms(self):

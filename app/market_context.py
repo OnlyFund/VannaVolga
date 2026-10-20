@@ -298,6 +298,59 @@ class MarketContext:
             "delivery_date", "term_discount", self.delivery(expiry), "Term discount rate",
         )
 
+    def market_for_delivery(self, delivery, as_of=None, spot_value=None):
+        """The market for a value-dated forward delivering on ``delivery``.
+
+        Forward points and the term rate are read off the forward curve at the
+        delivery date itself (linear between quoted deliveries, so a broken
+        date takes the linearly interpolated outright). No smile is built: the
+        vol fields hold the first pillar's ATM only to make a valid
+        ``MarketData``, and a forward never reads them. With ``as_of`` after
+        the valuation date (theta) the curve rolls as in ``market_for_expiry``
+        while the delivery stays fixed.
+
+        A delivery inside the curve's spot date (before its first point:
+        yesterday's spot deal, or theta's next day) has no TN/SN points yet;
+        it takes zero points (forward = spot) and the first term rate, and
+        the market's ``forward_note`` says so.
+        """
+        valuation_date = naive_date(self.valuation_date)
+        curve_date = valuation_date if as_of is None else naive_date(as_of)
+        delivery = naive_date(delivery)
+        if delivery < curve_date:
+            raise ValueError("Value date must not be before the valuation date")
+        if curve_date == valuation_date:
+            curve_rows = self.forward_curve(curve_date)
+        else:
+            rows = self.forward_curve(valuation_date)
+            curve_rows = roll_forward_rows(rows, None, self.currency_pair, valuation_date,
+                                           curve_date, self.delivery)
+        first = pd.to_datetime(curve_rows["delivery_date"], errors="coerce").min()
+        note = None
+        if pd.notna(first) and delivery < naive_date(first):
+            note = (f"value date {delivery:%Y-%m-%d} is inside spot "
+                    f"({naive_date(first):%Y-%m-%d}): no TN/SN points, valued at spot")
+            fwd_pts = 0.0
+            term_rate = interpolate_delivery_curve(curve_rows, "delivery_date",
+                                                   "term_discount", first, "Term discount rate")
+        else:
+            fwd_pts = interpolate_delivery_curve(curve_rows, "delivery_date", "fwd_pts",
+                                                 delivery, "Forward points")
+            term_rate = interpolate_delivery_curve(curve_rows, "delivery_date",
+                                                   "term_discount", delivery,
+                                                   "Term discount rate")
+        atm = pd.to_numeric(self.vol_rows.get("atm"), errors="coerce").dropna()
+        market = MarketData(
+            s=self.spot if spot_value is None else spot_value, fwd_pts=fwd_pts,
+            v_atm=float(atm.iloc[0]) if len(atm) and atm.iloc[0] > 0 else 10.0,
+            rr_25=0.0, rr_10=0.0, bf_25=0.0, bf_10=0.0,
+            forward_divisor=self.forward_divisor, term_discount=term_rate,
+            currency_pair=self.currency_pair, broker_strangle=False,
+            delta_reporting=self.settings.delta_reporting,
+        )
+        market.forward_note = note
+        return market
+
     def resolve_market_expiry(self, value):
         """Resolve pillar tenor strings to their configured expiry dates."""
         token = str(value).strip().upper()

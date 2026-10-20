@@ -22,6 +22,7 @@ from app.vol_override import shift_market, shifted_market, strike_vol, typed_vol
 from helper_functions.input_resolvers import parse_notional, resolve_strike
 from pricing import Pricable
 from pricing.fx_forward import FxForwardPosition
+from helper_functions.premium_quotes import conventional_premium_ccy
 from pricing.greeks import (
     calculate_forward_theta, calculate_greeks, convention_deltas, forward_delta_factor,
 )
@@ -371,26 +372,41 @@ def build_delta_hedges(markets, rows, mods):
     return positions, errors
 
 
-def value_forward(markets, pair, expiry, base_amount, contract_rate, extras=()):
+def value_forward(markets, pair, expiry, base_amount, contract_rate, extras=(),
+                  value_date=None):
     """MTM, delta and roll theta of one FX forward, as a hedge-trade row.
 
     ``delta_offset`` is the forward's delta in the units the Pricer reports
-    option deltas in, so it offsets them directly. Raises on failure.
+    option deltas in, so it offsets them directly. A ``value_date`` (a
+    standalone spot/forward deal) values the forward at that delivery date
+    instead of the option-expiry convention. Raises on failure.
     """
     valuation_date = markets.valuation_date
     if not np.isfinite(base_amount):
         raise ValueError("hedge amount is not finite")
     context = market_for_pair(markets, pair)
-    market = context.market_for_expiry(expiry)
-    delta_factor = forward_delta_factor(market, expiry, valuation_date)
+    next_valuation = next_business_day(pair, valuation_date)
+    if value_date is None:
+        market = context.market_for_expiry(expiry)
+        next_market = context.market_for_expiry(expiry, as_of=next_valuation,
+                                                allow_short_end=True)
+    else:
+        market = context.market_for_delivery(value_date)
+        next_market = (context.market_for_delivery(value_date, as_of=next_valuation)
+                       if pd.Timestamp(next_valuation) < pd.Timestamp(value_date) else None)
+    delta_factor = forward_delta_factor(market, expiry, valuation_date, delivery=value_date)
     position = FxForwardPosition(
         currency_pair=pair, expiry=expiry, base_amount=base_amount,
-        contract_rate=contract_rate,
+        contract_rate=contract_rate, value_date=value_date,
     )
     value = position.value(market, valuation_date)
-    next_valuation = next_business_day(pair, valuation_date)
-    next_market = context.market_for_expiry(expiry, as_of=next_valuation, allow_short_end=True)
-    theta = calculate_forward_theta(position, market, next_market, valuation_date, next_valuation)
+    if next_market is None:
+        # Settles before the next business day: the roll is the whole MTM.
+        theta = -value["mtm_term"] if conventional_premium_ccy(pair) == pair[3:] else (
+            -value["mtm_base"])
+    else:
+        theta = calculate_forward_theta(position, market, next_market, valuation_date,
+                                        next_valuation)
     from pricing.greeks import calculate_forward_rate_risks
     rate_risks = calculate_forward_rate_risks(position, market, valuation_date, extras)
     return {
@@ -402,13 +418,19 @@ def value_forward(markets, pair, expiry, base_amount, contract_rate, extras=()):
         "delta_offset": base_amount * delta_factor,
         # A forward's forward delta is its amount; its spot delta the offset.
         "spot_delta": base_amount * forward_delta_factor(
-            market.copy_with(delta_reporting="spot"), expiry, valuation_date),
+            market.copy_with(delta_reporting="spot"), expiry, valuation_date,
+            delivery=value_date),
         "fwd_delta": base_amount,
         "mtm_term": value["mtm_term"],
         "mtm_base": value["mtm_base"],
         "pnl_term": value["mtm_term"],
         "pnl_base": value["mtm_base"],
         "theta": theta,
+        "value_date": value_date,
+        "outright": value["forward"],
+        "settlement_term": value["settlement_term"],
+        "settlement_base": value["settlement_base"],
+        "forward_note": getattr(market, "forward_note", None),
         **rate_risks,
     }
 

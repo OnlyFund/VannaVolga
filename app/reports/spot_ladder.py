@@ -15,6 +15,7 @@ from pricing.greeks import (
 )
 from pricing.pricing import price_option_with_vol
 from pricing.fx_forward import FxForwardPosition
+from helper_functions.premium_quotes import conventional_premium_ccy
 from helper_functions.cashflows import signed_premium_cashflow
 from helper_functions.input_resolvers import parse_notional, resolve_strike
 from smile_perturbed_market import PerturbedMarket
@@ -257,7 +258,9 @@ def _add_forward_pnl(level, position, market, valuation_date,
     value = position.value(market, valuation_date)
     base_amount = float(position.base_amount)
     level["pnl_base"] += value["mtm_base"]
-    delta = base_amount * forward_delta_factor(market, position.expiry, valuation_date)
+    value_date = getattr(position, "value_date", None)
+    delta = base_amount * forward_delta_factor(market, position.expiry, valuation_date,
+                                               delivery=value_date)
     level["fixed_delta"] += delta
     level["delta"] += delta
     from pricing.greeks import calculate_forward_rate_risks
@@ -265,11 +268,17 @@ def _add_forward_pnl(level, position, market, valuation_date,
             position, market, valuation_date, names=level).items():
         if key in level and level[key] is not None:
             level[key] += risk
-    if next_market is not None:
+    if next_market is not None or value_date is not None:
         # A forward has no smile: its roll goes into sticky and smile theta.
-        theta = calculate_forward_theta(
-            position, market, next_market, valuation_date, next_valuation
-        )
+        if next_market is None:
+            # A deal settling before the next business day loses its whole MTM.
+            theta = -value["mtm_term"]
+            if conventional_premium_ccy(position.currency_pair) != position.currency_pair[3:]:
+                theta = -value["mtm_base"]
+        else:
+            theta = calculate_forward_theta(
+                position, market, next_market, valuation_date, next_valuation
+            )
         level["fixed_theta"] += theta
         level["theta"] += theta
         # A forward's roll is carry, when the ladder shows the theta parts.
@@ -278,10 +287,27 @@ def _add_forward_pnl(level, position, market, valuation_date,
                 level[key] += theta
 
 
+def _forward_markets(position, expiry, market_for_expiry, market_for_delivery,
+                     next_valuation, ladder_spot):
+    """``(market, next-day market)`` of one forward at a ladder spot."""
+    value_date = (position.get("value_date") if isinstance(position, dict)
+                  else getattr(position, "value_date", None))
+    if value_date is None:
+        return (market_for_expiry(expiry, spot_value=ladder_spot),
+                market_for_expiry(expiry, as_of=next_valuation, allow_short_end=True,
+                                  spot_value=ladder_spot))
+    if market_for_delivery is None:
+        raise ValueError("a value-dated forward needs the market at its delivery date")
+    after = next_valuation is not None and pd.Timestamp(next_valuation) < pd.Timestamp(value_date)
+    return (market_for_delivery(value_date, spot_value=ladder_spot),
+            market_for_delivery(value_date, as_of=next_valuation, spot_value=ladder_spot)
+            if after else None)
+
+
 def _calculate_reference_ladder(
     rows, ladder_spots, valuation_date, market_for_expiry, resolve_expiry,
     pricing_model, atm_type, delta_base, mods, forward_positions=(),
-    scenario_workers=None, extras=(),
+    scenario_workers=None, extras=(), market_for_delivery=None,
 ):
     """Run the original scalar ladder path without prepared-row shortcuts."""
     errors = []
@@ -327,11 +353,9 @@ def _calculate_reference_ladder(
                 for index, row in specs
             }
             forward_markets = [
-                (position, market_for_expiry(expiry, spot_value=ladder_spot),
-                 market_for_expiry(
-                     expiry, as_of=next_valuation, allow_short_end=True,
-                     spot_value=ladder_spot,
-                 ))
+                (position, *_forward_markets(position, expiry, market_for_expiry,
+                                             market_for_delivery, next_valuation,
+                                             ladder_spot))
                 for position, expiry in prepared_forwards
             ]
             scenarios.append(
@@ -387,7 +411,7 @@ def _calculate_reference_ladder(
 def _calculate_optimized_ladder(
     rows, ladder_spots, valuation_date, market_for_expiry, resolve_expiry,
     pricing_model, atm_type, delta_base, mods, forward_positions=(),
-    scenario_workers=None, extras=(),
+    scenario_workers=None, extras=(), market_for_delivery=None,
 ):
     """Calculate the cached-volatility ladder with scalar fallback."""
     # Keep forward valuation on the reference path until the optimized option
@@ -396,7 +420,7 @@ def _calculate_optimized_ladder(
         return _calculate_reference_ladder(
             rows, ladder_spots, valuation_date, market_for_expiry, resolve_expiry,
             pricing_model, atm_type, delta_base, mods, forward_positions,
-            scenario_workers, extras=extras,
+            scenario_workers, extras=extras, market_for_delivery=market_for_delivery,
         )
     specs, errors = _prepare_specs(
         rows, valuation_date, resolve_expiry, market_for_expiry, atm_type, delta_base
@@ -528,11 +552,13 @@ def _compare_ladder_results(reference, candidate, atol=1e-8, rtol=1e-8):
 def calculate_spot_ladder(
     rows, ladder_spots, valuation_date, market_for_expiry, resolve_expiry,
     pricing_model, atm_type, delta_base, mods, mode="shadow",
-    forward_positions=(), scenario_workers=None, extras=(),
+    forward_positions=(), scenario_workers=None, extras=(), market_for_delivery=None,
 ):
     """Calculate a ladder in reference, shadow, or optimized mode.
 
     ``extras`` adds on-demand Greeks (``pricing.greek_catalog``) to every level.
+    ``market_for_delivery`` (``MarketContext.market_for_delivery``) values
+    forwards with a ``value_date`` at their own delivery date.
     """
     if mode not in {"reference", "shadow", "optimized"}:
         raise ValueError("Spot-ladder mode must be reference, shadow, or optimized")
@@ -541,13 +567,13 @@ def calculate_spot_ladder(
         return _calculate_reference_ladder(
             rows, ladder_spots, valuation_date, market_for_expiry, resolve_expiry,
             pricing_model, atm_type, delta_base, mods, forward_positions,
-            scenario_workers, extras=extras,
+            scenario_workers, extras=extras, market_for_delivery=market_for_delivery,
         )
 
     optimized_results, optimized_errors = _calculate_optimized_ladder(
         rows, ladder_spots, valuation_date, market_for_expiry, resolve_expiry,
         pricing_model, atm_type, delta_base, mods, forward_positions,
-        scenario_workers, extras=extras,
+        scenario_workers, extras=extras, market_for_delivery=market_for_delivery,
     )
     if mode == "optimized":
         return optimized_results, optimized_errors
@@ -555,7 +581,7 @@ def calculate_spot_ladder(
     reference_results, reference_errors = _calculate_reference_ladder(
         rows, ladder_spots, valuation_date, market_for_expiry, resolve_expiry,
         pricing_model, atm_type, delta_base, mods, forward_positions,
-        scenario_workers, extras=extras,
+        scenario_workers, extras=extras, market_for_delivery=market_for_delivery,
     )
     if reference_errors or optimized_errors or not _compare_ladder_results(
         reference_results, optimized_results

@@ -182,7 +182,26 @@ def option_discount(pair: str, expiry, valuation, rate) -> OptionDiscount:
     if rate != rate or rate in (float("inf"), float("-inf")):
         raise ValueError("Discount rate must be finite")
 
-    delivery = delivery_date(pair, expiry_date)
+    return _discount_to(conv, pair, expiry_date, delivery_date(pair, expiry_date),
+                        valuation_date, rate)
+
+
+def delivery_discount(pair: str, delivery, valuation, rate) -> OptionDiscount:
+    """Convention discounting to a given delivery date (a value-dated forward).
+
+    As :func:`option_discount`, but the delivery date is the deal's own value
+    date instead of one derived from an option expiry. Raises on bad input.
+    """
+    _require_conventions()
+    conv = get_pair(pair)
+    delivery = _to_date(delivery)
+    rate = float(rate)
+    if rate != rate or rate in (float("inf"), float("-inf")):
+        raise ValueError("Discount rate must be finite")
+    return _discount_to(conv, pair, delivery, delivery, _to_date(valuation), rate)
+
+
+def _discount_to(conv, pair, expiry_date, delivery, valuation_date, rate):
     if delivery < valuation_date:
         raise ValueError("Delivery date must not precede the valuation date")
 
@@ -219,6 +238,21 @@ def safe_option_discount(pair, expiry, valuation, rate,
         result = option_discount(pair, expiry, valuation, rate)
     except Exception:
         return default
+    return _sane(result, default)
+
+
+def safe_delivery_discount(pair, delivery, valuation, rate, default=None):
+    """Best-effort :func:`delivery_discount` that never raises."""
+    if not CONVENTIONS_AVAILABLE or pair is None:
+        return default
+    try:
+        result = delivery_discount(pair, delivery, valuation, rate)
+    except Exception:
+        return default
+    return _sane(result, default)
+
+
+def _sane(result, default):
     factor = result.discount_factor
     if not (0.0 < factor < 10.0):
         return default
@@ -243,7 +277,7 @@ def equivalent_continuous_rate(discount_factor: float,
     return -math.log(discount_factor) / year_fraction
 
 
-def discount_kwargs(market, expiry, valuation):
+def discount_kwargs(market, expiry, valuation, delivery=None):
     """Return ``BlackScholes`` keyword arguments for convention discounting.
 
     This is the single seam between market data and the pricers. It is
@@ -266,6 +300,15 @@ def discount_kwargs(market, expiry, valuation):
     pair = getattr(market, "currency_pair", None)
     if not pair:
         return {}
+    if delivery is not None:
+        # A value-dated forward: discount to its own delivery date. It has no
+        # smile, so no delta convention either.
+        discount = safe_delivery_discount(
+            pair, delivery, valuation, getattr(market, "term_discount", 0.0))
+        if discount is None:
+            return {}
+        return {"term_discount_factor": discount.discount_factor,
+                "carry_rate": discount.carry_rate}
     discount = safe_option_discount(
         pair, expiry, valuation, getattr(market, "term_discount", 0.0)
     )

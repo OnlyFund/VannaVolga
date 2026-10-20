@@ -405,17 +405,16 @@ def test_a_schema_2_store_migrates_with_a_backup_and_reads_as_before(tmp_path, c
     store.close()
 
 
-def test_a_value_dated_forward_is_not_priced_on_the_option_expiry_convention():
+def test_a_value_dated_forward_prices_at_its_value_date():
     from app.trades import service
     from app.market_set import MarketSet
     from golden.app_harness import load_markets
     from market_data import Modifications
     markets = MarketSet.from_payloads(load_markets("MARKETS_20261015.json"), TRADE_DATE)
     trade = replace_id(deal().normalized(), "TR-000009")
-    with pytest.raises(TradeValidationError, match="not valued yet"):
-        trade.to_position()
+    assert trade.to_position().value_date == date(2026, 12, 17)
     _, forwards, errors = service.price_trades(markets, [trade], Modifications())
-    assert forwards == [] and errors == ["TR-000009: value-dated forwards are not valued yet"]
+    assert errors == [] and forwards[0]["value_date"] == date(2026, 12, 17)
 
 
 def replace_id(trade, trade_id):

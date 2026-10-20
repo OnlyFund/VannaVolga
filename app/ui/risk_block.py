@@ -211,7 +211,8 @@ def _spot_ladder(tab, market_set, context, options, hedges, mods, ladder_mode):
              for step in range(-int(steps), int(steps) + 1)]
     rows = pd.DataFrame(ladder_rows(options))
     positions = [{"currency_pair": h.currency_pair, "expiry": h.expiry,
-                  "base_amount": h.signed_base_amount(), "contract_rate": h.contract_rate}
+                  "base_amount": h.signed_base_amount(), "contract_rate": h.contract_rate,
+                  "value_date": h.value_date}
                  for h in hedges]
     settings = context.settings
     with st.spinner("Calculating spot ladder..."):
@@ -219,5 +220,6 @@ def _spot_ladder(tab, market_set, context, options, hedges, mods, ladder_mode):
             list(rows.iterrows()), spots, market_set.valuation_date, context.market_for_expiry,
             context.resolve_market_expiry, settings.pricing_model, settings.atm_type,
             settings.delta_base, mods, mode=ladder_mode, forward_positions=positions,
-            extras=greek_catalog.extras(greeks))
+            extras=greek_catalog.extras(greeks),
+            market_for_delivery=getattr(context, "market_for_delivery", None))
     render_spot_ladder(tab, results, errors, spot, greeks)
