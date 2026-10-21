@@ -8,7 +8,6 @@ from scipy.optimize import brentq
 from pricing_utils.BlackScholes import BlackScholes, d1, ndtr
 from market_data import MarketData
 from market_data.vol_data import VolData
-from helper_functions.fx_conventions import get_pair
 from helper_functions.fx_strangle_converter import broker_to_twovol_bf
 from helper_functions.vanna_volga_helpers import (
     phi, calculate_strikes, get_vol_k, GetMainPillars, get_atm_strike,
@@ -586,7 +585,9 @@ class VannaVolga:
         return result
 
 if __name__ == "__main__":
-    fx_conv = get_pair('EURUSD')
+    from types import SimpleNamespace
+    # EURUSD's conventions (the core reads no convention tables).
+    fx_conv = SimpleNamespace(premium_adjusted=False, atm='dn', fwd_divisor=10000.0)
   
     bf_25 = broker_to_twovol_bf(spot=1.138 ,
                                 fwd_pts=89.32,

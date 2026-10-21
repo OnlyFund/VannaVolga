@@ -19,6 +19,7 @@ from market_data import Modifications
 from pricing import Pricable
 from pricing.digital import RELATIVE_WIDTH, DigitalPricable, legs
 from pricing_utils.BlackScholes import BlackScholes
+from resolution import discounting
 
 VALUATION = date(2026, 10, 15)
 MODS = Modifications(beta_atm=0.7, beta_rr=1.2, beta_bf=0.0)
@@ -115,7 +116,7 @@ def test_flat_smile_matches_the_black_digital(markets):
                          expiry_date=str(pd.Timestamp(expiry).date()), valuation_date=str(VALUATION),
                          CallPut=call_put, BuySell="BUY", Notional=1.0,
                          fwd_divisor=market.forward_divisor, term_discount=market.term_discount,
-                         currency_pair="EURUSD")
+                         currency_pair="EURUSD", **discounting(market, expiry, VALUATION))
         F, T, DF = float(b.f), float(b.t), float(b.term_discount_factor)
         sd = d["vol_pct"] / 100 * math.sqrt(T)
         d1 = (math.log(F / 1.14) + 0.5 * sd * sd) / sd
@@ -148,7 +149,7 @@ def test_call_plus_put_is_the_discounted_payout(markets, payout):
                      expiry_date=str(pd.Timestamp(call["expiry"]).date()),
                      valuation_date=str(VALUATION), CallPut="CALL", BuySell="BUY", Notional=1.0,
                      fwd_divisor=market.forward_divisor, term_discount=market.term_discount,
-                     currency_pair="EURUSD")
+                     currency_pair="EURUSD", **discounting(market, call["expiry"], VALUATION))
     expected = PAYOUT * float(b.term_discount_factor) * (float(b.f) if payout == "BASE" else 1.0)
     assert call["mtm_term"] + put["mtm_term"] == pytest.approx(expected, rel=1e-10)
     # Zero to rounding on a 1m payout.

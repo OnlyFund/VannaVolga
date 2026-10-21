@@ -6,7 +6,6 @@ import numpy as np
 from numba import njit
 
 from helper_functions.helper_functions import cp_flag, pos_flag, year_fraction
-from helper_functions.fx_discounting import safe_option_discount
 
 
 # Keep this kernel out of Numba's on-disk cache. Its argument list is part of
@@ -103,13 +102,12 @@ def black_scholes_values(
 ):
     """Return price and analytic Greeks, falling back by raising on invalid input.
 
-    Discounting runs to the option's *delivery* date (expiry plus the pair's
-    spot lag on the joint calendar) at a *simple* rate on the term currency's
-    day-count basis whenever ``currency_pair`` resolves against the convention
-    tables. ``term_discount_factor`` overrides that with an explicit factor and
-    ``carry_rate`` supplies the matching decay rate used by theta. With no pair
-    and no explicit factor the legacy continuous ``exp(-r * t)`` to expiry on an
-    ACT/365 clock is used.
+    Convention discounting (to the option's delivery date, at a simple rate on
+    the term currency's basis) arrives as plain numbers: ``term_discount_factor``
+    and ``carry_rate``, the decay rate theta uses, resolved outside the core
+    (``apeiron.atlas.discounting.discount_kwargs``). ``currency_pair`` is a
+    label only. With no explicit factor the legacy continuous ``exp(-r * t)``
+    to expiry on an ACT/365 clock is used.
 
     ``delta_convention`` selects a spot (default, market standard to about one
     year) or forward delta, and gamma follows it; see
@@ -124,13 +122,6 @@ def black_scholes_values(
         _date_text(expiry_date),
         _date_text(valuation_date),
     )
-    if term_discount_factor is None and currency_pair is not None:
-        resolved = safe_option_discount(
-            currency_pair, expiry_date, valuation_date, term_discount)
-        if resolved is not None:
-            term_discount_factor = resolved.discount_factor
-            if carry_rate is None:
-                carry_rate = resolved.carry_rate
     if term_discount_factor is None:
         # Numba kernels cannot accept ``None``; a non-positive factor is the
         # sentinel telling the kernel to use the continuous default.

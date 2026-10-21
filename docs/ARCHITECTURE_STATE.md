@@ -195,3 +195,48 @@ Left for sub-step 4:
 - Black-Scholes resolving its own discount from `currency_pair`;
 - the date helpers (`_to_date`);
 - `fx_discounting` → `resolved_smile_inputs`.
+
+## Atlas untangling, sub-step 4: the core reads no calendar (2026-10-21)
+
+**Before:**
+- `BlackScholes` and the numba engine resolved their own convention discount
+  from the calendar when given `currency_pair` and no discount factor.
+- `wrapped_vol_resolver` and `resolved_smile_inputs` imported the date parser
+  from `fx_discounting`.
+- `VannaVolga_ImpliedVol`'s demo looked up EURUSD in the convention tables.
+- The old `fx_discounting.discount_kwargs` (now only a test reference) called the
+  smile inputs for the delta convention, which made a cycle.
+
+**After:**
+- **`currency_pair` is a label only in both pricers.** Convention discounting
+  arrives as numbers (`term_discount_factor`, `carry_rate`) from
+  `apeiron.atlas.discounting`; without them the pricers use the continuous
+  factor, as with no pair.
+- **`apeiron.atlas.dates.to_date`** parses dates exactly as the old helper did,
+  QuantLib dates included, without importing QuantLib.
+- **The demo** carries EURUSD's conventions as plain values. Its last two prints
+  (premium and delta) now use the continuous factor, because it passes only a
+  pair. Its vol and ATM strike are unchanged.
+- **`fx_discounting.option_delta_convention`** gives the legacy reference its
+  delta convention directly, the same rule Hyperion resolves.
+- **Tests that priced with a pair alone** pass the resolved discount inputs
+  (`tests/resolution.discounting`). The pair-resolution tests now check
+  Hyperion's resolved inputs instead.
+
+**Validation:**
+- A probe on the self-resolving route found it used only by three test files:
+  0 calls from the app, the book or production code.
+- The full suite passes: 1535 (HEAD 1514, plus 21 new tests).
+- Reference book (105 trades, rho and phi, market 38): 5,145 fields identical
+  to HEAD.
+- Live market 38: 1,784 discount requests and 1,650 smile convention sets,
+  all identical, with no fallbacks.
+- The result cache equals fresh pricing, and verification is empty.
+- New tests check that the date parser equals the old one (every format and
+  error case), that the legacy delta convention equals the resolved one, and
+  that the core modules import no calendar or convention table.
+
+**Crossings: 22 → 16. Cycle groups: 4 → 3** (`fx_discounting` ↔
+`resolved_smile_inputs` is gone). Atlas now reads no calendar at all. The
+remaining crossings belong to the Gaia and Hyperion moves (`vol_data`,
+`market_tables`, `smile_service` and others).

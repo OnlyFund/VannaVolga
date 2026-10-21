@@ -319,16 +319,21 @@ def discount_kwargs(market, expiry, valuation, delivery=None):
         "carry_rate": discount.carry_rate,
     }
     if getattr(market, "wrapped_smile", False) and not market.force_legacy_smile and _to_date(expiry) > _to_date(valuation):
-        from resolved_smile_inputs import resolve_conventions, MarketSnapshot
-        context = resolve_conventions(MarketSnapshot.capture(market), expiry, valuation)
-        result["delta_convention"] = context.delta_convention
+        result["delta_convention"] = option_delta_convention(pair, expiry, valuation)
     return result
-    discount = safe_option_discount(
-        pair, expiry, valuation, getattr(market, "term_discount", 0.0)
-    )
-    if discount is None:
-        return {}
-    return {
-        "term_discount_factor": discount.discount_factor,
-        "carry_rate": discount.carry_rate,
-    }
+
+
+def option_delta_convention(pair, expiry, valuation):
+    """``"forward"`` or ``"spot"``: the delta ``pair`` quotes at ``expiry``.
+
+    The table's ``0D`` cutoff means all-forward (EM pairs); otherwise the
+    QuantLib delta type at this expiry decides. The same rule Hyperion
+    resolves onto markets (``apeiron.hyperion.resolve``).
+    """
+    from helper_functions.fx_conventions import delta_type
+    _require_conventions()
+    convention = get_pair(pair)
+    kind = delta_type(convention.name, _to_ql(_to_date(expiry)), _to_ql(_to_date(valuation)))
+    forward = (convention.fwd_delta_beyond == "0D"
+               or kind in (ql.DeltaVolQuote.Fwd, ql.DeltaVolQuote.PaFwd))
+    return "forward" if forward else "spot"

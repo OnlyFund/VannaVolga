@@ -398,28 +398,43 @@ class TestEngineAgreement:
         assert self._numba(term_discount_factor=None, carry_rate=None)[0] == \
             pytest.approx(self._numba()[0], rel=1e-14)
 
-    def test_engines_agree_when_given_only_a_pair(self, overrides):
-        expected = BlackScholes(term_discount=RATE, **dict(OPTION, **overrides)).price()
+    def test_engines_agree_when_given_only_a_pair(self):
+        """A pair is a label: both engines stay on the legacy factor."""
+        expected = BlackScholes(term_discount=RATE, **OPTION).price()
         assert self._numba(currency_pair="EURUSD")[0] == pytest.approx(expected, rel=1e-10)
+        assert self._numba(currency_pair="EURUSD")[0] == self._numba()[0]
 
 
 # --------------------------------------------------------------------------
-# Self-resolution from a currency pair
+# A currency pair is a label: the core resolves no calendar (Atlas). The
+# convention inputs are resolved outside it (apeiron.hyperion.resolve) and
+# passed as numbers.
 # --------------------------------------------------------------------------
 class TestCurrencyPairResolution:
-    def test_pair_alone_drives_settlement_discounting(self, overrides):
+    def test_pair_alone_stays_on_the_legacy_factor(self):
         bs = BlackScholes(term_discount=RATE, currency_pair="EURUSD", **OPTION)
-        assert bs.settlement_discounting is True
-        assert float(bs.term_discount_factor) == pytest.approx(
-            overrides["term_discount_factor"], rel=1e-15)
-        assert float(bs.term_carry_rate) == pytest.approx(
-            overrides["carry_rate"], rel=1e-15)
+        legacy = BlackScholes(term_discount=RATE, **OPTION)
+        assert bs.settlement_discounting is False
+        assert float(bs.term_discount_factor) == float(legacy.term_discount_factor)
+        assert bs.price() == legacy.price()
 
-    def test_pair_exposes_the_delivery_metadata(self):
-        bs = BlackScholes(term_discount=RATE, currency_pair="EURUSD", **OPTION)
-        assert bs.delivery_date.isoformat() == "2027-03-30"
-        assert "360" in bs.discount_day_count
-        assert bs.discount_year_fraction == pytest.approx(186 / 360.0, rel=1e-12)
+    def test_resolved_inputs_give_the_convention_discounting(self, overrides):
+        from apeiron.atlas.resolved import simple_discount_factor
+        from apeiron.hyperion.resolve import resolve_inputs
+        resolved = resolve_inputs("EURUSD", EXPIRY, VALUATION)
+        factor = simple_discount_factor(RATE, resolved.year_fraction)
+        assert factor == pytest.approx(overrides["term_discount_factor"], rel=1e-15)
+        bs = BlackScholes(term_discount=RATE, currency_pair="EURUSD",
+                          term_discount_factor=factor, carry_rate=RATE * factor, **OPTION)
+        assert bs.settlement_discounting is True
+        assert float(bs.term_carry_rate) == pytest.approx(overrides["carry_rate"], rel=1e-15)
+
+    def test_resolved_inputs_carry_the_delivery_metadata(self):
+        from apeiron.hyperion.resolve import resolve_inputs
+        resolved = resolve_inputs("EURUSD", EXPIRY, VALUATION)
+        assert resolved.delivery_date.isoformat() == "2027-03-30"
+        assert "360" in resolved.day_count
+        assert resolved.year_fraction == pytest.approx(186 / 360.0, rel=1e-12)
 
     def test_no_pair_stays_on_the_legacy_factor(self):
         bs = BlackScholes(term_discount=RATE, **OPTION)
@@ -441,6 +456,9 @@ class TestCurrencyPairResolution:
 
     def test_t_plus_one_pair_discounts_less(self):
         """USDCAD settles T+1, so its delivery date is a day nearer."""
-        two = BlackScholes(term_discount=RATE, currency_pair="EURUSD", **OPTION)
-        one = BlackScholes(term_discount=RATE, currency_pair="USDCAD", **OPTION)
-        assert float(one.term_discount_factor) > float(two.term_discount_factor)
+        from apeiron.atlas.resolved import simple_discount_factor
+        from apeiron.hyperion.resolve import resolve_inputs
+        two = resolve_inputs("EURUSD", EXPIRY, VALUATION)
+        one = resolve_inputs("USDCAD", EXPIRY, VALUATION)
+        assert one.delivery_date < two.delivery_date
+        assert simple_discount_factor(RATE, one.year_fraction) >             simple_discount_factor(RATE, two.year_fraction)

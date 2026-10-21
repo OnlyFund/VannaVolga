@@ -1,7 +1,7 @@
 """Immutable one-expiry inputs and shared convention-aware FX pillars.
 
 Volatility quotes are percentage points; rates are decimal simple deposit
-rates. Dates accept the formats supported by ``fx_discounting`` (ISO preferred).
+rates. Dates accept the formats of ``apeiron.atlas.dates.to_date`` (ISO preferred).
 No broker conversion or pair lookup occurs in ``build_pillars``.
 """
 import math
@@ -13,7 +13,7 @@ from typing import Tuple
 import numpy as np
 
 from market_data import MarketData
-from helper_functions.fx_discounting import _to_date
+from apeiron.atlas.dates import to_date as _to_date
 from helper_functions.fx_strangle_converter import _strike_from_delta
 
 

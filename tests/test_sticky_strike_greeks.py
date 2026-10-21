@@ -13,6 +13,7 @@ from golden.app_harness import load_markets
 from market_data import Modifications
 from pricing import greek_catalog as catalog
 from pricing_utils.BlackScholes import BlackScholes
+from resolution import discounting
 
 VALUATION = date(2026, 10, 15)
 MODS = Modifications(beta_atm=0.7, beta_rr=1.2, beta_bf=0.0)
@@ -48,7 +49,8 @@ def black_scholes(markets, result, spot, keep_forward_ratio):
                         expiry_date=str(result["expiry"]), valuation_date=str(VALUATION),
                         CallPut=result["call_put"], BuySell=result["buy_sell"], Notional=10e6,
                         fwd_divisor=market.forward_divisor, term_discount=market.term_discount,
-                        currency_pair=result["currency_pair"], deltaBase=False), market
+                        currency_pair=result["currency_pair"], deltaBase=False,
+                        **discounting(market, result["expiry"], VALUATION)), market
 
 
 @pytest.mark.parametrize("line", range(len(LINES)))

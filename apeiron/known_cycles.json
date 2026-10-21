@@ -20,10 +20,6 @@
    "app.ui.app"
   ],
   [
-   "helper_functions.fx_discounting",
-   "resolved_smile_inputs"
-  ],
-  [
    "market_data.discount_curves",
    "market_data.implied_rates",
    "market_data.market_tables"

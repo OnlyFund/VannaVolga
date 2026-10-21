@@ -5,6 +5,7 @@ The core reads no calendar: a market carries its dates and conventions
 Tests that build ``MarketData`` by hand resolve it here, so they exercise the
 same inputs the app's markets carry.
 """
+from apeiron.atlas.discounting import discount_kwargs
 from apeiron.hyperion.resolve import attach
 from resolved_smile_inputs import MarketSnapshot
 from resolved_smile_inputs import resolve_conventions as core_resolve_conventions
@@ -16,6 +17,13 @@ EXPIRY, VALUATION = "2026-12-02", "2026-10-02"
 def resolved(market, expiry=EXPIRY, valuation=VALUATION):
     """A copy of ``market`` carrying its inputs for ``expiry`` seen from ``valuation``."""
     return attach(market.copy_with(resolved=None), expiry, valuation)
+
+
+def discounting(market, expiry, valuation=VALUATION):
+    """``BlackScholes`` discount inputs (factor and carry) from a resolved
+    market, as the app passes them: the core resolves no calendar itself."""
+    kwargs = discount_kwargs(market, expiry, valuation)
+    return {k: kwargs[k] for k in ("term_discount_factor", "carry_rate")}
 
 
 def resolve_conventions(raw, expiry, valuation):

@@ -224,3 +224,46 @@ def test_without_resolved_inputs_the_smile_says_its_conventions_are_unavailable(
     with pytest.raises(PreparationError, match="not resolved"):
         resolve_conventions(MarketSnapshot.capture(market.copy_with(resolved=None)),
                             date(2027, 1, 15), VALUATION)
+
+
+# -- sub-step 4: the core reads no calendar at all -----------------------------
+
+@pytest.mark.parametrize("value", [
+    "2026-10-15", " 2026-10-15 ", "15/10/2026", "10/25/2026", "15-Oct-2026", "15Oct2026",
+    "15Oct26", date(2026, 10, 15), pd.Timestamp("2026-10-15 13:45"),
+    __import__("datetime").datetime(2026, 10, 15, 9, 30), "2026-02-29", "", "not a date",
+])
+def test_atlas_parses_dates_exactly_as_the_calendar_layer(value):
+    from apeiron.atlas.dates import to_date
+    try:
+        expected = fx_discounting._to_date(value)
+    except ValueError as exc:
+        with pytest.raises(ValueError, match=str(exc).split(" ")[0]):
+            to_date(value)
+        return
+    assert to_date(value) == expected and type(to_date(value)) is date
+
+
+def test_atlas_parses_quantlib_dates_without_importing_quantlib():
+    import QuantLib as ql
+    from apeiron.atlas.dates import to_date
+    for day in (ql.Date(15, 10, 2026), ql.Date(29, 2, 2028), ql.Date(31, 12, 2030)):
+        assert to_date(day) == fx_discounting._to_date(day)
+
+
+@pytest.mark.parametrize("pair", ["EURUSD", "USDJPY", "USDMXN", "USDCAD", "EURGBP"])
+def test_the_legacy_delta_convention_equals_the_resolved_one(markets, pair):
+    for expiry in (date(2026, 11, 16), date(2027, 4, 15), date(2027, 10, 15), date(2028, 6, 1)):
+        assert fx_discounting.option_delta_convention(pair, expiry, VALUATION) == \
+            resolve_inputs(pair, expiry, VALUATION).delta_convention, (pair, expiry)
+
+
+def test_the_core_modules_import_no_calendar_or_convention_table():
+    from pathlib import Path
+    from apeiron.scan import imports_of, library_modules
+    modules = library_modules(Path(__file__).resolve().parents[1])
+    calendars = {"helper_functions.fx_discounting", "helper_functions.fx_conventions"}
+    for module in ("pricing_utils.BlackScholes", "pricing_utils.black_scholes_numba",
+                   "wrapped_vol_resolver", "resolved_smile_inputs", "VannaVolga_ImpliedVol",
+                   "pricing.greeks", "apeiron.atlas.dates", "apeiron.atlas.discounting"):
+        assert not imports_of(modules[module], module, modules) & calendars, module

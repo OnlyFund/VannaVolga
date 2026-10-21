@@ -3,7 +3,6 @@ from numba import njit
 from helper_functions.model_constants import INV_SQRT_TWO_PI
 from helper_functions.helper_functions import year_fraction, cp_flag, pos_flag
 from helper_functions.premium_quotes import PREMIUM_QUOTES, convert_premium_quote
-from helper_functions.fx_discounting import safe_option_discount
 from math import sqrt, log, erf
 
 try:
@@ -101,29 +100,16 @@ class BlackScholes:
             )
         self.delta_convention = delta_convention
 
-        # Discounting runs to the option's *delivery* date (expiry plus the
-        # pair's spot lag on the joint calendar) at a *simple* rate on the term
-        # currency's day-count basis. Resolving that needs the pair, so when no
-        # pair is supplied -- and when the conventions are unavailable or the
-        # pair is unknown -- fall back to the continuously compounded factor to
-        # expiry on an ACT/365 clock.
+        # Convention discounting (to the option's delivery date, at a simple
+        # rate on the term currency's basis) arrives as plain numbers:
+        # ``term_discount_factor`` and ``carry_rate``, resolved outside the
+        # core (``apeiron.atlas.discounting.discount_kwargs``). The core reads
+        # no calendar, so ``currency_pair`` is a label only. Without a factor
+        # the continuously compounded factor to expiry on an ACT/365 clock is
+        # used.
         self.settlement_discounting = False
         if term_discount_factor is None:
-            resolved = None
-            if currency_pair is not None:
-                resolved = safe_option_discount(
-                    currency_pair, expiry_date, valuation_date, term_discount)
-            if resolved is None:
-                self.term_discount_factor = np.exp(-self.term_discount * self.t)
-            else:
-                self.term_discount_factor = np.asarray(
-                    resolved.discount_factor, dtype=float)
-                self.settlement_discounting = True
-                self.delivery_date = resolved.delivery_date
-                self.discount_year_fraction = resolved.year_fraction
-                self.discount_day_count = resolved.day_count
-                if carry_rate is None:
-                    carry_rate = resolved.carry_rate
+            self.term_discount_factor = np.exp(-self.term_discount * self.t)
         else:
             factor = np.asarray(term_discount_factor, dtype=float)
             if not np.all(np.isfinite(factor)) or np.any(factor <= 0.0):

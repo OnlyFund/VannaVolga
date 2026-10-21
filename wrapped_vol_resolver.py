@@ -27,7 +27,7 @@ from typing import Optional
 
 import numpy as np
 
-from helper_functions.fx_discounting import _to_date
+from apeiron.atlas.dates import to_date as _to_date
 from resolved_smile_inputs import (
     MarketSnapshot, Pillars, PreparationError, ResolvedConventions,
     ResolvedQuotes, _freeze, _thaw, resolve_conventions,
