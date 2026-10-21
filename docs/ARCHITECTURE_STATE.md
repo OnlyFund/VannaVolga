@@ -72,3 +72,18 @@ The Atlas untangling and moving `market_tables` to Hyperion remove most of them.
 
 Step 0 itself adds no cycle: the `apeiron` modules import no library code. The
 architecture tests are now 6.
+
+## Result cache in Hyperion (2026-10-21)
+
+The first code placed straight in its final home is `apeiron/hyperion/cache/`:
+- **`keys.py`:** a trade's key hashes its terms and version, its pair's market
+  (every quote, the spot and any spot edit, the settings, the valuation date),
+  the betas, the requested Greeks, the spot path and the code version.
+- **`store.py`:** a bounded in-memory LRU over a SQLite file kept 24 hours
+  (`data/local/result_cache.sqlite`, or `$VV_RESULT_CACHE`).
+- **`pricing.py`:** `price_trades` (same signature and result as
+  `app.trades.service.price_trades`) and `verify`.
+
+The Portfolio and the Risk tab price the book through it. It respects the level
+rules: Hyperion imports only Hyperion and Gaia. It adds no crossing and no cycle,
+so the known lists are unchanged (31 crossings, 4 cycle groups).

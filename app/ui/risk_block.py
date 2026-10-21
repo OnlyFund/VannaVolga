@@ -12,6 +12,7 @@ from app.reports import risk_grid
 from app.reports.spot_ladder import calculate_spot_ladder, render_spot_ladder
 from app.trades import service
 from app.ui.progress_bar import ProgressBar
+from apeiron.hyperion.cache import pricing as cached_pricing
 from app.ui.greek_picker import render_greek_picker
 from app.ui.negatives import red_negatives
 from app.ui.trades_block import _store_banner, trade_store
@@ -186,7 +187,7 @@ def _risk_lines(market_set, pair, options, hedges, include_hedges, fixed, mods,
     cached = st.session_state.get("_risk_pricing")
     if not cached or cached[0] != key:
         with ProgressBar(f"Pricing {pair} risk") as bar:
-            results, forwards, errors = service.price_trades(
+            results, forwards, errors = cached_pricing.price_trades(
                 market_set, [*options, *hedges], mods, extras=extras, progress=bar)
         cached = (key, results, forwards, errors)
         st.session_state["_risk_pricing"] = cached
