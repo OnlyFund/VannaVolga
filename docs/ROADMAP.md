@@ -215,6 +215,11 @@ apeiron/
     snapshot. The snapshot actually loaded gets its own caption ("Loaded: … a
     newer one exists").
 20. Small fixes: first keystrokes lost in a new grid line; README.
+21. Compact amounts in the strike grid and the bucket report: `1.25m` at 1 million
+    or more in absolute value, `250k` from 1k to 999.999k, and plain below 1k.
+    Rounding: 2 decimals for m (`1.23m`), up to 1 for k (`250k`, `12.5k`). The
+    sign is kept (`-3.4m`, `-250k`). Only the display changes: values, sorting,
+    totals and exports stay full precision.
 
 ## Later
 
