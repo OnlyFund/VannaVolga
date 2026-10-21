@@ -222,9 +222,21 @@ def render_market_picker(valuation_date, loaded_latest_id=None, last_date=None):
     pending = choice != picked or stale_latest
     # A callback, not a rerun from here: it runs before the next run, which
     # then loads the choice at the top (see the module docstring).
-    st.button("Load", key="picker_load_market", disabled=not pending, on_click=_load,
-              args=(choice,), help="Load the chosen snapshot. Loaded files and edited "
-                                   "pairs stay.")
+    load_col, refresh_col = st.columns(2)
+    with load_col:
+        st.button("Load", key="picker_load_market", disabled=not pending, on_click=_load,
+                  args=(choice,), help="Load the chosen snapshot. Loaded files and edited "
+                                       "pairs stay.")
+    with refresh_col:
+        # The list is read from the store on every run, so the click lists a
+        # fetch made while the app is open. On Latest it also loads it (as
+        # restarting the app would); a picked market stays loaded.
+        st.button("Refresh", key="picker_refresh_snapshots",
+                  on_click=_load if picked is LATEST else None,
+                  args=(LATEST,) if picked is LATEST else None,
+                  help="Re-read the market data snapshots, e.g. after a fetch. On Latest, "
+                       "the newest snapshot loads; a picked market stays loaded (pick the "
+                       "new one and click Load).")
     if pending:
         st.caption("Chosen, not loaded: click Load.")
     return picked

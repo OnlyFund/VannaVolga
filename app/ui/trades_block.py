@@ -175,8 +175,9 @@ def _trade_detail(store, shown):
     if trade.status == CANCELLED or store.read_only:
         return
     amend_col, cancel_col = st.columns(2)
-    with amend_col, st.form(f"amend_{trade.trade_id}_{trade.version}"):
-        st.markdown("Amend")
+    # Collapsed until needed: the Blotter stays compact.
+    with amend_col, st.expander(f"Amend {trade.trade_id}", expanded=False), \
+            st.form(f"amend_{trade.trade_id}_{trade.version}"):
         editable = [name for name in AMENDABLE
                     if (trade.is_option and name != "contract_rate")
                     or (trade.is_forward and name not in ("strike", "call_put", "premium",
@@ -207,8 +208,8 @@ def _trade_detail(store, shown):
                 _write(lambda: store.amend(trade.trade_id, trade.version, changes,
                                            user=_user(), reason=reason),
                        f"{trade.trade_id} amended")
-    with cancel_col, st.form(f"cancel_{trade.trade_id}_{trade.version}"):
-        st.markdown("Cancel")
+    with cancel_col, st.expander(f"Cancel {trade.trade_id}", expanded=False), \
+            st.form(f"cancel_{trade.trade_id}_{trade.version}"):
         reason = st.text_input("Reason", key=f"cancel_reason_{trade.trade_id}")
         confirm = st.checkbox(f"Cancel {trade.trade_id}", key=f"cancel_confirm_{trade.trade_id}")
         if st.form_submit_button("Cancel trade", disabled=False):
