@@ -87,3 +87,34 @@ The first code placed straight in its final home is `apeiron/hyperion/cache/`:
 The Portfolio and the Risk tab price the book through it. It respects the level
 rules: Hyperion imports only Hyperion and Gaia. It adds no crossing and no cycle,
 so the known lists are unchanged (31 crossings, 4 cycle groups).
+
+## Atlas untangling, sub-step 1: resolved inputs carried on markets (2026-10-21)
+
+**Before:** the core resolves delivery dates, year fractions and pair
+conventions itself, through `fx_discounting` and `fx_conventions` (Gaia/time).
+
+**After:**
+- **`apeiron/atlas/resolved.py`:** `ResolvedInputs`, an immutable, self-checking
+  record of the valuation, expiry and delivery dates, the year fraction and day
+  count to delivery, the delta convention, the premium-adjusted flag and the ATM
+  convention. Also `simple_discount_factor`, the same arithmetic as today. Rates
+  are not part of the record, so bumps stay arithmetic.
+- **`MarketData.resolved`:** an optional field, kept by every copy and bump. The
+  calibration cache key leaves it out, since its dates are already in the key.
+- **`apeiron/hyperion/resolve.py`:** fills it wherever Hyperion builds a market:
+  per expiry (today's and theta's next day), per value date, and for the
+  calibration pillars. It uses the very functions the core uses today. On any
+  failure it stays `None` with a note, and the core resolves for itself as
+  before.
+
+Nothing reads it yet, so pricing is unchanged by construction.
+
+**Validation:**
+- 20 tests. Every carried value equals the core's own calculation for every
+  fixture pair, pillar, broken and short expiry, theta's next-day market and
+  value-dated deals.
+- On the live market: 65 pairs and 1,782 markets, with 0 unresolved and 0
+  mismatched.
+- The full suite passes (1506), and the reference book prices identically.
+- Crossings and cycles are unchanged (31 / 4). Sub-steps 2 and 3 switch the core
+  to these inputs and remove the Atlas → time crossings.

@@ -42,6 +42,9 @@ class MarketData:
     smile_reasons: tuple = ()
     diagnostics_token: Optional[str] = None
     delta_reporting: Optional[str] = None
+    #: Dates, year fraction and conventions resolved outside the core
+    #: (``apeiron.atlas.resolved.ResolvedInputs``), or ``None``. Copies keep it.
+    resolved: Optional[object] = None
 
     def __post_init__(self):
         """Reject malformed inputs before they reach pricing calculations."""

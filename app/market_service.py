@@ -51,6 +51,10 @@ class MarketService:
                 diagnostics_token=self.collector.token,
             ) for row in rows.itertuples()
         ]
+        # Each pillar's dates and conventions, resolved here (atlas.resolved).
+        from apeiron.hyperion.resolve import attach
+        for market, row in zip(markets, rows.itertuples()):
+            attach(market, row.expiry, valuation)
         key = (str(valuation), model, broker,
                tuple(cache_key(m, row.expiry, valuation, model, broker, .5)
                      for m, row in zip(markets, rows.itertuples())))

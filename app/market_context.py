@@ -37,6 +37,7 @@ from app.curve_roll import (
     OVERNIGHT_TENORS, anchor_forward_rows, overnight_expiry, roll_forward_rows, with_short_end,
     roll_vol_rows,
 )
+from apeiron.hyperion.resolve import attach as attach_resolved
 from app.market_service import MarketService, pair_delivery
 from app.market_store import validate_market
 from app.smile_service import DiagnosticsCollector, SurfaceCache, bind_cache, reuse_prepared
@@ -361,6 +362,8 @@ class MarketContext:
             delta_reporting=self.settings.delta_reporting,
         )
         market.forward_note = note
+        # A value-dated deal's dates, resolved here (atlas.resolved).
+        attach_resolved(market, delivery, curve_date, delivery=delivery)
         return market
 
     def resolve_market_expiry(self, value):
@@ -613,6 +616,8 @@ class MarketContext:
                         not prepared.diagnostics.degraded):
                     reuse_prepared(market, prepared)
                     break
+        # The core's dates and conventions, resolved here (atlas.resolved).
+        attach_resolved(market, requested_date, curve_date)
         return market
 
 

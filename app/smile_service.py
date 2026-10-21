@@ -49,8 +49,9 @@ def record(market, model, expiry, reason, status="degraded"):
 
 
 def cache_key(market, expiry, valuation, model, broker, beta):
+    # ``resolved`` restates the expiry and valuation already in the key.
     values = tuple((f.name, repr(getattr(market, f.name))) for f in fields(market)
-                   if f.name != "diagnostics_token")
+                   if f.name not in ("diagnostics_token", "resolved"))
     return values, str(expiry)[:10], str(valuation)[:10], model, broker, beta
 
 
