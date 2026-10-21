@@ -25,7 +25,9 @@ def market(**changes):
                   bf_25=.2, bf_10=.6, currency_pair="EURUSD",
                   wrapped_smile=True, broker_strangle=False)
     kwargs.update(changes)
-    return MarketData(**kwargs)
+    # Resolved for the tests' default dates, as the app resolves its markets.
+    from resolution import resolved
+    return resolved(MarketData(**kwargs))
 
 
 def app_curve(model="vv", broker=True, pair="EURUSD"):

@@ -156,3 +156,42 @@ Cycles: unchanged (4).
 Left for sub-steps 3 and 4: the pair conventions (`pricing.greeks`,
 `resolved_smile_inputs`, `VannaVolga_ImpliedVol`), Black-Scholes resolving its
 own discount from `currency_pair`, and the date helpers.
+
+## Atlas untangling, sub-step 3: conventions from the carried inputs (2026-10-21)
+
+**Before:**
+- The smile built its conventions from the pair tables and calendars
+  (`resolved_smile_inputs.resolve_conventions`): delivery, discount factors,
+  delta convention, premium adjustment, ATM convention and deposit basis.
+- `pricing.greeks` looked up each line's delta convention and its
+  premium-adjusted flag in the same tables.
+
+**After:**
+- **The carried record also has the pair's forward divisor.**
+- **`resolve_conventions` builds from the carried inputs.** Without inputs
+  matching the expiry and valuation, it reports the conventions as unavailable,
+  and the smile falls back visibly, as it already did for any convention failure.
+- **`pricing.greeks`** reads the delta convention and the premium-adjusted flag
+  off the carried inputs. Without them it uses the default convention and the
+  market's own premium-adjusted setting.
+- **Hyperion resolves a market before its smile reads the conventions.**
+- **Hand-built test markets** resolve through a test helper
+  (`tests/resolution.py`), as the app does.
+
+**Validation:**
+- Measured with the old path kept as a counted fallback: golden and the app
+  tests produce 0 fallbacks.
+- A new test rebuilds the conventions with the old calendar logic. The new path
+  equals it exactly for every fixture pair and expiry, today and on theta's date.
+- On the live market: 1,650 smile convention sets, all identical.
+- The full suite passes (1514). The reference book (105 trades, with rho and phi)
+  prices identically. The result cache equals fresh pricing.
+
+**Crossings: 25 → 22.** These three are gone: `pricing.greeks` → `fx_conventions`
+and → `fx_discounting`, and `resolved_smile_inputs` → `fx_conventions`.
+
+Left for sub-step 4:
+- `VannaVolga_ImpliedVol` → `fx_conventions` (its demo block);
+- Black-Scholes resolving its own discount from `currency_pair`;
+- the date helpers (`_to_date`);
+- `fx_discounting` → `resolved_smile_inputs`.

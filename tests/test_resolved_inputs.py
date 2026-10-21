@@ -181,3 +181,46 @@ def test_rate_bumps_from_carried_fractions_equal_the_calendar_ones(markets):
             forward = market.s + market.fwd_pts / market.forward_divisor
             assert bumped.s + bumped.fwd_pts / bumped.forward_divisor == pytest.approx(
                 forward * old / new, rel=1e-14)
+
+
+# -- sub-step 3: conventions from the carried inputs ---------------------------
+
+def _conventions_by_calendar(market, expiry, valuation):
+    """The smile's conventions as the core built them before sub-step 3."""
+    import QuantLib as ql
+    from helper_functions import fx_conventions as conventions
+    from resolved_smile_inputs import ResolvedConventions
+    pair = conventions.get_pair(market.currency_pair)
+    discount = fx_discounting.option_discount(pair.name, expiry, valuation, market.term_discount)
+    kind = conventions.delta_type(pair.name, fx_discounting._to_ql(expiry),
+                                  fx_discounting._to_ql(valuation))
+    forward_delta = (pair.fwd_delta_beyond == "0D"
+                     or kind in (ql.DeltaVolQuote.Fwd, ql.DeltaVolQuote.PaFwd))
+    forward = market.s + market.fwd_pts / pair.fwd_divisor
+    return ResolvedConventions(
+        pair.name, market.s, valuation, expiry, discount.delivery_date,
+        (expiry - valuation).days / 365.0, forward, pair.fwd_divisor, discount.discount_factor,
+        discount.discount_factor * forward / market.s, "forward" if forward_delta else "spot",
+        pair.premium_adjusted, pair.atm.lower(),
+        360 if conventions.CCY[pair.quote].day_count.name() == "Actual/360" else 365)
+
+
+@pytest.mark.parametrize("pair", ["EURUSD", "USDJPY", "USDMXN"])
+def test_smile_conventions_equal_the_calendar_ones_exactly(markets, pair):
+    context = markets.market(pair)
+    shift = (pd.Timestamp(VALUATION) + pd.offsets.BDay(1)).date()
+    for expiry in expiries(context):
+        market = context.market_for_expiry(expiry)
+        for valuation in (VALUATION, shift):
+            if expiry <= valuation:
+                continue
+            got = resolve_conventions(MarketSnapshot.capture(market), expiry, valuation)
+            assert got == _conventions_by_calendar(market, expiry, valuation), (pair, expiry)
+
+
+def test_without_resolved_inputs_the_smile_says_its_conventions_are_unavailable(markets):
+    from resolved_smile_inputs import PreparationError
+    market = markets.market("EURUSD").market_for_expiry(date(2027, 1, 15))
+    with pytest.raises(PreparationError, match="not resolved"):
+        resolve_conventions(MarketSnapshot.capture(market.copy_with(resolved=None)),
+                            date(2027, 1, 15), VALUATION)

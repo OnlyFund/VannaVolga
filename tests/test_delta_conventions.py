@@ -53,7 +53,14 @@ def priced(markets):
     ("eur/usd", date(2026, 11, 17), "spot"),
 ])
 def test_delta_convention_follows_the_pair_and_tenor(pair, expiry, expected):
-    assert delta_convention(pair, expiry, VALUATION) == expected
+    # Hyperion resolves it from the pair's calendars; the core reads it off the
+    # market's carried inputs (it reads no calendar itself).
+    from apeiron.hyperion.resolve import attach, resolve_inputs
+    from market_data import MarketData
+    assert resolve_inputs(pair, expiry, VALUATION).delta_convention == expected
+    market = attach(MarketData(s=1.1, fwd_pts=10, v_atm=10, rr_25=0, rr_10=0, bf_25=0, bf_10=0,
+                               currency_pair=pair), expiry, VALUATION)
+    assert delta_convention(pair, expiry, VALUATION, market) == expected
 
 
 def test_delta_convention_falls_back_to_forward():

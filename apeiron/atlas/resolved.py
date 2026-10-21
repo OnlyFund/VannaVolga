@@ -56,6 +56,8 @@ class ResolvedInputs:
     others: tuple = ()
     #: Valuation to delivery on the BASE currency's day count (base-rate risk).
     base_year_fraction: Optional[float] = None
+    #: The pair's forward divisor (points per unit of the outright).
+    forward_divisor: Optional[float] = None
 
     def __post_init__(self):
         for name in ("valuation_date", "expiry_date", "delivery_date"):
@@ -91,6 +93,11 @@ class ResolvedInputs:
             if not math.isfinite(base) or base < 0:
                 raise ValueError("base_year_fraction must be finite and non-negative")
             object.__setattr__(self, "base_year_fraction", base)
+        if self.forward_divisor is not None:
+            divisor = float(self.forward_divisor)
+            if not math.isfinite(divisor) or divisor <= 0:
+                raise ValueError("forward_divisor must be finite and positive")
+            object.__setattr__(self, "forward_divisor", divisor)
 
     def _entry(self, valuation):
         """``(year_fraction, delta_convention)`` seen from ``valuation``, or ``None``."""

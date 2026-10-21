@@ -69,6 +69,7 @@ def resolve_inputs(pair, expiry, valuation, delivery=None):
         others=others,
         base_year_fraction=float(conventions.CCY[convention.base].day_count.yearFraction(
             _to_ql(valuation), _to_ql(discount.delivery_date))),
+        forward_divisor=float(convention.fwd_divisor),
     )
 
 

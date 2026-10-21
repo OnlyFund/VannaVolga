@@ -7,15 +7,16 @@ import QuantLib as ql
 from market_data import MarketData
 from resolved_smile_inputs import (
     MarketSnapshot, PreparationError, ResolvedQuotes, build_pillars,
-    resolve_conventions,
 )
+from resolution import resolve_conventions, resolved
 from helper_functions.fx_conventions import joint_calendar, spot_date
 
 
 def market(pair="EURUSD"):
-    return MarketData(s=150 if pair == "USDJPY" else 1.1, fwd_pts=30,
-                      v_atm=10, rr_25=-.5, rr_10=-1, bf_25=.2, bf_10=.6,
-                      currency_pair=pair)
+    # Resolved for the smile tests' default dates, as the app resolves its markets.
+    return resolved(MarketData(s=150 if pair == "USDJPY" else 1.1, fwd_pts=30,
+                               v_atm=10, rr_25=-.5, rr_10=-1, bf_25=.2, bf_10=.6,
+                               currency_pair=pair))
 
 
 @pytest.mark.parametrize("pair,expiry", [

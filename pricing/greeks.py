@@ -104,26 +104,21 @@ def forward_delta_factor(market, expiry, valuation, delivery=None):
 DEFAULT_DELTA_CONVENTION = "forward"
 
 
-def delta_convention(pair, expiry, valuation):
+def delta_convention(pair, expiry, valuation, market=None):
     """``"spot"`` or ``"forward"``: the delta ``pair`` quotes at ``expiry``.
 
     The rule the smile reads its delta pillars with
     (``resolved_smile_inputs.resolve_conventions``): G10 spot delta up to the
     pair's cutoff (1Y), forward beyond; EM forward at every tenor. Falls back
     to ``DEFAULT_DELTA_CONVENTION`` when the convention cannot be read.
+    ``market`` carrying its resolved inputs (``atlas.resolved``) answers it.
     """
-    try:
-        import QuantLib as ql
-        from helper_functions import fx_conventions as conventions
-        from helper_functions.fx_discounting import _to_date, _to_ql
-        convention = conventions.get_pair(str(pair).replace("/", "").strip().upper())
-        kind = conventions.delta_type(convention.name, _to_ql(_to_date(expiry)),
-                                      _to_ql(_to_date(valuation)))
-        forward = (convention.fwd_delta_beyond == "0D"
-                   or kind in (ql.DeltaVolQuote.Fwd, ql.DeltaVolQuote.PaFwd))
-        return "forward" if forward else "spot"
-    except Exception:
-        return DEFAULT_DELTA_CONVENTION
+    resolved = getattr(market, "resolved", None)
+    if resolved is not None and resolved.matches(expiry, valuation):
+        return resolved.delta_convention_from(valuation) or DEFAULT_DELTA_CONVENTION
+    from apeiron.atlas.discounting import FALLBACKS
+    FALLBACKS["conventions: delta convention without resolved inputs"] += 1
+    return DEFAULT_DELTA_CONVENTION
 
 
 def convention_deltas(market, row, expiry, valuation, fixed_delta, delta):
@@ -152,7 +147,7 @@ def convention_deltas(market, row, expiry, valuation, fixed_delta, delta):
             spot = reported if mode == "spot" else reported * factor
             values[f"{prefix}spot_delta"] = spot
             values[f"{prefix}fwd_delta"] = spot / factor
-        convention = delta_convention(_pair_code(row, market), expiry, valuation)
+        convention = delta_convention(_pair_code(row, market), expiry, valuation, market)
         key = "spot_delta" if convention == "spot" else "fwd_delta"
         values["pair_delta"] = values[key]
         values["fixed_pair_delta"] = values[f"fixed_{key}"]
@@ -200,8 +195,14 @@ def _display_delta(raw_delta, value, market, row, expiry, valuation, base_premiu
     """The delta the app reports, from a raw price derivative ``dV/dS``
     (forward points fixed) and the option value ``value`` (term currency)."""
     if market.delta_reporting is not None:
-        from helper_functions.fx_conventions import get_pair
-        premium_adjusted = get_pair(_pair_code(row, market)).premium_adjusted
+        resolved = getattr(market, "resolved", None)
+        if resolved is not None and _pair_code(row, market) == market.currency_pair:
+            premium_adjusted = resolved.premium_adjusted
+        else:
+            # Without resolved inputs: the market's own premium-adjusted setting.
+            from apeiron.atlas.discounting import FALLBACKS
+            FALLBACKS["conventions: premium flag without resolved inputs"] += 1
+            premium_adjusted = bool(market.deltaBase)
         return _report_delta(raw_delta, value, market, expiry, valuation, premium_adjusted)
     if base_premium:
         return raw_delta - convert_premium_quote(value, "base_cash", market.s)

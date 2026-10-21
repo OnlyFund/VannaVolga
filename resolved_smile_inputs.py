@@ -13,7 +13,7 @@ from typing import Tuple
 import numpy as np
 
 from market_data import MarketData
-from helper_functions.fx_discounting import _to_date, _to_ql, option_discount
+from helper_functions.fx_discounting import _to_date
 from helper_functions.fx_strangle_converter import _strike_from_delta
 
 
@@ -109,35 +109,37 @@ class Pillars:
     vols: Tuple[float, ...]
 
 
+def _from_resolved(raw, resolved, expiry, valuation):
+    """``ResolvedConventions`` from a market's carried inputs (no calendars)."""
+    from apeiron.atlas.resolved import simple_discount_factor
+    forward = raw.s + raw.fwd_pts / resolved.forward_divisor
+    if forward <= 0:
+        raise ValueError("pair divisor implies a non-positive forward")
+    discount = simple_discount_factor(raw.term_discount, resolved.year_fraction_from(valuation))
+    return ResolvedConventions(
+        str(raw.currency_pair).replace("/", "").replace(" ", "").upper(), raw.s, valuation,
+        expiry, resolved.delivery_date, (expiry - valuation).days / 365.0, forward,
+        resolved.forward_divisor, discount, discount * forward / raw.s,
+        resolved.delta_convention_from(valuation), resolved.premium_adjusted,
+        resolved.atm_convention, 360 if resolved.day_count == "Actual/360" else 365)
+
+
 def resolve_conventions(raw, expiry_date, valuation_date):
     valuation, expiry = _to_date(valuation_date), _to_date(expiry_date)
     if expiry <= valuation:
         raise ValueError("expiry must be after valuation")
-    try:
-        import QuantLib as ql
-        from helper_functions import fx_conventions as conventions
-
-        if not raw.currency_pair:
-            raise PreparationError("currency_pair is required")
-        pair = conventions.get_pair(raw.currency_pair)
-        discount = option_discount(pair.name, expiry, valuation, raw.term_discount)
-        kind = conventions.delta_type(pair.name, _to_ql(expiry), _to_ql(valuation))
-        # The table specifies all-forward EM; its 0D cutoff otherwise leaves
-        # expiries on/before spot in the spot branch.
-        forward_delta = (pair.fwd_delta_beyond == "0D" or
-                         kind in (ql.DeltaVolQuote.Fwd, ql.DeltaVolQuote.PaFwd))
-        forward = raw.s + raw.fwd_pts / pair.fwd_divisor
-        if forward <= 0:
-            raise ValueError("pair divisor implies a non-positive forward")
-        return ResolvedConventions(
-            pair.name, raw.s, valuation, expiry, discount.delivery_date,
-            (expiry - valuation).days / 365.0, forward, pair.fwd_divisor,
-            discount.discount_factor, discount.discount_factor * forward / raw.s,
-            "forward" if forward_delta else "spot", pair.premium_adjusted,
-            pair.atm.lower(), 360 if conventions.CCY[pair.quote].day_count.name()
-            == "Actual/360" else 365)
-    except (ImportError, KeyError, RuntimeError) as exc:
-        raise PreparationError("convention resolution: {}".format(exc)) from exc
+    resolved = getattr(raw, "resolved", None)
+    if (resolved is not None and resolved.forward_divisor is not None and raw.currency_pair
+            and resolved.matches(expiry, valuation)
+            and resolved.delta_convention_from(valuation) is not None):
+        return _from_resolved(raw, resolved, expiry, valuation)
+    # No calendars in the core: without the market's resolved inputs for this
+    # expiry and valuation (Hyperion's ``attach``) the conventions are not
+    # available and the smile falls back visibly (``prepare_smile``).
+    from apeiron.atlas.discounting import FALLBACKS
+    FALLBACKS["conventions: smile without matching resolved inputs"] += 1
+    raise PreparationError("conventions not resolved for this expiry and valuation "
+                           "(market without matching resolved inputs)")
 
 
 def build_pillars(context, quotes, spot):

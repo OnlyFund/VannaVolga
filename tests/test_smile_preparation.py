@@ -6,8 +6,8 @@ import QuantLib as ql
 from resolved_smile_cores import make_core
 from resolved_smile_inputs import (
     MarketSnapshot, PreparationError, ResolvedQuotes, build_pillars,
-    resolve_conventions,
 )
+from resolution import resolve_conventions
 from smile_preparation import prepare_core
 from test_resolved_smile_inputs import market
 

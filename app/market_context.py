@@ -603,6 +603,9 @@ class MarketContext:
         market.smile_reasons = curve_reasons
         market.smile_model = settings.pricing_model
         market.diagnostics_token = self.diagnostics.token
+        # The core's dates and conventions, resolved here (atlas.resolved),
+        # before the smile reads them.
+        attach_resolved(market, requested_date, curve_date)
         if not curve_reasons and requested_date > curve_date:
             from resolved_smile_inputs import resolve_conventions, MarketSnapshot
             context = resolve_conventions(MarketSnapshot.capture(market),
@@ -616,8 +619,6 @@ class MarketContext:
                         not prepared.diagnostics.degraded):
                     reuse_prepared(market, prepared)
                     break
-        # The core's dates and conventions, resolved here (atlas.resolved).
-        attach_resolved(market, requested_date, curve_date)
         return market
 
 

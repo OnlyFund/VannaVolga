@@ -2,7 +2,8 @@ import numpy as np
 import pytest
 
 from resolved_smile_cores import make_core
-from resolved_smile_inputs import MarketSnapshot, build_pillars, ResolvedQuotes, resolve_conventions
+from resolved_smile_inputs import MarketSnapshot, build_pillars, ResolvedQuotes
+from resolution import resolve_conventions, resolved
 from test_resolved_smile_inputs import market
 from wrapped_vol_resolver import WrappedVolResolver
 
@@ -23,7 +24,7 @@ def test_no_broker_core_matches_legacy_at_pillars_and_stays_close_between(
     pillars = build_pillars(context, quotes, raw.s)
     core = make_core(model, context, pillars)
     resolver = WrappedVolResolver(
-        raw.to_market(), expiry, "2026-10-02", model=model,
+        resolved(raw.to_market(), expiry, "2026-10-02"), expiry, "2026-10-02", model=model,
         broker_strangle=False,
         benchmark_kwargs={
             "deltaBase": context.premium_adjusted,
