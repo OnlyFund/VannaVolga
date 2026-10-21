@@ -1,0 +1,32 @@
+{
+ "module_level": [
+  [
+   "app.ui",
+   "app.ui.app"
+  ]
+ ],
+ "any_depth": [
+  [
+   "VannaVolga_ImpliedVol",
+   "app.smile_service",
+   "helper_functions.vanna_volga_helpers",
+   "resolved_smile_cores",
+   "smile_preparation",
+   "vanna_volga_sabr",
+   "wrapped_vol_resolver"
+  ],
+  [
+   "app.ui",
+   "app.ui.app"
+  ],
+  [
+   "helper_functions.fx_discounting",
+   "resolved_smile_inputs"
+  ],
+  [
+   "market_data.discount_curves",
+   "market_data.implied_rates",
+   "market_data.market_tables"
+  ]
+ ]
+}
