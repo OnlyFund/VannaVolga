@@ -16,11 +16,13 @@ ROWS_KEY, EDITOR_KEY = "spot_forward_rows", "spot_forward_editor"
 PENDING_KEY, RESULTS_KEY = "_pending_spot_forward_rows", "_spot_forward_results"
 MESSAGES_KEY = "_spot_forward_messages"
 TICK = "book_line"
+#: Tick to remove the line at once (as the options grid's Remove).
+REMOVE = "remove_line"
 INPUTS = [c for c in spot_forwards.COLUMNS if c != "trade_id"]
 
 
 def _default_rows(pair):
-    return pd.DataFrame([{TICK: False, "currency_pair": pair, "buy_sell": "BUY",
+    return pd.DataFrame([{TICK: False, REMOVE: False, "currency_pair": pair, "buy_sell": "BUY",
                           "amount": "1m", "amount_ccy": BASE, "value_date": "SPOT",
                           "rate": "", "book": "", "counterparty": "", "trade_id": ""}])
 
@@ -60,15 +62,21 @@ def render_spot_forward_block(tab, market_set, store, can_book, default_pair,
         st.session_state.pop(EDITOR_KEY, None)
     if ROWS_KEY not in st.session_state:
         st.session_state[ROWS_KEY] = _default_rows(default_pair)
+    if REMOVE not in st.session_state[ROWS_KEY]:            # lines saved before Remove existed
+        st.session_state[ROWS_KEY] = st.session_state[ROWS_KEY].assign(**{REMOVE: False})
     with tab:
         st.subheader("Spot / forward")
         rows = st.data_editor(
             st.session_state[ROWS_KEY],
             num_rows="dynamic", use_container_width=True, hide_index=True,
             key=EDITOR_KEY, disabled=["trade_id"],
-            column_order=[TICK, *spot_forwards.COLUMNS],
+            column_order=[TICK, REMOVE, *spot_forwards.COLUMNS],
             column_config={
                 TICK: st.column_config.CheckboxColumn("Book?", width="small", default=False),
+                REMOVE: st.column_config.CheckboxColumn(
+                    "Remove", width="small", default=False,
+                    help="Tick to remove this line immediately (a booked trade stays booked: "
+                         "cancel it in the Blotter)."),
                 "currency_pair": st.column_config.TextColumn("Pair", width="small"),
                 "buy_sell": st.column_config.SelectboxColumn(
                     "Buy/Sell", options=["BUY", "SELL"], width="small", required=True,
@@ -88,6 +96,10 @@ def render_spot_forward_block(tab, market_set, store, can_book, default_pair,
                 "trade_id": st.column_config.TextColumn("Trade id", width="small"),
             },
         )
+        removed = remove_ticked(rows)
+        if removed is not None:
+            st.session_state[PENDING_KEY] = removed
+            st.experimental_rerun()
         ticked = [p for p, v in enumerate(rows.get(TICK, [])) if v is True or v == 1]
         price_col, book_col = st.columns([1, 3])
         with price_col:
@@ -150,6 +162,28 @@ def _formatted(frame):
         return styler
     except Exception:              # cosmetic: never break the table over formats
         return frame
+
+
+def remove_ticked(rows):
+    """``rows`` without the lines ticked Remove, or ``None`` when none is ticked.
+
+    The grid always keeps one line (an empty one when every line is removed),
+    so it can never end up without a line to type into.
+    """
+    if REMOVE not in rows:
+        return None
+    marks = rows[REMOVE].map(lambda value: value is True or value == 1)
+    if not marks.any():
+        return None
+    kept = rows.loc[~marks].reset_index(drop=True)
+    if kept.empty:
+        # A fresh line, with the grid's defaults (no pair or amount yet).
+        fresh = {column: ("" if column not in (TICK, REMOVE) else False)
+                 for column in rows.columns}
+        fresh.update(buy_sell="BUY", amount_ccy=BASE, value_date="SPOT")
+        kept = pd.DataFrame([fresh])
+    kept[REMOVE] = False
+    return kept
 
 
 def _book(store, market_set, rows, ticked, default_pair, book, counterparty):

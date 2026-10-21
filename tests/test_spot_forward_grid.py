@@ -177,3 +177,18 @@ def test_booked_deals_export_and_import(markets, tmp_path):
     (original,), (copied,) = store.trades(), target.trades()
     for name in ("value_date", "expiry", "amount_ccy", "notional", "contract_rate", "buy_sell"):
         assert getattr(copied, name) == getattr(original, name), name
+
+
+def test_remove_drops_the_ticked_lines_and_keeps_one_line():
+    import pandas as pd
+    from app.ui.spot_forward_block import REMOVE, TICK, remove_ticked
+    rows = pd.DataFrame([dict(line(trade_id="TR-1"), **{TICK: False, REMOVE: False}),
+                         dict(line(amount="5m"), **{TICK: True, REMOVE: True}),
+                         dict(line(amount="7m"), **{TICK: False, REMOVE: False})])
+    assert remove_ticked(rows.assign(**{REMOVE: False})) is None          # nothing ticked
+    kept = remove_ticked(rows)
+    assert list(kept["amount"]) == ["10m", "7m"] and not kept[REMOVE].any()
+    everything = remove_ticked(rows.assign(**{REMOVE: True}))
+    assert len(everything) == 1 and (everything["amount"] == "").all()     # a fresh line stays
+    assert everything.iloc[0][["buy_sell", "amount_ccy", "value_date"]].tolist() == [
+        "BUY", "BASE", "SPOT"]
