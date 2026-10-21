@@ -16,7 +16,7 @@ def term_discount_factor(market, expiry, valuation_date, delivery=None):
     1.0 (undiscounted) when the market or dates cannot give one.
     """
     try:
-        from helper_functions.fx_discounting import discount_kwargs
+        from apeiron.atlas.discounting import discount_kwargs
         from helper_functions.helper_functions import year_fraction
         factor = discount_kwargs(market, expiry, valuation_date,
                                  delivery=delivery).get("term_discount_factor")

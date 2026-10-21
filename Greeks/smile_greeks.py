@@ -3,7 +3,7 @@ from pricing_utils.BlackScholes import BlackScholes
 from market_data import MarketData, Modifications
 from smile_perturbed_market import PerturbedMarket
 from helper_functions.vanna_volga_helpers import get_model_map
-from helper_functions.fx_discounting import discount_kwargs
+from apeiron.atlas.discounting import discount_kwargs
 
 class SmileGreeks:
     """Greeks for a spot-dependent, recalibrated FX volatility smile.

@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 import pandas as pd
 from helper_functions.vanna_volga_helpers import get_model_map
-from helper_functions.fx_discounting import discount_kwargs
+from apeiron.atlas.discounting import discount_kwargs
 from pricing_utils.BlackScholes import BlackScholes
 from market_data import MarketData
 from perturbed_market import PerturbedMarket

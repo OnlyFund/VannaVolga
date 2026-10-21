@@ -15,6 +15,26 @@ functions the core uses today (``fx_discounting``, ``fx_conventions``):
 from apeiron.atlas.resolved import ResolvedInputs
 
 
+def _theta_date(valuation):
+    """Sticky theta's shifted valuation (``Greeks.fixed_greeks.FixedTheta``):
+    the next weekday."""
+    import pandas as pd
+    return (pd.Timestamp(valuation) + pd.offsets.BDay(1)).date()
+
+
+def _delta_convention(conventions, convention, expiry, valuation):
+    import QuantLib as ql
+    from helper_functions.fx_discounting import _to_ql
+    if expiry <= valuation:
+        return None
+    # As resolved_smile_inputs.resolve_conventions: the table's 0D cutoff
+    # means all-forward (EM), else the delta type at this expiry.
+    kind = conventions.delta_type(convention.name, _to_ql(expiry), _to_ql(valuation))
+    forward = (convention.fwd_delta_beyond == "0D"
+               or kind in (ql.DeltaVolQuote.Fwd, ql.DeltaVolQuote.PaFwd))
+    return "forward" if forward else "spot"
+
+
 def resolve_inputs(pair, expiry, valuation, delivery=None):
     import QuantLib as ql
     from helper_functions import fx_conventions as conventions
@@ -28,14 +48,15 @@ def resolve_inputs(pair, expiry, valuation, delivery=None):
         discount = option_discount(convention.name, expiry, valuation, 0.0)
     else:
         discount = delivery_discount(convention.name, _to_date(delivery), valuation, 0.0)
-    delta_convention = None
-    if delivery is None and expiry > valuation:
-        # As resolved_smile_inputs.resolve_conventions: the table's 0D cutoff
-        # means all-forward (EM), else the delta type at this expiry.
-        kind = conventions.delta_type(convention.name, _to_ql(expiry), _to_ql(valuation))
-        forward = (convention.fwd_delta_beyond == "0D"
-                   or kind in (ql.DeltaVolQuote.Fwd, ql.DeltaVolQuote.PaFwd))
-        delta_convention = "forward" if forward else "spot"
+    delta_convention = (None if delivery is not None
+                        else _delta_convention(conventions, convention, expiry, valuation))
+    others = ()
+    shifted = _theta_date(valuation)
+    if shifted <= discount.delivery_date:
+        from helper_functions.fx_discounting import discount_year_fraction
+        others = ((shifted, discount_year_fraction(convention.name, shifted, discount.delivery_date),
+                   None if delivery is not None
+                   else _delta_convention(conventions, convention, expiry, shifted)),)
     return ResolvedInputs(
         valuation_date=valuation,
         expiry_date=discount.expiry_date,
@@ -45,6 +66,9 @@ def resolve_inputs(pair, expiry, valuation, delivery=None):
         delta_convention=delta_convention,
         premium_adjusted=bool(convention.premium_adjusted),
         atm_convention=str(convention.atm).lower(),
+        others=others,
+        base_year_fraction=float(conventions.CCY[convention.base].day_count.yearFraction(
+            _to_ql(valuation), _to_ql(discount.delivery_date))),
     )
 
 

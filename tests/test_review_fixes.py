@@ -65,8 +65,10 @@ def test_scale_all_vols_handles_zero_quotes():
 
 # 4. Theta's next-day price must be discounted from the next day.
 def test_fixed_theta_rolls_discount_factor():
-    market = _market(currency_pair="EURUSD", term_discount=0.0429)
     expiry, valuation, next_day = "2027-03-25", "2026-10-07", "2026-10-08"
+    # Resolved as the app's markets are (Hyperion): theta's next weekday included.
+    from apeiron.hyperion.resolve import attach
+    market = attach(_market(currency_pair="EURUSD", term_discount=0.0429), expiry, valuation)
     assert (discount_kwargs(market, expiry, valuation)["term_discount_factor"]
             != discount_kwargs(market, expiry, next_day)["term_discount_factor"])
 

@@ -2,6 +2,7 @@
 import pandas as pd
 import pytest
 
+from apeiron.hyperion.resolve import attach
 from market_data import MarketData
 from pricing.greeks import calculate_greeks, forward_delta_factor
 from pricing.pricing import price_option
@@ -15,11 +16,12 @@ from app.reports.spot_ladder import _add_forward_pnl, _empty_level
 @pytest.mark.parametrize("call_put", ["CALL", "PUT"])
 @pytest.mark.parametrize("buy_sell", ["BUY", "SELL"])
 def test_flat_smile_matches_analytic_pair_delta(pair, spot, call_put, buy_sell):
-    market = MarketData(
+    # Resolved as the app's markets are (Hyperion): the core reads no calendar.
+    market = attach(MarketData(
         s=spot, fwd_pts=100., v_atm=12., rr_25=0., rr_10=0.,
         bf_25=0., bf_10=0., currency_pair=pair, wrapped_smile=True,
         broker_strangle=False, deltaBase=get_pair(pair).premium_adjusted,
-    )
+    ), "2027-09-28", "2026-10-09")
     row = pd.Series(dict(
         currency_pair=pair, strike=spot, expiry="2027-09-28",
         valuation="2026-10-09", call_put=call_put, buy_sell=buy_sell,

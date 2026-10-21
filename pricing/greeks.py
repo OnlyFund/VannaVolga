@@ -21,7 +21,7 @@ from smile_perturbed_market import PerturbedMarket
 from helper_functions.input_resolvers import resolve_strike
 from helper_functions.helper_functions import year_fraction
 from pricing.vanna import fixed_vanna, smile_vanna
-from helper_functions.fx_discounting import discount_kwargs
+from apeiron.atlas.discounting import discount_kwargs
 from helper_functions.premium_quotes import convert_premium_quote, conventional_premium_ccy
 
 

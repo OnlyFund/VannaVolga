@@ -2,9 +2,7 @@ from math import exp, isfinite
 from numbers import Real
 
 from market_data import MarketData
-from helper_functions.fx_discounting import (
-    CCY, _to_date, _to_ql, delivery_discount, option_discount, simple_discount_factor,
-)
+from apeiron.atlas.resolved import _day as _to_date, simple_discount_factor
 from helper_functions.helper_functions import year_fraction
 
 
@@ -72,7 +70,8 @@ class PerturbedMarket:
         Rates and bumps are decimal (10bp = 0.001). Infer the base discount
         factor from F/S = D_base/D_term; a bump preserves the other currency's
         factor. Use simple deposit rates to delivery on each currency's basis
-        when settlement discounting is enabled, else continuous rates to expiry.
+        when settlement discounting is enabled and the market carries its
+        resolved dates (``market.resolved``), else continuous rates to expiry.
         ``delivery_date`` is a value-dated forward's own delivery date (else
         the delivery follows from the expiry).
         """
@@ -89,18 +88,19 @@ class PerturbedMarket:
         market = self.base
         forward = market.s + market.fwd_pts / market.forward_divisor
         rate = market.term_discount
-        if market.settlement_discounting and market.currency_pair:
-            discount = (option_discount(market.currency_pair, expiry, valuation, rate)
-                        if delivery_date is None else
-                        delivery_discount(market.currency_pair, expiry, valuation, rate))
+        resolved = getattr(market, "resolved", None)
+        if (market.settlement_discounting and market.currency_pair and resolved is not None
+                and resolved.matches(expiry, valuation, delivery_date)
+                and resolved.base_year_fraction is not None):
+            term_fraction = resolved.year_fraction_from(valuation)
+            discount_factor = simple_discount_factor(rate, term_fraction)
             if currency == "domestic":
                 rate += delta_rate
-                new_discount = simple_discount_factor(rate, discount.year_fraction)
-                forward *= discount.discount_factor / new_discount
+                new_discount = simple_discount_factor(rate, term_fraction)
+                forward *= discount_factor / new_discount
             else:
-                basis = CCY[market.currency_pair[:3]].day_count
-                tau = basis.yearFraction(_to_ql(valuation), _to_ql(discount.delivery_date))
-                base_discount = discount.discount_factor * forward / market.s
+                tau = resolved.base_year_fraction
+                base_discount = discount_factor * forward / market.s
                 # D_base' / D_base = 1 / (1 + dr * tau_base * D_base).
                 forward *= simple_discount_factor(delta_rate * base_discount, tau)
         else:

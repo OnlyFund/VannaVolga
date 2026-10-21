@@ -28,6 +28,11 @@ def _day(value):
         return value
     if hasattr(value, "date") and callable(value.date):          # pandas Timestamp
         return value.date()
+    if isinstance(value, str):                                   # ISO, as the pricers pass it
+        try:
+            return datetime.strptime(value.strip()[:10], "%Y-%m-%d").date()
+        except ValueError:
+            pass
     raise ValueError(f"{value!r} is not a date")
 
 
@@ -46,6 +51,11 @@ class ResolvedInputs:
     delta_convention: Optional[str]
     premium_adjusted: bool
     atm_convention: str
+    #: The same expiry and delivery seen from other valuation dates (sticky
+    #: theta's next weekday): ``((date, year_fraction, delta_convention), ...)``.
+    others: tuple = ()
+    #: Valuation to delivery on the BASE currency's day count (base-rate risk).
+    base_year_fraction: Optional[float] = None
 
     def __post_init__(self):
         for name in ("valuation_date", "expiry_date", "delivery_date"):
@@ -66,14 +76,47 @@ class ResolvedInputs:
             raise ValueError("premium_adjusted must be a bool")
         if self.atm_convention not in ATM_CONVENTIONS:
             raise ValueError(f"atm_convention must be one of {ATM_CONVENTIONS}")
+        others = []
+        for entry in self.others:
+            day, fraction, convention = entry
+            day, fraction = _day(day), float(fraction)
+            if day > self.delivery_date or not math.isfinite(fraction) or fraction < 0:
+                raise ValueError("other valuation dates must precede delivery with valid fractions")
+            if convention not in (None, *DELTA_CONVENTIONS):
+                raise ValueError(f"delta_convention must be one of {DELTA_CONVENTIONS} or None")
+            others.append((day, fraction, convention))
+        object.__setattr__(self, "others", tuple(others))
+        if self.base_year_fraction is not None:
+            base = float(self.base_year_fraction)
+            if not math.isfinite(base) or base < 0:
+                raise ValueError("base_year_fraction must be finite and non-negative")
+            object.__setattr__(self, "base_year_fraction", base)
+
+    def _entry(self, valuation):
+        """``(year_fraction, delta_convention)`` seen from ``valuation``, or ``None``."""
+        day = _day(valuation)
+        if day == self.valuation_date:
+            return self.year_fraction, self.delta_convention
+        for other, fraction, convention in self.others:
+            if other == day:
+                return fraction, convention
+        return None
 
     def matches(self, expiry, valuation, delivery=None):
-        """True when these inputs are the ones for ``(expiry, valuation[, delivery])``."""
+        """True when these inputs cover ``(expiry, valuation[, delivery])``."""
         try:
-            same = (_day(expiry) == self.expiry_date and _day(valuation) == self.valuation_date)
-            return same and (delivery is None or _day(delivery) == self.delivery_date)
+            if _day(expiry) != self.expiry_date or self._entry(valuation) is None:
+                return False
+            return delivery is None or _day(delivery) == self.delivery_date
         except (TypeError, ValueError):
             return False
+
+    def year_fraction_from(self, valuation):
+        """Valuation to delivery, from ``valuation`` (one ``matches`` accepts)."""
+        return self._entry(valuation)[0]
+
+    def delta_convention_from(self, valuation):
+        return self._entry(valuation)[1]
 
 
 def simple_discount_factor(rate, year_fraction):

@@ -132,3 +132,52 @@ def test_atlas_discounting_is_the_same_arithmetic(rate, fraction):
         fx_discounting.simple_discount_factor(rate, fraction)
     with pytest.raises(ValueError):
         simple_discount_factor(0.05, -0.1)
+
+
+# -- sub-step 2: the core discounts from the carried inputs ---------------------
+
+def test_core_discounting_equals_the_calendar_path(markets):
+    from apeiron.atlas import discounting as atlas
+    context = markets.market("EURUSD")
+    shift = (pd.Timestamp(VALUATION) + pd.offsets.BDay(1)).date()
+    for expiry in expiries(context):
+        market = context.market_for_expiry(expiry)
+        for valuation in (VALUATION, shift):                 # today and sticky theta's date
+            if expiry > valuation:
+                assert atlas.discount_kwargs(market, expiry, valuation) == \
+                    fx_discounting.discount_kwargs(market, expiry, valuation)
+    deal = context.market_for_delivery(date(2027, 3, 5))
+    assert atlas.discount_kwargs(deal, date(2027, 3, 5), VALUATION, delivery=date(2027, 3, 5)) == \
+        fx_discounting.discount_kwargs(deal, date(2027, 3, 5), VALUATION, delivery=date(2027, 3, 5))
+
+
+def test_without_resolved_inputs_the_core_uses_legacy_discounting_and_counts_it(markets):
+    from apeiron.atlas import discounting as atlas
+    market = markets.market("EURUSD").market_for_expiry(date(2027, 1, 15))
+    before = sum(atlas.FALLBACKS.values())
+    assert atlas.discount_kwargs(market.copy_with(resolved=None), "2027-01-15", VALUATION) == {}
+    assert atlas.discount_kwargs(market, "2027-02-15", VALUATION) == {}         # another expiry
+    assert sum(atlas.FALLBACKS.values()) == before + 2
+    assert atlas.discount_kwargs(market.copy_with(settlement_discounting=False),
+                                 "2027-01-15", VALUATION) == {}
+
+
+def test_rate_bumps_from_carried_fractions_equal_the_calendar_ones(markets):
+    from perturbed_market import PerturbedMarket
+    market = markets.market("EURUSD").market_for_expiry(date(2027, 1, 15))
+    resolved = market.resolved
+    assert resolved.base_year_fraction == float(
+        fx_discounting.CCY["EUR"].day_count.yearFraction(
+            fx_discounting._to_ql(VALUATION), fx_discounting._to_ql(resolved.delivery_date)))
+    for currency in ("domestic", "foreign"):
+        bumped = PerturbedMarket(market).bump_rate(currency, 0.001, "2027-01-15", VALUATION)
+        unresolved = PerturbedMarket(market.copy_with(resolved=None)).bump_rate(
+            currency, 0.001, "2027-01-15", VALUATION)
+        assert bumped.fwd_pts != unresolved.fwd_pts              # conventions vs legacy
+        # Domestic: forward scaled by D_old / D_new on the term basis.
+        if currency == "domestic":
+            old = simple_discount_factor(market.term_discount, resolved.year_fraction)
+            new = simple_discount_factor(market.term_discount + 0.001, resolved.year_fraction)
+            forward = market.s + market.fwd_pts / market.forward_divisor
+            assert bumped.s + bumped.fwd_pts / bumped.forward_divisor == pytest.approx(
+                forward * old / new, rel=1e-14)

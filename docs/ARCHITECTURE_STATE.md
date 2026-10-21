@@ -118,3 +118,41 @@ Nothing reads it yet, so pricing is unchanged by construction.
 - The full suite passes (1506), and the reference book prices identically.
 - Crossings and cycles are unchanged (31 / 4). Sub-steps 2 and 3 switch the core
   to these inputs and remove the Atlas → time crossings.
+
+## Atlas untangling, sub-step 2: the core discounts from the carried inputs (2026-10-21)
+
+**Before:** the Greek calculators, pricing, vanna, the FX forward and the rate
+bumps called the calendar module (`fx_discounting`) for every discount factor.
+
+**After:**
+- **`apeiron/atlas/discounting.py`:** `discount_kwargs` with the same signature
+  and output. It computes the discount factor, carry rate and delta convention
+  from `market.resolved` and the rate.
+- **The carried record also covers:**
+  - sticky theta's next weekday (year fraction and delta convention seen from
+    that date);
+  - the base currency's year fraction, for base-rate risk.
+- **The rate bumps (`perturbed_market.bump_rate`)** use the carried year
+  fractions.
+- **A market without resolved inputs** (a standalone user's, or a request the
+  record doesn't cover) gets the legacy `exp(-r·t)`, as the core already did
+  without conventions. Such requests are counted (`FALLBACKS`).
+- **Unit tests that build markets by hand** now resolve them through Hyperion,
+  as the app does. Their expected values are unchanged.
+
+**Validation:**
+- Measured before removing the old path: golden and the app tests produce 0
+  fallbacks.
+- On the live market: 1,784 discount requests (today, theta's date, value-dated
+  deals), every one identical to the calendar path.
+- The full suite passes (1506). The reference book, with rho and phi, prices
+  identically. The result cache equals fresh pricing.
+
+**Crossings: 31 → 25.** These six are gone:
+`Greeks.fixed_greeks`, `Greeks.smile_greeks`, `perturbed_market`,
+`pricing.fx_forward`, `pricing.pricing` and `pricing.vanna`, each → `fx_discounting`.
+Cycles: unchanged (4).
+
+Left for sub-steps 3 and 4: the pair conventions (`pricing.greeks`,
+`resolved_smile_inputs`, `VannaVolga_ImpliedVol`), Black-Scholes resolving its
+own discount from `currency_pair`, and the date helpers.

@@ -16,7 +16,7 @@ from pricing_utils.black_scholes_numba import black_scholes_values
 from helper_functions.input_resolvers import resolve_strike
 from helper_functions.helper_functions import year_fraction
 from helper_functions.cashflows import signed_premium_cashflow
-from helper_functions.fx_discounting import discount_kwargs
+from apeiron.atlas.discounting import discount_kwargs
 from helper_functions.vanna_volga_helpers import get_model_map
 from helper_functions.premium_quotes import (
     PREMIUM_QUOTES,

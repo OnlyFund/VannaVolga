@@ -10,7 +10,7 @@ if str(ROOT) not in sys.path:
 from helper_functions.vanna_volga_helpers import get_model_map
 from pricing_utils.BlackScholes import BlackScholes
 from smile_perturbed_market import PerturbedMarket
-from helper_functions.fx_discounting import discount_kwargs
+from apeiron.atlas.discounting import discount_kwargs
 
 
 def fixed_vanna(market, strike, expiry, valuation, call_put, buy_sell,

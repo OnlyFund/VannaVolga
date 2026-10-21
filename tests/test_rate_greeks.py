@@ -4,6 +4,7 @@ from math import exp, log, sqrt
 import pytest
 from scipy.special import ndtr
 
+from apeiron.hyperion.resolve import attach
 from Greeks.fixed_greeks import FixedRho, FixedPhi
 from Greeks.smile_greeks import SmileGreeks
 from helper_functions.fx_discounting import option_discount, CCY, _to_ql
@@ -20,11 +21,13 @@ QUOTES = ("v_atm", "rr_25", "rr_10", "bf_25", "bf_10")
 
 
 def market(**changes):
-    return MarketData(**dict(
+    # Resolved as the app's markets are (Hyperion), so the core discounts to
+    # delivery on the pair's conventions; Atlas reads no calendar itself.
+    return attach(MarketData(**dict(
         dict(s=16.6, fwd_pts=4215, forward_divisor=10000, v_atm=12.07,
              rr_25=0.0, rr_10=0.0, bf_25=0.0, bf_10=0.0,
              term_discount=0.05, currency_pair="USDZAR", wrapped_smile=False),
-        **changes))
+        **changes)), EXPIRY, VALUATION)
 
 
 def common(mkt, **changes):
