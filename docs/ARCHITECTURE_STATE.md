@@ -331,7 +331,9 @@ part of the reference.
   - **Spot:** the settlement lag is counted on the non-USD calendar(s), so a
     US-only holiday is a good intermediate day for USD pairs and crosses. The
     spot day itself must be good in USD. MXN and BRL are excepted
-    (`USD_BLOCKS_INTERMEDIATE`).
+    (`USD_BLOCKS_INTERMEDIATE`). ILS counts the lag on weekdays, so its own
+    holidays don't block the intermediate day either (`LAG_ON_WEEKDAYS`,
+    matching Bloomberg's USDILS spot on 708 of 708 days, 2015 to 2026).
   - **Tenors:** day and week tenors roll Following; month and year tenors
     roll Modified Following with the end-of-month rule.
   - **Expiry to delivery:** an expiry delivers on its spot date.

@@ -19,8 +19,10 @@ Each row holds:
   proposed;
 - **`market_expiry`, `market_delivery`:** the market's answer, filled in by
   hand (a blank field was not read);
-- **`status`:** `confirmed` (the market's answer is filled in), `to_confirm`
-  or `disputed` (the market and our calendar disagree; say why in `note`);
+- **`status`:** `confirmed` (the market's answer is filled in), `to_confirm`,
+  `disputed` (the market and our calendar disagree; say why in `note`) or
+  `house_rule` (the market's answer differs and we keep ours by decision;
+  `note` says why; the test holds the solver to the stored answer);
 - **`source`, `checked_on`:** where and when the market was read, such as
   Bloomberg's option pricing page;
 - **`priority`:** `1` is the next batch to confirm (one case per pair group and
@@ -51,6 +53,14 @@ The categories:
    `market_expiry`, `market_delivery`, `source` and `checked_on`, then set
    `status` to `confirmed`. When the market disagrees, set it to `disputed`
    and note why. The rule is then fixed and the case re-proposed.
+   Tenor cases can be confirmed in bulk on Bloomberg:
+   `python -m market_data.bloomberg_edge_cases` (`--dry-run` to report
+   only). It takes the vol surface's expiry as of the trade date and the
+   spot date as of that expiry. It judges every `to_confirm` row that has an
+   answer, hand-typed answers included, as `confirmed` or `disputed`. The
+   surface does not move day and week expiries off holidays, so a disputed
+   surface row (`note` ends "read it on the pricing page") still needs the
+   pricing page.
 3. **The test** holds the solver to every confirmed market answer, and to the
    stored answer on every row. A rule change that moves any case fails until
    the case is re-checked and its stored answer is updated.

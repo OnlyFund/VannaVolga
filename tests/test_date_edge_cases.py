@@ -12,7 +12,7 @@ from helper_functions.fx_conventions import settlement
 OPTIONS = edge_cases.read(edge_cases.OPTION_FILE)
 TYPED = edge_cases.read(edge_cases.TYPED_FILE)
 ROLLS = edge_cases.read(edge_cases.ROLLOVER_FILE)
-STATUSES = {edge_cases.CONFIRMED, edge_cases.TO_CONFIRM, edge_cases.DISPUTED}
+STATUSES = {edge_cases.CONFIRMED, edge_cases.TO_CONFIRM, edge_cases.DISPUTED, edge_cases.HOUSE_RULE}
 
 
 def _ids(rows):
@@ -25,6 +25,8 @@ def test_the_case_files_are_well_formed():
         assert len(set(_ids(rows))) == len(rows)
         for row in rows:
             assert row["status"] in STATUSES, row["case_id"]
+            if row["status"] == edge_cases.HOUSE_RULE:
+                assert row["note"], row["case_id"]
             if row["status"] == edge_cases.CONFIRMED:
                 answer = row.get("market_delivery") or row.get("market_fx_date")
                 assert answer and row["source"] and row["checked_on"], row["case_id"]

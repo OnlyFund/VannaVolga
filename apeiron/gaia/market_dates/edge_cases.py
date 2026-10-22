@@ -70,6 +70,8 @@ TYPED_COLUMNS = ("case_id", "priority", "category", "pair", "typed_expiry", "exp
 ROLLOVER_COLUMNS = ("case_id", "priority", "category", "moment", "timezone", "new_york",
                     "fx_date", "market_fx_date", "status", "source", "checked_on", "note")
 CONFIRMED, TO_CONFIRM, DISPUTED = "confirmed", "to_confirm", "disputed"
+#: The market's answer differs and we keep ours by decision (``note`` says why).
+HOUSE_RULE = "house_rule"
 #: London times either side of 17:00 New York: 22:00 normally, 21:00 in the
 #: clock-change gaps.
 _ROLL_TIMES = ("20:59:59", "21:00:00", "21:59:59", "22:00:00")

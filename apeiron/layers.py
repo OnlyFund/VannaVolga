@@ -64,6 +64,8 @@ _GAIA_MARKET_DATES = [
     # gaia.market, calendar logic stays here)
     "helper_functions.fx_conventions",
     "helper_functions.fx_discounting",
+    # Bloomberg checks of the date rules (edge cases, historical expiries)
+    "market_data.bloomberg_edge_cases", "market_data.bloomberg_historical_expiry_dates",
 ]
 
 _GAIA_MARKET = [

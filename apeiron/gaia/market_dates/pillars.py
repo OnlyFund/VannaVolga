@@ -18,7 +18,9 @@ The rules (checked 2026-10-22 against Bloomberg's historical settlement dates:
   a US-only holiday is a good intermediate day, for USD pairs and crosses
   alike; the spot day itself must be good in every currency including USD
   (rolled forward until it is). MXN and BRL are the exceptions: US holidays
-  block their intermediate day too (``USD_BLOCKS_INTERMEDIATE``);
+  block their intermediate day too (``USD_BLOCKS_INTERMEDIATE``). ILS is the
+  other way: its own holidays do not block the intermediate day either; the
+  lag is counted on weekdays (``LAG_ON_WEEKDAYS``);
 * a **forward** (swap) tenor delivers on spot plus the tenor
   (``forward_delivery``): day and week tenors roll Following; month and year
   tenors roll Modified Following with the end-of-month rule;
@@ -70,6 +72,11 @@ _EXPIRY_SEARCH_DAYS = 31
 
 #: Currencies whose spot counts US holidays as bad intermediate days too.
 USD_BLOCKS_INTERMEDIATE = frozenset({"MXN", "BRL"})
+#: Currencies whose spot lag is counted on weekdays: no holiday, theirs or
+#: USD's, blocks the intermediate day; the spot day must still be good in
+#: both. USDILS: Bloomberg's spot matched on 708 of 708 days around ILS and US
+#: holidays, 2015 - 2026 (checked 2026-10-22).
+LAG_ON_WEEKDAYS = frozenset({"ILS"})
 
 CHECK = os.environ.get("VV_PILLAR_CHECK") == "1"
 #: Recorded fail-safe events, newest last, at most ``_KEEP`` each.
@@ -195,7 +202,8 @@ def spot_date(settlement, trade) -> date:
 
     A US-only holiday counts as a good intermediate day, except for
     ``USD_BLOCKS_INTERMEDIATE`` currencies, whose lag is counted on the full
-    calendar.
+    calendar, and ``LAG_ON_WEEKDAYS`` currencies, whose lag is counted on
+    weekdays.
     """
     full = calendar(settlement)
     others = [ccy for ccy in (settlement.base, settlement.quote) if ccy != "USD"]
@@ -203,7 +211,7 @@ def spot_date(settlement, trade) -> date:
     if set(others) & USD_BLOCKS_INTERMEDIATE:
         spot = full.advance(_ql(trade), lag, ql.Following)
     else:
-        part = _joint(others)
+        part = ql.WeekendsOnly() if set(others) & LAG_ON_WEEKDAYS else _joint(others)
         spot = part.advance(_ql(trade), lag, ql.Following)
         while not full.isBusinessDay(spot):
             spot = part.advance(spot, ql.Period(1, ql.Days), ql.Following)
