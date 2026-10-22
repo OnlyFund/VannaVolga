@@ -337,6 +337,11 @@ part of the reference.
   - **Tenors:** day and week tenors roll Following; month and year tenors
     roll Modified Following with the end-of-month rule.
   - **Expiry to delivery:** an expiry delivers on its spot date.
+  - **Expiry days:** a weekday on which both currencies are closed moves to
+    the next good day, even where Bloomberg expires on it (a house rule).
+    Expiry overrides (`market_data/calendars/expiry_overrides.csv`, or
+    `set_expiry_override` on the fly) mark a pair and day as an expiry day or
+    not.
   - Tenor expiries (delivery less the lag) are unchanged: their rules are a
     later step.
 - **Fail-safes:**

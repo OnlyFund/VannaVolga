@@ -297,6 +297,12 @@ after item 6.
   date for a currency, with who, when and why; append-only like the other
   stores; the date rules use it at once; a refresh of the Bloomberg list keeps
   the overrides and reports any it now agrees with.
+  Expiry days already have one (2026-10-22): a weekday on which both
+  currencies are closed moves to the next good day (house rule), and
+  `market_data/calendars/expiry_overrides.csv` or
+  `pillars.set_expiry_override` (on the fly, in memory) says where the market
+  treats a pair and day differently. Still to do: setting one from the app,
+  with who, when and why recorded.
 - Rate-risk matrix by currency and tenor (where rho and phi aggregate across pairs).
 - Event calendars by currency: first agree the scope and approach before building:
   - per currency, per pair, or both (currency events plus pair overrides);

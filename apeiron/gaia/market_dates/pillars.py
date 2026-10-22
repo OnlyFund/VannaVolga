@@ -28,7 +28,12 @@ The rules (checked 2026-10-22 against Bloomberg's historical settlement dates:
   least one of the pair's two currencies is open, so the market is not closed.
   A US-only, Japanese or UK holiday is a valid expiry; 25 Dec and 1 Jan are no
   expiry days for EURUSD (both closed) but 25 Dec is for USDJPY (Tokyo is
-  open). An option always delivers on its expiry's spot date:
+  open). A weekday on which both are closed moves to the next good day even
+  where Bloomberg expires on it (25 Dec, 1 Jan, Good Friday, Easter Monday,
+  Juneteenth, ...: a house rule, decided 2026-10-22). Where the market treats
+  a day differently, an *expiry override* says so for a pair and date
+  (``EXPIRY_OVERRIDES``: from ``expiry_overrides.csv``, or set on the fly with
+  ``set_expiry_override``). An option always delivers on its expiry's spot date:
 
   - O/N, day and week tenors expire on the trade date plus the tenor (O/N:
     one day), moved to the next expiry day if it is none;
@@ -60,8 +65,11 @@ import re
 from datetime import date, timedelta
 import QuantLib as ql
 
+import csv
+from pathlib import Path
+
 from apeiron.gaia.market_dates.calendars import (  # noqa: F401  (re-exported)
-    CALENDARS, OVERNIGHT, PillarDates, Settlement, _py, _ql, as_date, covered,
+    CALENDARS, HOLIDAY_LIST, OVERNIGHT, PillarDates, Settlement, _py, _ql, as_date, covered,
 )
 
 _TENOR = re.compile(r"(\d+)([DWMY])")
@@ -157,11 +165,66 @@ def roll_forward(settlement, day) -> date:
     return _py(calendar(settlement).adjust(_ql(day), ql.Following))
 
 
+#: Expiry overrides: where the market treats a day differently from the rule.
+OVERRIDE_LIST = HOLIDAY_LIST.parent / "expiry_overrides.csv"
+OVERRIDE_COLUMNS = ("pair", "date", "expiry", "reason", "added_by", "added_on")
+
+
+def _pair_key(settlement):
+    return settlement.base + settlement.quote
+
+
+def load_expiry_overrides(path=OVERRIDE_LIST):
+    """``{(pair, date): is an expiry day}`` from ``path``; empty if it is missing.
+
+    ``expiry`` is ``yes`` (an expiry day although both currencies are closed)
+    or ``no`` (not one although a currency is open). A malformed row raises:
+    a date rule must not quietly ignore an override.
+    """
+    overrides = {}
+    if not Path(path).exists():
+        return overrides
+    with Path(path).open(newline="", encoding="utf-8") as handle:
+        for row in csv.DictReader(handle):
+            flag = row["expiry"].strip().lower()
+            if flag not in ("yes", "no"):
+                raise ValueError(f"{path}: expiry must be yes or no, not {row['expiry']!r}")
+            day = as_date(row["date"])
+            if day.weekday() >= 5:
+                raise ValueError(f"{path}: {day} is a weekend, never an expiry day")
+            overrides[(row["pair"].replace("/", "").strip().upper(), day)] = flag == "yes"
+    return overrides
+
+
+EXPIRY_OVERRIDES = load_expiry_overrides()
+
+
+def set_expiry_override(pair, day, is_expiry):
+    """On the fly: make ``day`` an expiry day of ``pair`` (or not), at once.
+
+    Kept in memory for this process; add a row to ``expiry_overrides.csv``
+    to keep it.
+    """
+    day = as_date(day)
+    if day.weekday() >= 5:
+        raise ValueError(f"{day} is a weekend, never an expiry day")
+    EXPIRY_OVERRIDES[(str(pair).replace("/", "").strip().upper(), day)] = bool(is_expiry)
+
+
+def clear_expiry_override(pair, day):
+    """Remove an override; the rule applies again."""
+    EXPIRY_OVERRIDES.pop((str(pair).replace("/", "").strip().upper(), as_date(day)), None)
+
+
 def is_expiry_day(settlement, day) -> bool:
-    """A weekday on which at least one of the pair's currencies is open."""
+    """A weekday on which at least one of the pair's currencies is open,
+    unless an expiry override says otherwise."""
     day = as_date(day)
     if day.weekday() >= 5:
         return False
+    override = EXPIRY_OVERRIDES.get((_pair_key(settlement), day))
+    if override is not None:
+        return override
     when = _ql(day)
     return any(CALENDARS[ccy].isBusinessDay(when) for ccy in (settlement.base, settlement.quote))
 

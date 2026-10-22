@@ -61,6 +61,11 @@ The categories:
    surface does not move day and week expiries off holidays, so a disputed
    surface row (`note` ends "read it on the pricing page") still needs the
    pricing page.
+   A weekday on which both currencies are closed is no expiry day even where
+   the market expires on it (a house rule): such cases are `house_rule`. If
+   the market should be followed for a pair and day instead, add an expiry
+   override (`market_data/calendars/expiry_overrides.csv`, or
+   `pillars.set_expiry_override` on the fly) and re-check the case.
 3. **The test** holds the solver to every confirmed market answer, and to the
    stored answer on every row. A rule change that moves any case fails until
    the case is re-checked and its stored answer is updated.
