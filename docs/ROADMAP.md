@@ -81,21 +81,24 @@ apeiron/
   date, else its pinned event set, else none. CSV import and export.
 - A vol Greek that cannot be computed is shown as unavailable instead of failing
   the line.
+- A Refresh button in the market picker; collapsible Blotter amend/cancel.
+- **Apeiron step 0:** the package skeleton, a level map of every module, and an
+  import-boundary test (crossings and cycles may only shrink); its state is
+  recorded step by step in `docs/ARCHITECTURE_STATE.md`.
+- **Result cache** in `hyperion/cache`: each trade priced once per market state
+  (in-memory LRU plus a 24-hour on-disk store, with a verify mode). Portfolio and
+  Risk use it.
+- **Atlas untangling** (four steps): markets carry their resolved dates and
+  conventions, filled by Hyperion; the core discounts and reads conventions from
+  them, and reads no calendar or convention table at all. Crossings 31 → 16.
+- The Spot / forward grid has a Remove column.
 
 ## Next
 
-1. Small UI: a Refresh button in the market picker; collapsible Blotter
-   amend/cancel sections.
-2. **Step 0 of the Apeiron migration:** the package skeleton and the
-   import-boundary test.
-3. **Result caching (priority)**, built in `hyperion/cache`.
-   - Key per trade: snapshot, trade and version, model settings, spot edits,
-     requested Greeks and code version, so a change reprices only what it affects.
-   - A bounded in-memory LRU, plus an on-disk store kept 24 hours (the portfolio
-     summary per loaded snapshot for all currencies).
-   - Different inputs give a different key; an unreadable cache means computing
-     fresh; a check mode compares a sample against fresh results.
-4. **Intraday time to the expiry cut** (New York / Tokyo), built in `gaia/time`, with:
+Items 1–3 and 5 are done (see above). Next is item 6, the pillar date solver,
+starting with the rolled market. Item 4 is paused.
+
+4. **Intraday time to the expiry cut** (New York / Tokyo; paused), built in `gaia/time`, with:
    - special cuts and fixings per pair (MXN, BRL, KRW, CEEMEA): cut time, fixing
      source and fixing date;
    - the valuation time of day (snapshot time vs valuation moment);
@@ -105,9 +108,8 @@ apeiron/
 
 ## Dates and data foundation
 
-5. **Atlas untangling:** the core engine takes dates, year fractions and
-   discount factors as inputs, instead of reading pair calendars itself.
-6. **Pillar date solver** (in `gaia/time`): one date service for O/N, days,
+5. ~~Atlas untangling~~: done.
+6. **Pillar date solver** (next) (in `gaia/time`): one date service for O/N, days,
    weeks, months and years from any valuation date.
    - Delivery is spot plus tenor with **Modified Following** (a weekend or holiday
      in either currency moves to the next good day, back to the previous one if
