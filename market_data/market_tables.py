@@ -6,8 +6,8 @@ follow from the valuation date and the pair's conventions, so they are
 worked out here rather than stored:
 
 * ``1W`` ... ``1Y``: spot date plus the tenor (end-of-month aware), back by
-  the settlement lag, on the pair's joint calendar
-  (``helper_functions.fx_conventions.option_dates``);
+  the settlement lag, on the pair's joint calendar (the pillar date solver,
+  ``apeiron.gaia.time.pillars``, through ``fx_conventions.pillar_dates``);
 * ``ON``: the next business day, delivering on its spot date.
 
 ``vol_table`` has the Markets tab's vol columns (vols in percentage points)
@@ -20,7 +20,7 @@ and ``market_bundle`` does it for every pair in the snapshot.
 import pandas as pd
 import QuantLib as ql
 
-from helper_functions.fx_conventions import joint_calendar, option_dates, spot_date
+from helper_functions.fx_conventions import pillar_dates
 from market_data.vol_tickers import TENORS
 
 
@@ -34,18 +34,10 @@ def _ql_date(value):
     return ql.Date(stamp.day, stamp.month, stamp.year)
 
 
-def _timestamp(date):
-    return pd.Timestamp(date.year(), date.month(), date.dayOfMonth())
-
-
 def tenor_dates(pair, valuation_date, tenor):
     """``(expiry, delivery)`` of ``tenor`` traded on ``valuation_date``."""
-    trade = _ql_date(valuation_date)
-    if tenor.upper() == "ON":
-        expiry = joint_calendar(pair).advance(trade, ql.Period(1, ql.Days), ql.Following)
-        return _timestamp(expiry), _timestamp(spot_date(pair, expiry))
-    dates = option_dates(pair, trade, tenor.upper())
-    return _timestamp(dates.expiry), _timestamp(dates.delivery)
+    dates = pillar_dates(pair, pd.Timestamp(valuation_date).date(), tenor.upper())
+    return pd.Timestamp(dates.expiry), pd.Timestamp(dates.delivery)
 
 
 def vol_table(surface, pair, valuation_date, tenors=APP_TENORS):

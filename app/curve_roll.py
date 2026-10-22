@@ -32,16 +32,6 @@ def _to_date(value) -> date:
     return timestamp.date()
 
 
-def _ql_date(value):
-    import QuantLib as ql
-    value = _to_date(value)
-    return ql.Date(value.day, value.month, value.year)
-
-
-def _from_ql(value) -> date:
-    return date(value.year(), value.month(), value.dayOfMonth())
-
-
 #: Days the global FX market does not trade, as (month, day).
 FX_TRADING_CLOSURES = {(1, 1), (12, 25)}
 
@@ -71,10 +61,9 @@ def overnight_expiry(pair, valuation) -> date:
     Falls back to the next FX trading day when the pair has no conventions.
     """
     try:
-        import QuantLib as ql
-        from helper_functions.fx_conventions import joint_calendar
-        return _from_ql(joint_calendar(pair).advance(
-            _ql_date(valuation), ql.Period(1, ql.Days), ql.Following))
+        from apeiron.gaia.time.pillars import next_business_day as pair_next_day
+        from helper_functions.fx_conventions import settlement
+        return pair_next_day(settlement(pair), _to_date(valuation))
     except Exception:
         return next_business_day(pair, valuation)
 
@@ -82,8 +71,9 @@ def overnight_expiry(pair, valuation) -> date:
 def spot_date(pair, valuation) -> date:
     """Return the pair's spot date, falling back to two weekdays."""
     try:
-        from helper_functions.fx_conventions import spot_date as pair_spot_date
-        return _from_ql(pair_spot_date(pair, _ql_date(valuation)))
+        from apeiron.gaia.time.pillars import spot_date as pair_spot_date
+        from helper_functions.fx_conventions import settlement
+        return pair_spot_date(settlement(pair), _to_date(valuation))
     except Exception:
         return (pd.Timestamp(_to_date(valuation)) + BDay(2)).date()
 
@@ -154,18 +144,16 @@ def short_end_nodes(pair, curve_date, short_points):
     spot is spot plus SN. A swap whose dates do not meet spot on the pair's
     calendar is left out, as is a T+1 pair's TN (it would start at spot).
     """
-    import QuantLib as ql
-    from helper_functions.fx_conventions import joint_calendar, spot_date
+    from apeiron.gaia.time import pillars
+    from helper_functions.fx_conventions import settlement
 
     points = short_points or {}
-    today = _ql_date(curve_date)
-    calendar = joint_calendar(pair)
-    tomorrow = calendar.advance(today, ql.Period(1, ql.Days), ql.Following)
-    day_after = calendar.advance(tomorrow, ql.Period(1, ql.Days), ql.Following)
-    spot = spot_date(pair, today)
-
-    def stamp(day):
-        return pd.Timestamp(day.year(), day.month(), day.dayOfMonth())
+    rules = settlement(pair)
+    today = _to_date(curve_date)
+    tomorrow = pillars.next_business_day(rules, today)
+    day_after = pillars.next_business_day(rules, tomorrow)
+    spot = pillars.spot_date(rules, today)
+    stamp = pd.Timestamp
 
     nodes = []
     on, tn, sn = points.get("ON"), points.get("TN"), points.get("SN")
@@ -177,8 +165,7 @@ def short_end_nodes(pair, curve_date, short_points):
         if on is not None:
             nodes.append((stamp(today), -(on + tn), "ON"))
     if sn is not None:
-        nodes.append((stamp(calendar.advance(spot, ql.Period(1, ql.Days), ql.Following)),
-                      sn, "SN"))
+        nodes.append((stamp(pillars.next_business_day(rules, spot)), sn, "SN"))
     return nodes
 
 

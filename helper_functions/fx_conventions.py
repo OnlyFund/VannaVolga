@@ -28,6 +28,9 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional
 import QuantLib as ql
 
+from apeiron.gaia.time import pillars
+from apeiron.gaia.time.pillars import CALENDARS, Settlement
+
 
 # ---------------------------------------------------------------- currencies
 
@@ -46,51 +49,51 @@ def _cal(c):
 
 CCY: Dict[str, CcyConv] = {
     # --- G10 -----------------------------------------------------------
-    "EUR": CcyConv("EUR", ql.Actual360(),      ql.TARGET(),                                        rank=10),
-    "GBP": CcyConv("GBP", ql.Actual365Fixed(), ql.UnitedKingdom(ql.UnitedKingdom.Exchange),         rank=20),
-    "AUD": CcyConv("AUD", ql.Actual365Fixed(), ql.Australia(),                                      rank=30),
-    "NZD": CcyConv("NZD", ql.Actual365Fixed(), ql.NewZealand(),                                     rank=40),
-    "USD": CcyConv("USD", ql.Actual360(),      ql.UnitedStates(ql.UnitedStates.FederalReserve),     rank=50),
-    "CAD": CcyConv("CAD", ql.Actual365Fixed(), ql.Canada(),                                         rank=60),
-    "CHF": CcyConv("CHF", ql.Actual360(),      ql.Switzerland(),                                    rank=70),
-    "NOK": CcyConv("NOK", ql.Actual360(),      ql.Norway(),                                         rank=80),
-    "SEK": CcyConv("SEK", ql.Actual360(),      ql.Sweden(),                                         rank=90),
-    "DKK": CcyConv("DKK", ql.Actual360(),      ql.Denmark(),                                        rank=95),
-    "JPY": CcyConv("JPY", ql.Actual360(),      ql.Japan(),                                          rank=100),
+    "EUR": CcyConv("EUR", ql.Actual360(),      CALENDARS["EUR"], rank=10),
+    "GBP": CcyConv("GBP", ql.Actual365Fixed(), CALENDARS["GBP"], rank=20),
+    "AUD": CcyConv("AUD", ql.Actual365Fixed(), CALENDARS["AUD"], rank=30),
+    "NZD": CcyConv("NZD", ql.Actual365Fixed(), CALENDARS["NZD"], rank=40),
+    "USD": CcyConv("USD", ql.Actual360(),      CALENDARS["USD"], rank=50),
+    "CAD": CcyConv("CAD", ql.Actual365Fixed(), CALENDARS["CAD"], rank=60),
+    "CHF": CcyConv("CHF", ql.Actual360(),      CALENDARS["CHF"], rank=70),
+    "NOK": CcyConv("NOK", ql.Actual360(),      CALENDARS["NOK"], rank=80),
+    "SEK": CcyConv("SEK", ql.Actual360(),      CALENDARS["SEK"], rank=90),
+    "DKK": CcyConv("DKK", ql.Actual360(),      CALENDARS["DKK"], rank=95),
+    "JPY": CcyConv("JPY", ql.Actual360(),      CALENDARS["JPY"], rank=100),
 
     # --- Asia G10-adjacent ----------------------------------------------
-    "SGD": CcyConv("SGD", ql.Actual365Fixed(), ql.Singapore(),                                      rank=110),
-    "HKD": CcyConv("HKD", ql.Actual365Fixed(), ql.HongKong(),                                       rank=120),
+    "SGD": CcyConv("SGD", ql.Actual365Fixed(), CALENDARS["SGD"], rank=110),
+    "HKD": CcyConv("HKD", ql.Actual365Fixed(), CALENDARS["HKD"], rank=120),
 
     # --- LatAm -----------------------------------------------------------
-    "MXN": CcyConv("MXN", ql.Actual360(),      ql.Mexico(),                                         rank=130),
-    "BRL": CcyConv("BRL", ql.Actual360(),      ql.Brazil(),                                         rank=190),
-    "CLP": CcyConv("CLP", ql.Actual360(),      ql.Chile(),                                          rank=200),
-    "COP": CcyConv("COP", ql.Actual360(),      ql.WeekendsOnly(),  # no QuantLib Colombia calendar
+    "MXN": CcyConv("MXN", ql.Actual360(),      CALENDARS["MXN"], rank=130),
+    "BRL": CcyConv("BRL", ql.Actual360(),      CALENDARS["BRL"], rank=190),
+    "CLP": CcyConv("CLP", ql.Actual360(),      CALENDARS["CLP"], rank=200),
+    "COP": CcyConv("COP", ql.Actual360(),      CALENDARS["COP"],  # no QuantLib Colombia calendar
                     rank=210),
-    "ARS": CcyConv("ARS", ql.Actual360(),      ql.Argentina(),                                      rank=220),
+    "ARS": CcyConv("ARS", ql.Actual360(),      CALENDARS["ARS"], rank=220),
 
     # --- EMEA --------------------------------------------------------
-    "ZAR": CcyConv("ZAR", ql.Actual365Fixed(), ql.SouthAfrica(),                                    rank=140),
-    "PLN": CcyConv("PLN", ql.Actual365Fixed(), ql.Poland(),                                         rank=150),
-    "CZK": CcyConv("CZK", ql.Actual360(),      ql.CzechRepublic(),                                  rank=160),
-    "HUF": CcyConv("HUF", ql.Actual360(),      ql.Hungary(),                                        rank=170),
-    "TRY": CcyConv("TRY", ql.Actual360(),      ql.Turkey(),                                         rank=180),
-    "ILS": CcyConv("ILS", ql.Actual365Fixed(), ql.Israel(),                                         rank=230),
+    "ZAR": CcyConv("ZAR", ql.Actual365Fixed(), CALENDARS["ZAR"], rank=140),
+    "PLN": CcyConv("PLN", ql.Actual365Fixed(), CALENDARS["PLN"], rank=150),
+    "CZK": CcyConv("CZK", ql.Actual360(),      CALENDARS["CZK"], rank=160),
+    "HUF": CcyConv("HUF", ql.Actual360(),      CALENDARS["HUF"], rank=170),
+    "TRY": CcyConv("TRY", ql.Actual360(),      CALENDARS["TRY"], rank=180),
+    "ILS": CcyConv("ILS", ql.Actual365Fixed(), CALENDARS["ILS"], rank=230),
 
     # --- Asia EM -----------------------------------------------------
-    "CNH": CcyConv("CNH", ql.Actual360(),      ql.China(ql.China.SSE),  # approximation; offshore
+    "CNH": CcyConv("CNH", ql.Actual360(),      CALENDARS["CNH"],  # approximation; offshore
                     rank=240),                                          # CNH really trades HK+CN
-    "KRW": CcyConv("KRW", ql.Actual365Fixed(), ql.SouthKorea(ql.SouthKorea.Settlement),             rank=250),
-    "INR": CcyConv("INR", ql.Actual365Fixed(), ql.India(),                                          rank=260),
-    "TWD": CcyConv("TWD", ql.Actual365Fixed(), ql.Taiwan(),                                         rank=270),
-    "MYR": CcyConv("MYR", ql.Actual365Fixed(), ql.WeekendsOnly(),  # no QuantLib Malaysia calendar
+    "KRW": CcyConv("KRW", ql.Actual365Fixed(), CALENDARS["KRW"], rank=250),
+    "INR": CcyConv("INR", ql.Actual365Fixed(), CALENDARS["INR"], rank=260),
+    "TWD": CcyConv("TWD", ql.Actual365Fixed(), CALENDARS["TWD"], rank=270),
+    "MYR": CcyConv("MYR", ql.Actual365Fixed(), CALENDARS["MYR"],  # no QuantLib Malaysia calendar
                     rank=280),
-    "THB": CcyConv("THB", ql.Actual365Fixed(), ql.Thailand(),                                       rank=290),
-    "IDR": CcyConv("IDR", ql.Actual365Fixed(), ql.Indonesia(),                                      rank=300),
-    "PHP": CcyConv("PHP", ql.Actual365Fixed(), ql.WeekendsOnly(),  # no QuantLib Philippines calendar
+    "THB": CcyConv("THB", ql.Actual365Fixed(), CALENDARS["THB"], rank=290),
+    "IDR": CcyConv("IDR", ql.Actual365Fixed(), CALENDARS["IDR"], rank=300),
+    "PHP": CcyConv("PHP", ql.Actual365Fixed(), CALENDARS["PHP"],  # no QuantLib Philippines calendar
                     rank=310),
-    "VND": CcyConv("VND", ql.Actual365Fixed(), ql.WeekendsOnly(),  # no QuantLib Vietnam calendar
+    "VND": CcyConv("VND", ql.Actual365Fixed(), CALENDARS["VND"],  # no QuantLib Vietnam calendar
                     rank=320),
 }
 
@@ -286,13 +289,15 @@ def market_pair(ccy_a: str, ccy_b: str) -> str:
     return (a.code + b.code) if a.rank < b.rank else (b.code + a.code)
 
 
-def joint_calendar(pair: str) -> ql.Calendar:
+def settlement(pair: str) -> Settlement:
+    """What the date rules (``apeiron.gaia.time.pillars``) need about a pair."""
     p = get_pair(pair)
-    cal = ql.JointCalendar(CCY[p.base].calendar, CCY[p.quote].calendar)
-    if "USD" not in (p.base, p.quote):
-        # USD holidays still block settlement on crosses
-        cal = ql.JointCalendar(cal, CCY["USD"].calendar)
-    return cal
+    return Settlement(p.base, p.quote, p.spot_lag)
+
+
+def joint_calendar(pair: str) -> ql.Calendar:
+    """Both currencies' calendar; USD holidays still block settlement on crosses."""
+    return pillars.calendar(settlement(pair))
 
 
 # ---------------------------------------------------------------- dates
@@ -306,18 +311,25 @@ class OptionDates:
     premium: ql.Date
 
 
+def _ql_date(day) -> ql.Date:
+    return ql.Date(day.day, day.month, day.year)
+
+
 def spot_date(pair: str, trade: ql.Date) -> ql.Date:
     """Trade date -> spot date, honouring the pair's settlement lag.
 
-    Note: for USD crosses the strict market rule advances over non-USD
-    holidays first and then checks USD as a final good-business-day test.
-    This approximation uses the joint calendar throughout, which agrees in
-    the overwhelming majority of cases but can differ around US-only holidays.
+    The rule lives in ``apeiron.gaia.time.pillars.spot_date``. Note: for USD
+    crosses the strict market rule advances over non-USD holidays first and
+    then checks USD as a final good-business-day test. This approximation uses
+    the joint calendar throughout, which agrees in the overwhelming majority of
+    cases but can differ around US-only holidays.
     """
-    p = get_pair(pair)
-    return joint_calendar(pair).advance(
-        trade, ql.Period(p.spot_lag, ql.Days), ql.Following
-    )
+    return _ql_date(pillars.spot_date(settlement(pair), trade))
+
+
+def pillar_dates(pair: str, trade, tenor: str) -> "pillars.PillarDates":
+    """Spot, expiry and delivery (``datetime.date``) of ``tenor``, O/N included."""
+    return pillars.tenor_dates(settlement(pair), trade, tenor)
 
 
 def option_dates(pair: str,
@@ -328,23 +340,22 @@ def option_dates(pair: str,
     """Build the full date set for an FX option.
 
     Tenors are spot-relative and end-of-month aware: expiry is derived by
-    advancing spot by the tenor, then unwinding the settlement lag.
+    advancing spot by the tenor, then unwinding the settlement lag. The rules
+    live in ``apeiron.gaia.time.pillars``.
     """
-    p = get_pair(pair)
-    cal = joint_calendar(pair)
+    rules = settlement(pair)
     spot = spot_date(pair, trade)
 
     if expiry is None:
         if tenor is None:
             raise ValueError("supply either tenor or expiry")
-        delivery = cal.advance(spot, ql.Period(tenor),
-                               ql.ModifiedFollowing, True)   # end-of-month
-        expiry = cal.advance(delivery, ql.Period(-p.spot_lag, ql.Days),
-                             ql.Preceding)
+        if str(tenor).strip().upper() in pillars.OVERNIGHT:
+            raise ValueError("an overnight tenor has no spot-relative option dates")
+        dates = pillars.tenor_dates(rules, trade, tenor)
+        expiry, delivery = _ql_date(dates.expiry), _ql_date(dates.delivery)
     else:
-        expiry = cal.adjust(expiry, ql.Preceding)
-        delivery = cal.advance(expiry, ql.Period(p.spot_lag, ql.Days),
-                               ql.Following)
+        expiry = _ql_date(pillars.roll_back(rules, expiry))
+        delivery = _ql_date(pillars.delivery_for_expiry(rules, expiry))
 
     premium = spot if premium_at_spot else trade
     return OptionDates(trade, spot, expiry, delivery, premium)

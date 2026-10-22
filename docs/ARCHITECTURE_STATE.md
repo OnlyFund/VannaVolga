@@ -240,3 +240,60 @@ Left for sub-step 4:
 `resolved_smile_inputs` is gone). Atlas now reads no calendar at all. The
 remaining crossings belong to the Gaia and Hyperion moves (`vol_data`,
 `market_tables`, `smile_service` and others).
+
+## Item 6, step 1: the pillar date solver in Gaia time (2026-10-22)
+
+**Before:** the FX date rules were spread over five modules:
+- `fx_conventions` (pair calendar, spot date, option dates);
+- `market_tables` (O/N pillar);
+- `fx_discounting` (the delivery of an expiry);
+- `curve_roll` (O/N expiry, spot date, short-end nodes);
+- `spot_forwards` (value-date tokens and tenors).
+
+Each built its own QuantLib calendar steps.
+
+**After:**
+- **`apeiron/gaia/time/pillars.py`, the pillar date solver.** It covers the spot
+  date, next business day, roll back / forward, each tenor's expiry and
+  delivery (O/N included), and the delivery of a given expiry. Dates in and
+  out are `datetime.date`. A pair arrives as a `Settlement` (base, quote,
+  settlement lag), so time reads no pair conventions; `fx_conventions.settlement(pair)`
+  builds it.
+- **`apeiron/gaia/time/calendars.py`** holds the currency calendar table
+  (`fx_conventions.CCY` now takes its calendars from it), date coercion and
+  the date records.
+- **`fx_conventions` delegates** `joint_calendar`, `spot_date` and
+  `option_dates` to the solver, with unchanged QuantLib signatures, and adds
+  `pillar_dates`. The other callers listed above now use the solver too.
+- **The rules are unchanged.** Later rule changes (week tenors from the
+  valuation date, expiries skipping only weekends and 25 Dec / 1 Jan, the
+  17:00 New York rollover) happen in this one place.
+
+**Fail-safes:**
+- **`apeiron/gaia/time/legacy_dates.py`** keeps the old rules verbatim, as the
+  reference.
+- **Fallback:** if a solver rule raises where the old rule does not, the old
+  answer is used and the case is recorded in `pillars.FALLBACKS`. An error in
+  both is raised.
+- **Check mode:** with `VV_PILLAR_CHECK=1`, every answer is compared with the
+  old rule and any difference is recorded in `pillars.MISMATCHES`. The solver's
+  answer is kept. Both logs are bounded.
+
+**Validation:**
+- **New tests (`tests/test_pillar_dates.py`):** the solver and every caller
+  equal the legacy rules for every pair, on every day from 1 Dec 2027 to 31 Mar
+  2028, for 12 tenors. Value-date tokens are checked, and so are the fail-safes.
+- **Against HEAD:** every caller's public date function was dumped on HEAD
+  and on the new code: 65 pairs, 400 random dates from 2017 to 2032 plus
+  Oct 2026 – Feb 2027, all tenors, by-expiry dates, short-end nodes and
+  value-date tokens. 1,476,036 values, 0 differences, error messages included.
+  Check mode recorded 0 mismatches and 0 fallbacks.
+- **Currency table:** identical to HEAD (33 currencies: calendars, day counts,
+  ranks, holidays 2017–2035).
+- **Reference book:** priced on 10 valuation dates (markets 38 and 41,
+  21 Oct – 26 Feb 2027): 26,586 fields identical to HEAD.
+- **The app in headless Edge:** HEAD and the new code side by side. The
+  Markets, Pricer, Portfolio and Risk grids are identical, with no exceptions.
+- **The full suite passes:** 1741.
+
+**Crossings: 16, cycle groups: 3** (unchanged; no new crossing or cycle).

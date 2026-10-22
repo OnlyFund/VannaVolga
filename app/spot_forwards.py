@@ -5,7 +5,8 @@ in ``amount_ccy`` (``BASE``, the default, or ``TERM``, or either currency's
 code: buying term currency is selling base), ``value_date``, ``rate`` (blank
 takes the market outright at the value date), ``book`` and ``counterparty``.
 
-Value dates, on the pair's joint calendar:
+Value dates, on the pair's joint calendar (the pillar date solver,
+``apeiron.gaia.time.pillars``):
 
 * ``SPOT`` (or blank): the spot date;
 * ``TOM``: the business day after today, when it is before spot;
@@ -26,12 +27,12 @@ import re
 from datetime import date
 
 import pandas as pd
-import QuantLib as ql
 
+from apeiron.gaia.time import pillars
 from app import pricer
 from app.premium_side import BASE, TERM
 from app.trades.model import FX_FORWARD, Booking, Trade, TradeValidationError, as_date
-from helper_functions.fx_conventions import get_pair, joint_calendar, spot_date
+from helper_functions.fx_conventions import get_pair, settlement
 from helper_functions.input_resolvers import parse_expiry, parse_notional
 
 COLUMNS = ("currency_pair", "buy_sell", "amount", "amount_ccy", "value_date", "rate",
@@ -46,20 +47,11 @@ def _text(value):
     return str(value).strip()
 
 
-def _ql(day):
-    day = as_date(day)
-    return ql.Date(day.day, day.month, day.year)
-
-
-def _py(day):
-    return date(day.year(), day.month(), day.dayOfMonth())
-
-
 def value_date_for(pair, value, valuation_date):
     """The value date ``value`` (a token, a tenor or a date) names for ``pair``."""
-    calendar = joint_calendar(pair)
-    today = _ql(valuation_date)
-    spot = spot_date(pair, today)
+    rules = settlement(pair)
+    today = as_date(valuation_date)
+    spot = pillars.spot_date(rules, today)
     if isinstance(value, (date, pd.Timestamp)):
         token = ""
         typed = as_date(value)
@@ -68,27 +60,24 @@ def value_date_for(pair, value, valuation_date):
         typed = None
     if typed is None:
         if token in SPOT_TOKENS:
-            return _py(spot)
+            return spot
         if token in ("TOD", "ON"):
             raise ValueError("a deal for value today settles today: book it for TOM or later")
         if token in ("TOM", "TN"):
-            tomorrow = calendar.advance(today, ql.Period(1, ql.Days), ql.Following)
+            tomorrow = pillars.next_business_day(rules, today)
             if tomorrow >= spot:
-                return _py(spot)          # a T+1 pair's TOM is its spot
-            return _py(tomorrow)
+                return spot               # a T+1 pair's TOM is its spot
+            return tomorrow
         if token == "SN":
-            return _py(calendar.advance(spot, ql.Period(1, ql.Days), ql.Following))
+            return pillars.next_business_day(rules, spot)
         match = _TENOR.fullmatch(token)
         if match:
-            count, unit = int(match.group(1)), match.group(2)
-            if count <= 0:
+            if int(match.group(1)) <= 0:
                 raise ValueError(f"tenor {token} must be positive")
-            period = ql.Period(count, {"D": ql.Days, "W": ql.Weeks, "M": ql.Months,
-                                       "Y": ql.Years}[unit])
-            return _py(calendar.advance(spot, period, ql.ModifiedFollowing, True))
+            return pillars.tenor_delivery(rules, today, token)
         typed = parse_expiry(value, valuation_date)
-    if not calendar.isBusinessDay(_ql(typed)):
-        good = _py(calendar.adjust(_ql(typed), ql.Following))
+    if not pillars.is_business_day(rules, typed):
+        good = pillars.roll_forward(rules, typed)
         raise ValueError(f"value date {typed} is not a business day for {pair} "
                          f"(next: {good})")
     return typed

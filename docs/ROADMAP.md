@@ -92,6 +92,9 @@ apeiron/
   conventions, filled by Hyperion; the core discounts and reads conventions from
   them, and reads no calendar or convention table at all. Crossings 31 → 16.
 - The Spot / forward grid has a Remove column.
+- **Pillar date solver, step 1** (`apeiron/gaia/time/pillars.py`): every FX date
+  rule in one place, the rules unchanged, with the old rules kept as a checked
+  reference and fallback.
 
 ## Next
 

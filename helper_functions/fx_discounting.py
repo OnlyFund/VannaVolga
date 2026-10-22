@@ -49,14 +49,10 @@ except Exception:  # pragma: no cover
     ql = None
 
 try:  # pragma: no cover
-    from helper_functions.fx_conventions import (
-        CCY, get_pair, joint_calendar, spot_date,
-    )
+    from helper_functions.fx_conventions import CCY, get_pair
 except Exception:  # pragma: no cover
     CCY = None
     get_pair = None
-    joint_calendar = None
-    spot_date = None
 
 
 #: True when both QuantLib and the conventions table imported cleanly.
@@ -127,18 +123,14 @@ def delivery_date(pair: str, expiry, valuation=None) -> date:
     """Return the delivery (settlement) date for an option expiry.
 
     The expiry is first rolled back to a good business day on the joint
-    calendar, then advanced by the pair's settlement lag.  ``valuation`` is
+    calendar, then advanced by the pair's settlement lag (the pillar date
+    solver, ``apeiron.gaia.time.pillars``).  ``valuation`` is
     accepted for API symmetry but does not affect the result.
     """
     _require_conventions()
-    conv = get_pair(pair)
-    expiry_date = _to_date(expiry)
-    calendar = joint_calendar(pair)
-    adjusted = calendar.adjust(_to_ql(expiry_date), ql.Preceding)
-    delivered = calendar.advance(
-        adjusted, ql.Period(conv.spot_lag, ql.Days), ql.Following
-    )
-    return _to_date(delivered)
+    from apeiron.gaia.time.pillars import delivery_for_expiry
+    from helper_functions.fx_conventions import settlement
+    return delivery_for_expiry(settlement(pair), _to_date(expiry))
 
 
 def discount_year_fraction(pair: str, valuation, end) -> float:
