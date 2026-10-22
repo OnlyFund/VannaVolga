@@ -70,11 +70,12 @@ _GAIA_MARKET = [
     "market_data", "market_data.bloomberg_fetch", "market_data.depo_tickers",
     "market_data.discount_curves", "market_data.events", "market_data.fwd_tickers",
     "market_data.implied_rates", "market_data.market_tables", "market_data.sample_market",
+    "market_data.settlement_holidays",
     "market_data.snapshot_filter", "market_data.store", "market_data.universe",
     "market_data.vol_data", "market_data.vol_tickers",
     "app.market_store", "app.usd_spots",
-    # a local Bloomberg probe some checkouts keep (untracked)
-    "market_data.swap_dates",
+    # Bloomberg probes some checkouts keep (untracked)
+    "market_data.swap_dates", "market_data.bloomberg_holiday_calendar",
 ]
 
 _GAIA_BOOK = ["app.trades", "app.trades.model", "app.trades.store", "app.option_types"]

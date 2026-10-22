@@ -43,7 +43,8 @@ def test_on_an_options_delivery_date_it_values_as_that_hedge(markets):
     hedge = Trade(product_type=FX_FORWARD, currency_pair="EURUSD", trade_date=VALUATION,
                   expiry=date(2027, 1, 15), buy_sell="SELL", notional=10e6,
                   contract_rate=1.13, trade_id="H").normalized()
-    same = deal(date(2027, 1, 20), buy_sell="SELL", trade_id="D")   # delivery of 15-Jan
+    # Delivery of Fri 15-Jan: Tue 19-Jan (Mon 18-Jan, MLK, is a good intermediate day).
+    same = deal(date(2027, 1, 19), buy_sell="SELL", trade_id="D")
     rows = priced(markets, [hedge, same], extras=("rho", "phi"))
     for key in ("mtm_term", "mtm_base", "delta_offset", "spot_delta", "fwd_delta", "theta",
                 "rho", "phi"):

@@ -1,6 +1,6 @@
 """The FX date rules as the app had them before the pillar date solver.
 
-A verbatim reference, written the way the old code was (QuantLib tenor
+A verbatim reference, on the old QuantLib calendars, written the way the old code was (QuantLib tenor
 strings, each caller's own steps), for the fail-safes in
 :mod:`apeiron.gaia.time.pillars` and for reporting what each later rule change
 moves. Same signatures and results as the solver's rules. Not for new code.
@@ -11,7 +11,8 @@ Sources: ``fx_conventions.joint_calendar`` / ``spot_date`` / ``option_dates``,
 """
 import QuantLib as ql
 
-from apeiron.gaia.time.calendars import CALENDARS, OVERNIGHT, PillarDates, _py, _ql, as_date
+from apeiron.gaia.time.calendars import OVERNIGHT, PillarDates, _py, _ql, as_date
+from apeiron.gaia.time.calendars import QL_CALENDARS as CALENDARS   # the old calendars
 
 
 def joint_calendar(settlement):

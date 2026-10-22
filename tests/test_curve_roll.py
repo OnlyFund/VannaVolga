@@ -88,9 +88,12 @@ def test_usdzar_friday_rolls_curves_even_when_spot_settlement_is_unchanged():
     from pricing.greeks import calculate_forward_theta
     from pricing.pricing import Pricable, price_option
 
-    t0, t1 = date(2026, 10, 9), date(2026, 10, 12)
+    # Fri -> Mon with the same spot date: both settle Wed 12 Nov, since Tue 11 Nov
+    # (Veterans Day) is no USD settlement day. (A US-only Monday holiday would not do:
+    # it is a good intermediate day, so Friday's spot is the Tuesday.)
+    t0, t1 = date(2025, 11, 7), date(2025, 11, 10)
     pair = "USDZAR"
-    assert spot_date(pair, t0) == spot_date(pair, t1)
+    assert spot_date(pair, t0) == spot_date(pair, t1) == date(2025, 11, 12)
     vol_rows = pd.DataFrame(dict(
         tenor=["9M", "1Y"], expiry=pd.to_datetime(["2027-07-01", "2027-09-28"]),
         atm=[11.78, 12.07], rr_25=[2.03, 2.01], rr_10=[4.115, 4.07],

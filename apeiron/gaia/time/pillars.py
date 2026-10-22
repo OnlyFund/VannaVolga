@@ -8,24 +8,33 @@ A pair arrives as a :class:`Settlement` (its two currencies and settlement
 lag), so time imports no pair conventions; ``helper_functions.fx_conventions``
 builds it from its tables (``fx_conventions.settlement(pair)``).
 
-Step 1 of item 6: these are exactly the rules the app used before, gathered
-here so later rule changes happen in one place:
+The rules (checked 2026-10-22 against Bloomberg's historical settlement dates:
+21 pairs on 34 edge-case dates, 14,178 dates, 0 differences):
 
-* the pair's calendar is its two currencies' joint calendar, plus USD for a
-  cross;
-* spot is the trade date plus the settlement lag, Following;
-* a tenor's delivery is spot plus the tenor, Modified Following with the
-  end-of-month rule; its expiry is that delivery less the settlement lag,
-  Preceding (week tenors too, for now);
+* calendars are Bloomberg's settlement calendars
+  (:mod:`apeiron.gaia.time.calendars`); the pair's calendar is its two
+  currencies' joint calendar, plus USD for a cross;
+* **spot**: the settlement lag is counted on the pair's non-USD calendar(s), so
+  a US-only holiday is a good intermediate day, for USD pairs and crosses
+  alike; the spot day itself must be good in every currency including USD
+  (rolled forward until it is). MXN and BRL are the exceptions: US holidays
+  block their intermediate day too (``USD_BLOCKS_INTERMEDIATE``);
+* a tenor's **delivery** is spot plus the tenor: day and week tenors roll
+  Following; month and year tenors roll Modified Following with the
+  end-of-month rule;
+* a tenor's expiry is that delivery less the settlement lag, Preceding;
 * O/N expires on the next good day and delivers on that day's spot;
-* a given expiry is rolled back to a good day (Preceding) and delivers after
-  the settlement lag (Following).
+* a given expiry is rolled back to a good day (Preceding) and delivers on its
+  spot date.
 
-Fail-safes: the previous rules are kept verbatim in
-:mod:`apeiron.gaia.time.legacy_dates`. If a rule here raises where the old one
-does not, the old answer is used and the case is recorded in ``FALLBACKS``.
-With ``VV_PILLAR_CHECK=1`` (or ``CHECK = True``) every answer is also compared
-with the old rule and any difference is recorded in ``MISMATCHES``.
+Fail-safes: the previous rules are kept verbatim, on the old QuantLib
+calendars, in :mod:`apeiron.gaia.time.legacy_dates`. If a rule here raises
+where the old one does not, the old answer is used and the case is recorded in
+``FALLBACKS``. With ``VV_PILLAR_CHECK=1`` (or ``CHECK = True``) every answer is
+also compared with the old rule and each difference is recorded in
+``MISMATCHES`` (what the new rules move). A date outside a currency's
+Bloomberg coverage (QuantLib's holidays then apply) is recorded in
+``UNCOVERED``.
 """
 import os
 import re
@@ -33,15 +42,18 @@ from datetime import date
 import QuantLib as ql
 
 from apeiron.gaia.time.calendars import (  # noqa: F401  (re-exported)
-    CALENDARS, OVERNIGHT, PillarDates, Settlement, _py, _ql, as_date,
+    CALENDARS, OVERNIGHT, PillarDates, Settlement, _py, _ql, as_date, covered,
 )
 
 _TENOR = re.compile(r"(\d+)([DWMY])")
 _UNITS = {"D": ql.Days, "W": ql.Weeks, "M": ql.Months, "Y": ql.Years}
 
+#: Currencies whose spot counts US holidays as bad intermediate days too.
+USD_BLOCKS_INTERMEDIATE = frozenset({"MXN", "BRL"})
+
 CHECK = os.environ.get("VV_PILLAR_CHECK") == "1"
 #: Recorded fail-safe events, newest last, at most ``_KEEP`` each.
-FALLBACKS, MISMATCHES = [], []
+FALLBACKS, MISMATCHES, UNCOVERED = [], [], []
 _KEEP = 1000
 
 
@@ -78,12 +90,30 @@ def _guarded(name):
     return wrap
 
 
+def _joint(currencies) -> ql.Calendar:
+    joint = CALENDARS[currencies[0]]
+    for ccy in currencies[1:]:
+        joint = ql.JointCalendar(joint, CALENDARS[ccy])
+    return joint
+
+
+def _currencies(settlement):
+    pair = [settlement.base, settlement.quote]
+    return pair if "USD" in pair else pair + ["USD"]
+
+
 def calendar(settlement: Settlement) -> ql.Calendar:
     """The pair's settlement calendar: both currencies, plus USD for a cross."""
-    joint = ql.JointCalendar(CALENDARS[settlement.base], CALENDARS[settlement.quote])
-    if "USD" not in (settlement.base, settlement.quote):
-        joint = ql.JointCalendar(joint, CALENDARS["USD"])
-    return joint
+    return _joint(_currencies(settlement))
+
+
+def _note_coverage(settlement, *days):
+    """Record days outside a currency's Bloomberg coverage (QuantLib's apply)."""
+    for day in days:
+        missing = [ccy for ccy in _currencies(settlement) if not covered(ccy, day)]
+        entry = (tuple(missing), as_date(day))
+        if missing and entry not in UNCOVERED:
+            _record(UNCOVERED, entry)
 
 
 def is_business_day(settlement, day) -> bool:
@@ -108,26 +138,42 @@ def next_business_day(settlement, day) -> date:
 
 @_guarded("spot_date")
 def spot_date(settlement, trade) -> date:
-    """Trade date plus the settlement lag on the pair's calendar, Following."""
-    return _py(calendar(settlement).advance(
-        _ql(trade), ql.Period(settlement.spot_lag, ql.Days), ql.Following))
+    """The settlement lag on the non-USD calendar(s), then a day good in all.
+
+    A US-only holiday counts as a good intermediate day, except for
+    ``USD_BLOCKS_INTERMEDIATE`` currencies, whose lag is counted on the full
+    calendar.
+    """
+    full = calendar(settlement)
+    others = [ccy for ccy in (settlement.base, settlement.quote) if ccy != "USD"]
+    lag = ql.Period(settlement.spot_lag, ql.Days)
+    if set(others) & USD_BLOCKS_INTERMEDIATE:
+        spot = full.advance(_ql(trade), lag, ql.Following)
+    else:
+        part = _joint(others)
+        spot = part.advance(_ql(trade), lag, ql.Following)
+        while not full.isBusinessDay(spot):
+            spot = part.advance(spot, ql.Period(1, ql.Days), ql.Following)
+    _note_coverage(settlement, trade, _py(spot))
+    return _py(spot)
 
 
 @_guarded("delivery_for_expiry")
 def delivery_for_expiry(settlement, expiry) -> date:
-    """A given expiry, rolled back to a good day, plus the settlement lag."""
-    cal = calendar(settlement)
-    adjusted = cal.adjust(_ql(expiry), ql.Preceding)
-    return _py(cal.advance(adjusted, ql.Period(settlement.spot_lag, ql.Days), ql.Following))
+    """A given expiry, rolled back to a good day, delivers on its spot date."""
+    return spot_date(settlement, roll_back(settlement, expiry))
 
 
 @_guarded("tenor_delivery")
 def tenor_delivery(settlement, trade, tenor) -> date:
-    """Spot plus ``tenor`` (D, W, M, Y), Modified Following, end of month."""
+    """Spot plus ``tenor``: D and W roll Following; M and Y Modified Following, end of month."""
     count, unit = _parse(tenor)
-    return _py(calendar(settlement).advance(
+    month_like = unit in ("M", "Y")
+    delivery = _py(calendar(settlement).advance(
         _ql(spot_date(settlement, trade)), ql.Period(count, _UNITS[unit]),
-        ql.ModifiedFollowing, True))
+        ql.ModifiedFollowing if month_like else ql.Following, month_like))
+    _note_coverage(settlement, delivery)
+    return delivery
 
 
 @_guarded("tenor_dates")

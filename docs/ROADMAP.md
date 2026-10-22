@@ -95,6 +95,10 @@ apeiron/
 - **Pillar date solver, step 1** (`apeiron/gaia/time/pillars.py`): every FX date
   rule in one place, the rules unchanged, with the old rules kept as a checked
   reference and fallback.
+- **Pillar date solver, step 2:** Bloomberg settlement calendars (a static list from
+  CDR, 2005 to 5 years ahead) and the market's spot rule (US-only holidays are good
+  intermediate days, MXN/BRL excepted); week tenors roll Following. Matches all
+  14,178 Bloomberg reference dates (21 pairs, 34 edge-case dates).
 
 ## Next
 
@@ -269,6 +273,12 @@ after item 6.
 
 ## Later
 
+- Low priority: **add non-settlement holidays on the fly** when our calendar and
+  the market disagree (a dispute, a holiday announced late). A user override
+  layered on the Bloomberg list (`settlement_holidays.csv`): add or remove a
+  date for a currency, with who, when and why; append-only like the other
+  stores; the date rules use it at once; a refresh of the Bloomberg list keeps
+  the overrides and reports any it now agrees with.
 - Rate-risk matrix by currency and tenor (where rho and phi aggregate across pairs).
 - Event calendars by currency: first agree the scope and approach before building:
   - per currency, per pair, or both (currency events plus pair overrides);

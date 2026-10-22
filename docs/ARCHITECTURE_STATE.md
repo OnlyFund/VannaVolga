@@ -297,3 +297,68 @@ Each built its own QuantLib calendar steps.
 - **The full suite passes:** 1741.
 
 **Crossings: 16, cycle groups: 3** (unchanged; no new crossing or cycle).
+
+## Item 6, step 2: Bloomberg settlement calendars and the market's spot rule (2026-10-22)
+
+**Reference:** Bloomberg's historical settlement dates, fetched with
+`market_data/swap_dates.py` (`SETTLE_DT` with `REFERENCE_DATE` on the spot,
+forward and vol tickers). 21 pairs on 34 edge-case dates give 14,178 dates.
+Option expiries (`OPT_EXPIRE_DT`) are live only in Bloomberg, so they are not
+part of the reference.
+
+**Before:** QuantLib 1.31 calendars and the joint-calendar spot rule.
+**13.0%** of the reference dates differed. The causes:
+- **US-only holidays:** they were treated as bad intermediate days.
+- **Stale or missing QuantLib holidays:**
+  - CNH missed 74 days in 2024–26;
+  - PHP, COP, MYR and VND were weekends only;
+  - IDR, TWD, INR, THB and SGD had gaps;
+  - ILS had Friday closures.
+- **Week tenors:** they rolled with Modified Following.
+
+**After:**
+- **`market_data/settlement_holidays.py`** fetches each currency's Bloomberg
+  calendar code (`CALENDAR_CODE`) and non-settlement dates
+  (`CALENDAR_NON_SETTLEMENT_DATES`) into the static, tracked list
+  `market_data/calendars/settlement_holidays.csv`. The list covers 2005 to 5
+  years ahead and is refreshed by hand. ARS and MYR end in 2030, THB in 2027,
+  VND in 2026.
+- **`apeiron/gaia/time/calendars.py`** builds every settlement calendar from
+  that list. Outside a currency's coverage it uses QuantLib's holidays, and
+  without the list it uses QuantLib's calendars whole (`SOURCE` says which).
+  The old table stays as `QL_CALENDARS`.
+- **The solver's rules (`pillars.py`):**
+  - **Spot:** the settlement lag is counted on the non-USD calendar(s), so a
+    US-only holiday is a good intermediate day for USD pairs and crosses. The
+    spot day itself must be good in USD. MXN and BRL are excepted
+    (`USD_BLOCKS_INTERMEDIATE`).
+  - **Tenors:** day and week tenors roll Following; month and year tenors
+    roll Modified Following with the end-of-month rule.
+  - **Expiry to delivery:** an expiry delivers on its spot date.
+  - Tenor expiries (delivery less the lag) are unchanged: their rules are a
+    later step.
+- **Fail-safes:**
+  - `legacy_dates` keeps the old rules on `QL_CALENDARS`;
+  - check mode records exactly what the new rules move;
+  - `UNCOVERED` records dates outside the Bloomberg coverage.
+
+**Validation:**
+- **Against Bloomberg:** **0 of 14,178** reference dates differ. The fixture
+  `tests/fixtures/bbg_settlement_dates_20261022.csv` is a tracked test.
+- **Reference book** on 10 valuation dates: 10 trades move. Seven expire on
+  Fri 15 Jan 2027, so their delivery moves from 20 to 19 Jan (MLK is a good
+  intermediate day). AUDUSD and EURAUD's 6M pillar moves from 26 to 27 Apr
+  2027 (Bloomberg's AUD calendar has the ANZAC Day substitute). The largest
+  MTM change is 1.3k on −683k. No fallbacks.
+- **Golden, regenerated and reviewed:** only EURUSD and USDJPY move. Line 1
+  expires on 15 Jan 2027, which is also the golden market's 3M pillar expiry,
+  and line 7 is interpolated from that pillar (about 1e-8). Their hedges,
+  totals and spot ladders move with them. Check mode traced every change to
+  `delivery_for_expiry(2027-01-15)` and theta's roll of it (`2027-01-18`). The
+  pillar's delivery now agrees with its tenor delivery (19 Jan); before, they
+  disagreed. USDMXN golden is unchanged.
+- **Two tests re-dated** because their premise followed the old spot rule: the
+  USDZAR roll test (Columbus Day is now a good intermediate day) and the
+  value-dated forward that delivers with the 15 Jan expiry.
+- **Caches:** `SURFACE_CACHE_VERSION` 5 → 6 and the result `CACHE_VERSION`
+  1 → 2, so nothing built on the old dates is reused.

@@ -12,7 +12,7 @@ import hashlib
 import json
 
 #: Bump when anything that changes a priced result changes in the code.
-CACHE_VERSION = 1
+CACHE_VERSION = 2   # 2: Bloomberg settlement calendars + spot rule move dates
 
 
 def _text(value):
