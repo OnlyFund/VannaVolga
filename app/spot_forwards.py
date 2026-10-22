@@ -6,7 +6,7 @@ code: buying term currency is selling base), ``value_date``, ``rate`` (blank
 takes the market outright at the value date), ``book`` and ``counterparty``.
 
 Value dates, on the pair's joint calendar (the pillar date solver,
-``apeiron.gaia.time.pillars``):
+``apeiron.gaia.market_dates.pillars``):
 
 * ``SPOT`` (or blank): the spot date;
 * ``TOM``: the business day after today, when it is before spot;
@@ -28,7 +28,7 @@ from datetime import date
 
 import pandas as pd
 
-from apeiron.gaia.time import pillars
+from apeiron.gaia.market_dates import pillars
 from app import pricer
 from app.premium_side import BASE, TERM
 from app.trades.model import FX_FORWARD, Booking, Trade, TradeValidationError, as_date

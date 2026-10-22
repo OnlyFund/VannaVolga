@@ -28,8 +28,8 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional
 import QuantLib as ql
 
-from apeiron.gaia.time import pillars
-from apeiron.gaia.time.pillars import CALENDARS, Settlement
+from apeiron.gaia.market_dates import pillars
+from apeiron.gaia.market_dates.pillars import CALENDARS, Settlement
 
 
 # ---------------------------------------------------------------- currencies
@@ -290,7 +290,7 @@ def market_pair(ccy_a: str, ccy_b: str) -> str:
 
 
 def settlement(pair: str) -> Settlement:
-    """What the date rules (``apeiron.gaia.time.pillars``) need about a pair."""
+    """What the date rules (``apeiron.gaia.market_dates.pillars``) need about a pair."""
     p = get_pair(pair)
     return Settlement(p.base, p.quote, p.spot_lag)
 
@@ -318,7 +318,7 @@ def _ql_date(day) -> ql.Date:
 def spot_date(pair: str, trade: ql.Date) -> ql.Date:
     """Trade date -> spot date, honouring the pair's settlement lag.
 
-    The rule lives in ``apeiron.gaia.time.pillars.spot_date``. Note: for USD
+    The rule lives in ``apeiron.gaia.market_dates.pillars.spot_date``. Note: for USD
     crosses the strict market rule advances over non-USD holidays first and
     then checks USD as a final good-business-day test. This approximation uses
     the joint calendar throughout, which agrees in the overwhelming majority of
@@ -328,8 +328,13 @@ def spot_date(pair: str, trade: ql.Date) -> ql.Date:
 
 
 def pillar_dates(pair: str, trade, tenor: str) -> "pillars.PillarDates":
-    """Spot, expiry and delivery (``datetime.date``) of ``tenor``, O/N included."""
+    """An option's spot, expiry and delivery (``datetime.date``) of ``tenor``, O/N included."""
     return pillars.tenor_dates(settlement(pair), trade, tenor)
+
+
+def forward_delivery(pair: str, trade, tenor: str):
+    """A forward (swap) tenor's delivery (``datetime.date``): spot plus the tenor."""
+    return pillars.forward_delivery(settlement(pair), trade, tenor)
 
 
 def option_dates(pair: str,
@@ -341,7 +346,7 @@ def option_dates(pair: str,
 
     Tenors are spot-relative and end-of-month aware: expiry is derived by
     advancing spot by the tenor, then unwinding the settlement lag. The rules
-    live in ``apeiron.gaia.time.pillars``.
+    live in ``apeiron.gaia.market_dates.pillars``.
     """
     rules = settlement(pair)
     spot = spot_date(pair, trade)
@@ -354,7 +359,7 @@ def option_dates(pair: str,
         dates = pillars.tenor_dates(rules, trade, tenor)
         expiry, delivery = _ql_date(dates.expiry), _ql_date(dates.delivery)
     else:
-        expiry = _ql_date(pillars.roll_back(rules, expiry))
+        expiry = _ql_date(pillars.typed_expiry(expiry))
         delivery = _ql_date(pillars.delivery_for_expiry(rules, expiry))
 
     premium = spot if premium_at_spot else trade

@@ -1,4 +1,4 @@
-"""The pillar date solver (apeiron.gaia.time.pillars) against Bloomberg.
+"""The pillar date solver (apeiron.gaia.market_dates.pillars) against Bloomberg.
 
 The reference is Bloomberg's historical settlement dates
 (``tests/fixtures/bbg_settlement_dates_20261022.csv``, fetched with
@@ -16,7 +16,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from apeiron.gaia.time import calendars, legacy_dates, pillars
+from apeiron.gaia.market_dates import calendars, legacy_dates, pillars
 from helper_functions import fx_conventions as conv
 
 REFERENCE = Path(__file__).parent / "fixtures" / "bbg_settlement_dates_20261022.csv"
@@ -38,7 +38,9 @@ def _solver_date(row):
         return pillars.next_business_day(rules, spot)
     if row.tenor == "ON":       # Bloomberg's O/N settles tomorrow (the swap's far date)
         return pillars.next_business_day(rules, row.reference_date)
-    return pillars.tenor_dates(rules, row.reference_date, row.tenor).delivery
+    # Forwards, and the vol tickers' SETTLE_DT (which follows the forward convention
+    # for week tenors; option deliveries are checked on the pricing page cases below).
+    return pillars.forward_delivery(rules, row.reference_date, row.tenor)
 
 
 def test_every_bloomberg_settlement_date():
@@ -48,6 +50,33 @@ def test_every_bloomberg_settlement_date():
     wrong = [(row.reference_date, row.pair, row.kind, row.tenor, row.settle_dt, got)
              for row, got in answers if got != row.settle_dt]
     assert wrong == [], f"{len(wrong)} dates differ from Bloomberg, e.g. {wrong[:5]}"
+
+
+# The Bloomberg pricing-page cases live in tests/edge_cases/ (test_date_edge_cases.py).
+
+
+@pytest.mark.parametrize("pair", PAIRS)
+def test_option_expiries_are_expiry_days_that_spot_onto_their_delivery(pair):
+    rules = conv.settlement(pair)
+    for day in DAYS[::2]:
+        for tenor in TENORS:
+            dates = pillars.tenor_dates(rules, day, tenor)
+            assert pillars.is_expiry_day(rules, dates.expiry), (day, tenor)
+            assert pillars.spot_date(rules, dates.expiry) == dates.delivery, (day, tenor)
+            if tenor[-1] in "MY":
+                later = pillars.next_expiry_day(rules, dates.expiry + timedelta(days=1))
+                assert pillars.spot_date(rules, later) > dates.delivery, (day, tenor)   # the latest
+
+
+def test_expiry_days_are_weekdays_when_either_currency_is_open():
+    eur, jpy = conv.settlement("EURUSD"), conv.settlement("USDJPY")
+    assert pillars.is_expiry_day(eur, date(2025, 1, 20))          # MLK: EUR is open
+    assert pillars.is_expiry_day(eur, date(2025, 11, 27))         # Thanksgiving
+    assert pillars.is_expiry_day(jpy, date(2025, 9, 15))          # Japanese holiday: USD is open
+    assert not pillars.is_expiry_day(eur, date(2025, 12, 25))     # both closed
+    assert pillars.is_expiry_day(jpy, date(2025, 12, 25))         # Tokyo is open
+    assert not pillars.is_expiry_day(eur, date(2026, 1, 1))
+    assert not pillars.is_expiry_day(eur, date(2025, 11, 29))     # Saturday
 
 
 @pytest.mark.parametrize("pair, trade, spot", [
@@ -62,10 +91,10 @@ def test_usd_intermediate_day_rule(pair, trade, spot):
     assert pillars.spot_date(conv.settlement(pair), trade) == spot
 
 
-def test_week_tenors_roll_following_months_modified_following():
+def test_forward_week_tenors_roll_following_months_modified_following():
     cnh = conv.settlement("USDCNH")
     # 1W from spot 21 Jan 2025 lands in Chinese New Year: rolls forward into February.
-    assert pillars.tenor_dates(cnh, date(2025, 1, 17), "1W").delivery == date(2025, 2, 5)
+    assert pillars.forward_delivery(cnh, date(2025, 1, 17), "1W") == date(2025, 2, 5)
     eur = conv.settlement("EURUSD")
     # Spot on the last business day of October -> 1M is the last of November.
     dates = pillars.tenor_dates(eur, date(2026, 10, 28), "1M")
@@ -83,6 +112,9 @@ def test_callers_give_the_solver_dates(pair):
         assert curve_roll.spot_date(pair, day) == pillars.spot_date(rules, day)
         assert curve_roll.overnight_expiry(pair, day) == pillars.next_business_day(rules, day)
         assert delivery_date(pair, day) == pillars.delivery_for_expiry(rules, day)
+        from market_data.market_tables import forward_delivery
+        for tenor in ("1W", "1M", "1Y"):
+            assert forward_delivery(pair, day, tenor).date() == pillars.forward_delivery(rules, day, tenor)
         assert conv.spot_date(pair, ql.Date(day.day, day.month, day.year)) == ql.Date(
             *reversed(pillars.spot_date(rules, day).timetuple()[:3]))
         for tenor in TENORS:
@@ -114,7 +146,8 @@ def test_fx_conventions_keeps_its_quantlib_signatures():
     assert (dates.spot, dates.delivery) == (ql.Date(30, 10, 2026), ql.Date(30, 11, 2026))
     assert conv.spot_date("EURUSD", trade) == ql.Date(30, 10, 2026)
     by_expiry = conv.option_dates("EURUSD", trade, expiry=ql.Date(28, 11, 2026))   # a Saturday
-    assert (by_expiry.expiry, by_expiry.delivery) == (ql.Date(27, 11, 2026), ql.Date(1, 12, 2026))
+    # A weekend expiry moves to the next weekday (Bloomberg's pricing page).
+    assert (by_expiry.expiry, by_expiry.delivery) == (ql.Date(30, 11, 2026), ql.Date(2, 12, 2026))
     with pytest.raises(ValueError):
         conv.option_dates("EURUSD", trade, "ON")
 
@@ -143,7 +176,7 @@ def test_a_failing_rule_falls_back_to_the_legacy_rule_and_is_recorded():
     dates = pillars.tenor_dates(rules, date(2026, 10, 22), "1Y6M")
     assert dates == legacy_dates.tenor_dates(rules, date(2026, 10, 22), "1Y6M")
     assert len(pillars.FALLBACKS) == before + 1
-    assert pillars.FALLBACKS[-1][0] == "tenor_delivery"     # recorded where it failed
+    assert pillars.FALLBACKS[-1][0] == "tenor_dates"        # recorded where it failed
 
 
 def test_an_error_in_both_rules_is_raised_not_hidden():

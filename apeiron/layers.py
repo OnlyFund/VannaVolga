@@ -8,7 +8,7 @@ placed here, so the map can never silently fall behind the code.
 Levels:
 
 * ``atlas`` - core numerical engine; imports nothing else in the suite;
-* ``gaia.time``, ``gaia.market``, ``gaia.book`` - the data foundation; each
+* ``gaia.market_dates``, ``gaia.market``, ``gaia.book`` - the data foundation; each
   imports only itself;
 * ``hyperion`` - analytics, risk, services and cache; combines the above;
 * ``athena`` (strategy, optimizer, backtest), ``delphi`` (research) and
@@ -20,13 +20,13 @@ Modules move to ``apeiron/<level>/`` one level at a time; their entry here
 changes path, not level.
 """
 
-BASE = ("atlas", "gaia.time", "gaia.market", "gaia.book")
+BASE = ("atlas", "gaia.market_dates", "gaia.market", "gaia.book")
 CONSUMERS = ("athena", "delphi", "olympus")
 
 #: For each level, the levels its modules may import (besides their own).
 ALLOWED = {
     "atlas": set(),
-    "gaia.time": set(),
+    "gaia.market_dates": set(),
     "gaia.market": set(),
     "gaia.book": set(),
     "hyperion": set(BASE),
@@ -58,7 +58,7 @@ _ATLAS = [
     "market_data.model",
 ]
 
-_GAIA_TIME = [
+_GAIA_MARKET_DATES = [
     "app.curve_roll", "market_data.variance_calendar", "market_data.event_calendar",
     # pair conventions + calendars + option dates: to be split (conventions to
     # gaia.market, calendar logic stays here)
@@ -102,7 +102,7 @@ _DELPHI = [
 
 MODULE_LEVELS = {
     **{m: "atlas" for m in _ATLAS},
-    **{m: "gaia.time" for m in _GAIA_TIME},
+    **{m: "gaia.market_dates" for m in _GAIA_MARKET_DATES},
     **{m: "gaia.market" for m in _GAIA_MARKET},
     **{m: "gaia.book" for m in _GAIA_BOOK},
     **{m: "hyperion" for m in _HYPERION},
@@ -116,7 +116,7 @@ RE_EXPORTS = {"market_data": "market_data.model"}
 
 #: Whole folders placed by prefix (scripts and studies, not imported by the library).
 PREFIX_LEVELS = {"research.": "delphi", "apeiron.atlas": "atlas",
-                 "apeiron.gaia.time": "gaia.time", "apeiron.gaia.market": "gaia.market",
+                 "apeiron.gaia.market_dates": "gaia.market_dates", "apeiron.gaia.market": "gaia.market",
                  "apeiron.gaia.book": "gaia.book", "apeiron.hyperion": "hyperion",
                  "apeiron.athena": "athena", "apeiron.delphi": "delphi",
                  "apeiron.olympus": "olympus"}

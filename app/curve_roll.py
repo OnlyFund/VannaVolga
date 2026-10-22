@@ -61,7 +61,7 @@ def overnight_expiry(pair, valuation) -> date:
     Falls back to the next FX trading day when the pair has no conventions.
     """
     try:
-        from apeiron.gaia.time.pillars import next_business_day as pair_next_day
+        from apeiron.gaia.market_dates.pillars import next_business_day as pair_next_day
         from helper_functions.fx_conventions import settlement
         return pair_next_day(settlement(pair), _to_date(valuation))
     except Exception:
@@ -71,7 +71,7 @@ def overnight_expiry(pair, valuation) -> date:
 def spot_date(pair, valuation) -> date:
     """Return the pair's spot date, falling back to two weekdays."""
     try:
-        from apeiron.gaia.time.pillars import spot_date as pair_spot_date
+        from apeiron.gaia.market_dates.pillars import spot_date as pair_spot_date
         from helper_functions.fx_conventions import settlement
         return pair_spot_date(settlement(pair), _to_date(valuation))
     except Exception:
@@ -144,7 +144,7 @@ def short_end_nodes(pair, curve_date, short_points):
     spot is spot plus SN. A swap whose dates do not meet spot on the pair's
     calendar is left out, as is a T+1 pair's TN (it would start at spot).
     """
-    from apeiron.gaia.time import pillars
+    from apeiron.gaia.market_dates import pillars
     from helper_functions.fx_conventions import settlement
 
     points = short_points or {}

@@ -7,7 +7,7 @@ worked out here rather than stored:
 
 * ``1W`` ... ``1Y``: spot date plus the tenor (end-of-month aware), back by
   the settlement lag, on the pair's joint calendar (the pillar date solver,
-  ``apeiron.gaia.time.pillars``, through ``fx_conventions.pillar_dates``);
+  ``apeiron.gaia.market_dates.pillars``, through ``fx_conventions.pillar_dates``);
 * ``ON``: the next business day, delivering on its spot date.
 
 ``vol_table`` has the Markets tab's vol columns (vols in percentage points)
@@ -20,7 +20,7 @@ and ``market_bundle`` does it for every pair in the snapshot.
 import pandas as pd
 import QuantLib as ql
 
-from helper_functions.fx_conventions import pillar_dates
+from helper_functions.fx_conventions import forward_delivery as _forward_delivery, pillar_dates
 from market_data.vol_tickers import TENORS
 
 
@@ -35,9 +35,14 @@ def _ql_date(value):
 
 
 def tenor_dates(pair, valuation_date, tenor):
-    """``(expiry, delivery)`` of ``tenor`` traded on ``valuation_date``."""
+    """An option's ``(expiry, delivery)`` of ``tenor`` traded on ``valuation_date``."""
     dates = pillar_dates(pair, pd.Timestamp(valuation_date).date(), tenor.upper())
     return pd.Timestamp(dates.expiry), pd.Timestamp(dates.delivery)
+
+
+def forward_delivery(pair, valuation_date, tenor):
+    """A forward (swap) tenor's delivery traded on ``valuation_date``: spot plus the tenor."""
+    return pd.Timestamp(_forward_delivery(pair, pd.Timestamp(valuation_date).date(), tenor.upper()))
 
 
 def vol_table(surface, pair, valuation_date, tenors=APP_TENORS):
@@ -82,7 +87,7 @@ def forward_table(snapshot, pair, tenors=APP_TENORS, curves=None):
     for tenor in tenors:
         if tenor not in points:
             continue
-        _, delivery = tenor_dates(pair, snapshot.date, tenor)
+        delivery = forward_delivery(pair, snapshot.date, tenor)
         rows.append({"tenor": tenor, "delivery_date": delivery, "fwd_pts": points[tenor],
                      "term_discount": curve.rates[tenor]})
     return pd.DataFrame(rows, columns=list(FORWARD_COLUMNS)), list(curve.notes), curve.source

@@ -13,6 +13,11 @@ Last updated 2026-10-22. Decisions are recorded with the item they belong to.
   a backtester and a portfolio optimizer.
 - **Stored data is append-only and versioned** (trades, event calendars).
   Migrations take a backup first and run all or nothing; newer schemas are refused.
+- **Date rules are confirmed against the market.** Every date rule change comes
+  with edge cases in `tests/edge_cases/*.csv`, proposed by
+  `python -m apeiron.gaia.market_dates.edge_cases` and confirmed by hand on
+  Bloomberg's option pricing page (`priority` 1 first). The tests hold the
+  solver to every confirmed answer.
 - **A stored snapshot is static:** its valuation of a book is deterministic, so it
   is computed once and cached.
 
@@ -25,7 +30,7 @@ six levels:
 ```
 apeiron/
   atlas/      core numerical engine
-  gaia/       data foundation: time/, market/, book/
+  gaia/       data foundation: market_dates/, market/, book/
   hyperion/   engine room: analytics/, risk/, services/, cache/
   athena/     decision layer: strategy/, optimizer/, backtest/
   delphi/     research
@@ -35,7 +40,8 @@ apeiron/
 - **Atlas** (core) imports nothing else in the suite. It is pure numerics, usable
   by anyone: dates, year fractions, discount factors and conventions are inputs.
 - **Gaia**'s three parts are each independent of one another and of Atlas:
-  - **time:** calendars, holidays, pillar dates, cuts, rollover, variance days;
+  - **market_dates:** settlement calendars, holidays, pillar and expiry dates,
+    cuts, rollover, variance days;
   - **market:** fetch, snapshot store, event calendars, discount curves and the
     static pair conventions;
   - **book:** a database of trades and lifecycle events.
@@ -54,7 +60,7 @@ apeiron/
    the list may only shrink.
 2. **New work goes straight to its final home:**
    - the result cache → `hyperion/cache`;
-   - the intraday cut and the pillar date solver → `gaia/time`;
+   - the intraday cut and the pillar date solver → `gaia/market_dates`;
    - lifecycle logic → `hyperion`, and its event records → `gaia/book`.
 
    Until the old modules move, these may call them through marked transitional
@@ -99,13 +105,18 @@ apeiron/
   CDR, 2005 to 5 years ahead) and the market's spot rule (US-only holidays are good
   intermediate days, MXN/BRL excepted); week tenors roll Following. Matches all
   14,178 Bloomberg reference dates (21 pairs, 34 edge-case dates).
+- **Pillar date solver, step 3:** option expiries. Expiry days are weekdays when
+  either of the pair's currencies is open; day/week tenors expire on trade date +
+  tenor; month/year tenors on the latest expiry day whose spot is the delivery;
+  forwards keep spot + tenor. Checked on Bloomberg's pricing page (36 cases).
+  Gaia's date level is now `market_dates`.
 
 ## Next
 
 Items 1–3 are done, and item 5's Atlas step (see above). Next is item 6, the
 pillar date solver, in this order (agreed 2026-10-22):
 1. move today's date logic (`option_dates`: Modified Following and end of month
-   on QuantLib's joint calendar) into `gaia/time` as the solver, with pricing
+   on QuantLib's joint calendar) into `gaia/market_dates` as the solver, with pricing
    identical;
 2. build the rolled market on it;
 3. add the test that theta equals the date roll;
@@ -114,7 +125,7 @@ pillar date solver, in this order (agreed 2026-10-22):
 Item 6's open questions are answered before step 2. Item 4 is paused and resumes
 after item 6.
 
-4. **Intraday time to the expiry cut** (New York / Tokyo; paused), built in `gaia/time`.
+4. **Intraday time to the expiry cut** (New York / Tokyo; paused), built in `gaia/market_dates`.
    Decided:
    - the cuts are **TOK = 15:00 Tokyo** and **NYK = 10:00 New York** (clock
      changes included);
@@ -155,7 +166,7 @@ after item 6.
      the `app.ui` ↔ `app.ui.app` load-time cycle is removed.
 
    Suggested slots: Gaia after item 6, Hyperion before item 8, Olympus with item 17.
-6. **Pillar date solver** (next) (in `gaia/time`): one date service for O/N, days,
+6. **Pillar date solver** (next) (in `gaia/market_dates`): one date service for O/N, days,
    weeks, months and years from any valuation date.
    - Delivery is spot plus tenor with **Modified Following** (a weekend or holiday
      in either currency moves to the next good day, back to the previous one if

@@ -362,3 +362,61 @@ part of the reference.
   value-dated forward that delivers with the 15 Jan expiry.
 - **Caches:** `SURFACE_CACHE_VERSION` 5 → 6 and the result `CACHE_VERSION`
   1 → 2, so nothing built on the old dates is reused.
+
+## Gaia's time level renamed `market_dates` (2026-10-22)
+
+`apeiron/gaia/time/` is now `apeiron/gaia/market_dates/` (level
+`gaia.market_dates`). It is the home of every date rule: settlement calendars,
+pillar and expiry dates, and later the expiry cut, the 17:00 New York rollover
+and the variance days. Earlier sections keep the name they had at the time.
+Crossings and cycles are unchanged.
+
+## Item 6, step 3: option expiry rules (2026-10-22)
+
+**Reference:** Bloomberg's option pricing page, checked by hand (historical
+expiries are not available through the API).
+
+**Before:** a tenor's expiry was its delivery less the settlement lag on the
+full calendar (Preceding), week tenors included. A typed expiry rolled back to
+a good business day, and forwards and options shared the same tenor delivery.
+
+**After (`market_dates/pillars.py`):**
+- **Expiry days:** a weekday on which at least one of the pair's two
+  currencies is open. US-only, Japanese or UK holidays are valid expiries.
+  25 Dec and 1 Jan are not for EURUSD (both currencies closed), but 25 Dec is
+  for USDJPY (Tokyo is open).
+- **O/N, day and week tenors:** expiry = trade date + tenor, moved to the next
+  expiry day; delivery = the expiry's spot date.
+- **Month and year tenors:** delivery = the forward delivery; expiry = the
+  latest expiry day whose spot date is that delivery (`expiry_for_delivery`).
+  From 2018 to Oct 2026, every pair and month tenor has one.
+- **Typed expiries:** a weekend moves to the next weekday, and a weekday is
+  taken as given (`typed_expiry`).
+- **Forwards** keep spot + tenor through a separate `forward_delivery`. The
+  forward table, implied rates and the sample market use it; option pillars
+  use `tenor_dates`.
+
+**Validation:**
+- 26 tenor cases and 9 typed year-end cases on the pricing page, plus the
+  USDJPY 3M whose delivery (29 Dec 2026) only a 25 Dec expiry reaches. All
+  match, and all are tests now.
+- The 14,178 historical Bloomberg dates still match. Bloomberg's vol tickers'
+  `SETTLE_DT` for week tenors follows the forward convention, so those rows
+  compare with `forward_delivery`.
+- A property test over every pair checks each option expiry: it is an expiry
+  day, its spot date is its delivery, and month and year expiries are the
+  latest such day.
+- The reference book on 10 valuation dates is unchanged, and so is golden.
+- The full suite passes. Two tests now build their forward points on forward
+  deliveries, the convention `implied_rates` inverts.
+
+## Date edge cases confirmed against the market (2026-10-22)
+
+`tests/edge_cases/` holds the option date edge cases that the market confirms
+(`option_dates.csv` for tenors, `typed_expiries.csv` for typed expiries), with
+a README describing the practice. `apeiron/gaia/market_dates/edge_cases.py`
+proposes cases by category, a few per pair; rerunning it keeps the market
+answers already filled in. `tests/test_date_edge_cases.py` enforces them.
+
+The first set is 347 tenor and 143 typed cases. 36 are confirmed (the pricing
+page checks above). 58 are marked `priority` 1 as the next batch to confirm.

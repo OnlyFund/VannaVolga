@@ -24,7 +24,7 @@ import pandas as pd
 from helper_functions.fx_conventions import CCY, get_pair, spot_date
 from market_data.depo_tickers import DEPO_ALIASES
 from market_data.discount_curves import NOMINAL_DAYS, TENORS as RATE_TENORS
-from market_data.market_tables import _ql_date, tenor_dates
+from market_data.market_tables import _ql_date, forward_delivery
 from market_data.universe import CCY_LIST, CURRENCIES, FX_UNIVERSE
 from market_data.vol_tickers import TENORS as VOL_TENORS
 
@@ -125,7 +125,7 @@ def forward_points(pair, valuation_date):
     r_base, r_term = rate_curve(base), rate_curve(term)
     points = {}
     for tenor in RATE_TENORS:
-        _, delivery = tenor_dates(pair, valuation_date, tenor)
+        delivery = forward_delivery(pair, valuation_date, tenor)
         delivery = _ql_date(delivery)
         tau_base = CCY[base].day_count.yearFraction(spot_day, delivery)
         tau_term = CCY[term].day_count.yearFraction(spot_day, delivery)

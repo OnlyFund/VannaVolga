@@ -124,11 +124,11 @@ def delivery_date(pair: str, expiry, valuation=None) -> date:
 
     The expiry is first rolled back to a good business day on the joint
     calendar, then advanced by the pair's settlement lag (the pillar date
-    solver, ``apeiron.gaia.time.pillars``).  ``valuation`` is
+    solver, ``apeiron.gaia.market_dates.pillars``).  ``valuation`` is
     accepted for API symmetry but does not affect the result.
     """
     _require_conventions()
-    from apeiron.gaia.time.pillars import delivery_for_expiry
+    from apeiron.gaia.market_dates.pillars import delivery_for_expiry
     from helper_functions.fx_conventions import settlement
     return delivery_for_expiry(settlement(pair), _to_date(expiry))
 

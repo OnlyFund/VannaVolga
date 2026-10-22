@@ -2,7 +2,7 @@
 
 A verbatim reference, on the old QuantLib calendars, written the way the old code was (QuantLib tenor
 strings, each caller's own steps), for the fail-safes in
-:mod:`apeiron.gaia.time.pillars` and for reporting what each later rule change
+:mod:`apeiron.gaia.market_dates.pillars` and for reporting what each later rule change
 moves. Same signatures and results as the solver's rules. Not for new code.
 
 Sources: ``fx_conventions.joint_calendar`` / ``spot_date`` / ``option_dates``,
@@ -11,8 +11,8 @@ Sources: ``fx_conventions.joint_calendar`` / ``spot_date`` / ``option_dates``,
 """
 import QuantLib as ql
 
-from apeiron.gaia.time.calendars import OVERNIGHT, PillarDates, _py, _ql, as_date
-from apeiron.gaia.time.calendars import QL_CALENDARS as CALENDARS   # the old calendars
+from apeiron.gaia.market_dates.calendars import OVERNIGHT, PillarDates, _py, _ql, as_date
+from apeiron.gaia.market_dates.calendars import QL_CALENDARS as CALENDARS   # the old calendars
 
 
 def joint_calendar(settlement):
@@ -56,3 +56,9 @@ def tenor_dates(settlement, trade, tenor):
     delivery = cal.advance(spot, ql.Period(key), ql.ModifiedFollowing, True)   # end-of-month
     expiry = cal.advance(delivery, ql.Period(-settlement.spot_lag, ql.Days), ql.Preceding)
     return PillarDates(key, trade_day, _py(spot), _py(expiry), _py(delivery))
+
+
+def expiry_for_delivery(settlement, delivery):
+    """Delivery less the settlement lag, Preceding (the old month-tenor expiry)."""
+    return _py(joint_calendar(settlement).advance(
+        _ql(delivery), ql.Period(-settlement.spot_lag, ql.Days), ql.Preceding))

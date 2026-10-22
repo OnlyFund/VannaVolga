@@ -12,7 +12,7 @@ O/N and 1M points) but its USD pair has forward points.
 
 from helper_functions.fx_conventions import CCY, get_pair, spot_date
 from market_data.fwd_tickers import SHORT_TENORS
-from market_data.market_tables import _ql_date, tenor_dates
+from market_data.market_tables import _ql_date, forward_delivery
 
 
 def implied_rates(ccy, pair, valuation_date, spot, forward_points, other_curve):
@@ -34,7 +34,7 @@ def implied_rates(ccy, pair, valuation_date, spot, forward_points, other_curve):
         other = other_curve.get(tenor)
         if other is None or tenor in SHORT_TENORS:
             continue
-        _, delivery = tenor_dates(pair, valuation_date, tenor)
+        delivery = forward_delivery(pair, valuation_date, tenor)
         delivery = _ql_date(delivery)
         tau = {c: CCY[c].day_count.yearFraction(spot_day, delivery) for c in (base, term)}
         ratio = (spot + points / divisor) / spot

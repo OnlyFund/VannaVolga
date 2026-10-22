@@ -1,6 +1,6 @@
 """Bloomberg's FX settlement holidays per currency, as a static tracked list.
 
-The settlement calendars of the date rules (``apeiron.gaia.time.calendars``)
+The settlement calendars of the date rules (``apeiron.gaia.market_dates.calendars``)
 come from ``market_data/calendars/settlement_holidays.csv``: one row per
 currency, Bloomberg calendar code and non-settlement date. The list is static
 and refreshed by hand when it nears its end or a government moves a holiday:

@@ -48,12 +48,12 @@ def test_cnh_uses_cny_tickers_and_mxn_has_an_overnight_point():
 def test_implied_rates_invert_covered_interest_parity():
     from helper_functions.fx_conventions import spot_date
     from market_data.implied_rates import implied_rates
-    from market_data.market_tables import _ql_date, tenor_dates
+    from market_data.market_tables import _ql_date, forward_delivery
     spot, valuation = 18.4, "2026-10-16"
     usd = {tenor: 0.04 for tenor in TENORS}
     points = {}
     for tenor in TENORS:
-        delivery = _ql_date(tenor_dates("USDMXN", valuation, tenor)[1])
+        delivery = _ql_date(forward_delivery("USDMXN", valuation, tenor))   # swap convention
         days = delivery - spot_date("USDMXN", _ql_date(valuation))
         forward = spot * (1 + 0.07 * days / 360) / (1 + 0.04 * days / 360)
         points[tenor] = (forward - spot) * 10000

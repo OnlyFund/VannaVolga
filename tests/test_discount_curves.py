@@ -5,7 +5,7 @@ from helper_functions.fx_conventions import CCY, spot_date
 from market_data.discount_curves import (
     IMPLIED, QUOTED, SOFR, STALE, TENORS, UNAVAILABLE, DiscountCurves, fill_tenors,
 )
-from market_data.market_tables import _ql_date, market, market_bundle, tenor_dates
+from market_data.market_tables import _ql_date, forward_delivery, market, market_bundle
 from market_data.store import VOL_FIELDS, MarketDataStore
 
 TODAY = "2026-10-16"
@@ -18,7 +18,7 @@ def points(pair, valuation, spot, base_rate, term_rate, divisor):
     start = spot_date(pair, _ql_date(valuation))
     out = {}
     for tenor in TENORS:
-        end = _ql_date(tenor_dates(pair, valuation, tenor)[1])
+        end = _ql_date(forward_delivery(pair, valuation, tenor))   # swap convention
         tau = {c: CCY[c].day_count.yearFraction(start, end) for c in (pair[:3], pair[3:])}
         forward = spot * (1 + term_rate * tau[pair[3:]]) / (1 + base_rate * tau[pair[:3]])
         out[tenor] = (forward - spot) * divisor

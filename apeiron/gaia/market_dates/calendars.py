@@ -1,7 +1,7 @@
 """Gaia time's shared pieces: currency calendars, date coercion, date records.
 
-Used by the pillar date solver (:mod:`apeiron.gaia.time.pillars`) and its
-legacy reference (:mod:`apeiron.gaia.time.legacy_dates`); imports nothing
+Used by the pillar date solver (:mod:`apeiron.gaia.market_dates.pillars`) and its
+legacy reference (:mod:`apeiron.gaia.market_dates.legacy_dates`); imports nothing
 else in the suite.
 
 Settlement calendars (``CALENDARS``) are Bloomberg's, from the static list

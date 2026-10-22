@@ -39,13 +39,13 @@ def test_the_rules_are_the_agreed_ones():
     for consumer in CONSUMERS:
         assert not any(may_import(consumer, other) for other in CONSUMERS if other != consumer)
         assert all(may_import(consumer, level) for level in (*BASE, "hyperion"))
-    assert not may_import("gaia.time", "gaia.market")
+    assert not may_import("gaia.market_dates", "gaia.market")
     assert not may_import("hyperion", "olympus")
 
 
 def test_new_apeiron_folders_take_their_level_from_their_path():
     assert level_of("apeiron.hyperion.cache.store") == "hyperion"
-    assert level_of("apeiron.gaia.time.pillars") == "gaia.time"
+    assert level_of("apeiron.gaia.market_dates.pillars") == "gaia.market_dates"
     assert level_of("apeiron.atlas.black_scholes") == "atlas"
     assert level_of("research.anything") == "delphi"
 
