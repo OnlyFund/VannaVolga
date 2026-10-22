@@ -1,6 +1,6 @@
 # FXO Risk Analyzer roadmap
 
-Last updated 2026-10-20. Decisions are recorded with the item they belong to.
+Last updated 2026-10-22. Decisions are recorded with the item they belong to.
 
 ## Design principles
 
@@ -95,10 +95,38 @@ apeiron/
 
 ## Next
 
-Items 1–3 and 5 are done (see above). Next is item 6, the pillar date solver,
-starting with the rolled market. Item 4 is paused.
+Items 1–3 are done, and item 5's Atlas step (see above). Next is item 6, the
+pillar date solver, in this order (agreed 2026-10-22):
+1. move today's date logic (`option_dates`: Modified Following and end of month
+   on QuantLib's joint calendar) into `gaia/time` as the solver, with pricing
+   identical;
+2. build the rolled market on it;
+3. add the test that theta equals the date roll;
+4. validate widely on random past and future dates.
 
-4. **Intraday time to the expiry cut** (New York / Tokyo; paused), built in `gaia/time`, with:
+Item 6's open questions are answered before step 2. Item 4 is paused and resumes
+after item 6.
+
+4. **Intraday time to the expiry cut** (New York / Tokyo; paused), built in `gaia/time`.
+   Decided:
+   - the cuts are **TOK = 15:00 Tokyo** and **NYK = 10:00 New York** (clock
+     changes included);
+   - within **one week** of expiry, time to expiry is measured in **minutes** from
+     the valuation moment to the cut; beyond one week, in whole days as today;
+   - on the expiry day, once the cut has passed, the option is expired. A message
+     shows when an expired option has not yet been exercised or lapsed in the book
+     (the lifecycle, item 8, treats it).
+
+   Open (to answer when resuming):
+   - which pairs cut at TOK (proposal: USDJPY, the JPY crosses, KRW, TWD, CNH,
+     IDR and other Asian pairs);
+   - the valuation moment (proposal: the snapshot's time);
+   - how minutes map to variance time (proposal: uniform within a day, times that
+     day's variance-day weight);
+   - whether theta rolls to the same clock time on the next business day
+     (proposal: yes).
+
+   Built with:
    - special cuts and fixings per pair (MXN, BRL, KRW, CEEMEA): cut time, fixing
      source and fixing date;
    - the valuation time of day (snapshot time vs valuation moment);
@@ -108,7 +136,18 @@ starting with the rolled market. Item 4 is paused.
 
 ## Dates and data foundation
 
-5. ~~Atlas untangling~~: done.
+5. **Apeiron migration.** Atlas is done: it reads no calendar (crossings 31 → 16,
+   cycle groups 4 → 3). The remaining levels move one at a time between features,
+   with pricing identical at each move (state in `docs/ARCHITECTURE_STATE.md`):
+   - **Gaia:** CSV vol curves (`vol_data`) out of the core and the smile code;
+     pair conventions into market; tenor dates out of `market_tables`;
+   - **Hyperion:** `market_tables` builds priceable markets, so it moves here;
+     the smile cache hook (`smile_service`) is injected instead of imported by the
+     core; `Trade.to_position` leaves the book;
+   - **Olympus:** the spot ladder's display helper (`ui.negatives`) moves to the UI;
+     the `app.ui` ↔ `app.ui.app` load-time cycle is removed.
+
+   Suggested slots: Gaia after item 6, Hyperion before item 8, Olympus with item 17.
 6. **Pillar date solver** (next) (in `gaia/time`): one date service for O/N, days,
    weeks, months and years from any valuation date.
    - Delivery is spot plus tenor with **Modified Following** (a weekend or holiday
@@ -184,12 +223,14 @@ starting with the rolled market. Item 4 is paused.
 
 14. Performance after caching: spot-ladder market builds, repeated market builds
     per line, spline rebuilds per vol lookup, smile calibration per pair.
-- **Pure SABR pricing model:** price with SABR (Hagan) vols per strike, calibrated
+
+14a. **Pure SABR pricing model:** price with SABR (Hagan) vols per strike, calibrated
   to the pillars, as a third pricing model next to vv and vv-sabr. The existing
   SABR code is to be made compatible with the library (pure numerics in Atlas,
   inputs explicit), then validated against the pillars, against vv, and for
   arbitrage.
-- **Experimental local vol:** Dupire local vol from the calibrated surface across
+
+14b. **Experimental local vol:** Dupire local vol from the calibrated surface across
   tenors, priced by PDE or Monte Carlo. It needs a smooth, arbitrage-free surface,
   so it starts as research in Delphi and moves to Atlas only if it proves out.
 
