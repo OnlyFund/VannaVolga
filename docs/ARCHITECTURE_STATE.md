@@ -420,3 +420,47 @@ answers already filled in. `tests/test_date_edge_cases.py` enforces them.
 
 The first set is 347 tenor and 143 typed cases. 36 are confirmed (the pricing
 page checks above). 58 are marked `priority` 1 as the next batch to confirm.
+
+## Item 6, step 3d: the 17:00 New York FX date rollover (2026-10-22)
+
+- **`apeiron/gaia/market_dates/rollover.py`:**
+  - `fx_date(moment, timezone)` converts the moment to New York time. From
+    17:00 it is the next day, and a weekend becomes Monday. Holidays do not
+    move the FX date: the spot and expiry rules apply to it.
+  - `cutoff(day)` is the last moment of an FX day, in a given zone.
+  - `fx_today()` is today's FX date.
+- **The market store, schema 5:** each market records its `timezone`. The
+  migration takes a backup first and runs all or nothing; earlier markets get
+  `Europe/London`. The user's live store migrated on their own fetch at 09:54
+  (backup `market_data.v4-backup-20261022_095449.sqlite`). Markets 1–43 are
+  identical to the backup, and market 44 is recorded in `Europe/London`.
+- **The store keeps data only, so Gaia market imports no date rule.** Hyperion's
+  loader (`app.store_markets`) picks the latest snapshot taken before 17:00
+  New York on the valuation date, and attaches its FX date
+  (`Snapshot.fx_date`). `Snapshot.date` is then the FX date.
+- **The market picker** (Olympus) lists and links snapshots by FX date
+  (`fx_date` column; `snapshot_filter` uses it when present), and "today" is
+  the FX date.
+- **Left for the Hyperion move:** `app.usd_spots` (Gaia market) still picks
+  its snapshot by local date.
+- **Edge cases:** `tests/edge_cases/rollover.csv` has 50 moments: London's
+  4-hour clock-change gaps in 2026–27, ordinary weeks, Friday and Sunday
+  evenings, Saturdays, and the evenings of 24 and 31 Dec. All are to be
+  confirmed, 6 of them priority 1.
+- **Validation:** the reference book on 10 valuation dates is unchanged
+  (no stored snapshot is after 17:00 New York). The app runs in headless Edge
+  on a migrated store copy with no exceptions.
+
+## The trade store in memory (online app) (2026-10-22)
+
+- **The online error:** "trade store is read-only: ... table schema_info
+  already exists". Two sessions opened a new store at once: both saw an empty
+  file, and the second failed creating the schema, so the store fell back to
+  read-only. A schema script that fails now re-checks the version and
+  carries on if another session just made it current.
+- **In memory:** `SqliteTradeStore(MEMORY)` (`":memory:"`) is the same store
+  on an in-memory SQLite database, with the same schema, triggers and checks,
+  and no backups. The app uses it on Streamlit Cloud (when it runs from
+  `/mount/src/`) or with `VV_TRADE_STORE=memory`. Booking works, the book
+  lasts for the browser session, and a notice says it is not saved. Locally,
+  an unreadable store still never becomes an empty book.

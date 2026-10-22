@@ -13,7 +13,11 @@ This module proposes the cases:
   price (``TRADE_START`` to today), each tenor of ``TENORS``, tagged by why
   the date is an edge case (``CATEGORIES``), a few per pair and category;
 * **typed expiries** (``typed_expiries.csv``): weekdays in the next year on
-  which a currency of the pair is closed, and weekends next to them.
+  which a currency of the pair is closed, and weekends next to them;
+* **the FX date rollover** (``rollover.csv``): moments around 17:00 New York
+  seen from London, in ordinary weeks and in the weeks the UK and the US
+  change their clocks on different dates, Friday and Sunday evenings,
+  Saturdays and the evenings before 25 Dec and 1 Jan.
 
 Rerun it to add cases; rows already in the files keep their market answers:
 
@@ -30,7 +34,7 @@ from apeiron.gaia.market_dates import legacy_dates, pillars
 from apeiron.gaia.market_dates.calendars import CALENDARS, as_date
 
 DIRECTORY = Path(__file__).resolve().parents[3] / "tests" / "edge_cases"
-OPTION_FILE, TYPED_FILE = "option_dates.csv", "typed_expiries.csv"
+OPTION_FILE, TYPED_FILE, ROLLOVER_FILE = "option_dates.csv", "typed_expiries.csv", "rollover.csv"
 
 PAIRS = ("EURUSD", "GBPUSD", "AUDUSD", "NZDUSD", "USDJPY", "USDCHF", "USDSGD",
          "USDCAD", "USDTRY", "USDPHP", "EURJPY", "EURGBP", "GBPJPY", "EURCHF",
@@ -63,7 +67,12 @@ OPTION_COLUMNS = ("case_id", "priority", "category", "pair", "trade_date", "teno
                   "market_expiry", "market_delivery", "status", "source", "checked_on", "note")
 TYPED_COLUMNS = ("case_id", "priority", "category", "pair", "typed_expiry", "expiry", "delivery",
                  "market_delivery", "status", "source", "checked_on", "note")
+ROLLOVER_COLUMNS = ("case_id", "priority", "category", "moment", "timezone", "new_york",
+                    "fx_date", "market_fx_date", "status", "source", "checked_on", "note")
 CONFIRMED, TO_CONFIRM, DISPUTED = "confirmed", "to_confirm", "disputed"
+#: London times either side of 17:00 New York: 22:00 normally, 21:00 in the
+#: clock-change gaps.
+_ROLL_TIMES = ("20:59:59", "21:00:00", "21:59:59", "22:00:00")
 
 
 def _settlement(pair):
@@ -160,6 +169,43 @@ def typed_cases(pairs=PAIRS, start=None, days=365, per=6):
     return rows
 
 
+def rollover_cases(start=date(2026, 1, 1), end=date(2027, 12, 31), timezone="Europe/London"):
+    """Proposed rollover moments (local to ``timezone``) and their FX dates."""
+    from apeiron.gaia.market_dates import rollover
+    import pandas as pd
+    rows = []
+
+    def add(category, moment):
+        stamp = pd.Timestamp(moment)
+        new_york = stamp.tz_localize(timezone, ambiguous=True, nonexistent="shift_forward")             .tz_convert(rollover.ROLLOVER_TIMEZONE)
+        rows.append({"category": category, "moment": stamp.strftime("%Y-%m-%dT%H:%M:%S"),
+                     "timezone": timezone, "new_york": new_york.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                     "fx_date": str(rollover.fx_date(stamp, timezone)), "status": TO_CONFIRM})
+
+    gap_days = []
+    day = start
+    while day <= end:
+        noon = pd.Timestamp(f"{day} 12:00").tz_localize(timezone).tz_convert(rollover.ROLLOVER_TIMEZONE)
+        if noon.hour != 7 and day.weekday() == 1:          # a Tuesday of a 4-hour gap
+            gap_days.append(day)
+        day += timedelta(days=1)
+    for day in gap_days:
+        for clock in _ROLL_TIMES:
+            add("clock_change_gap", f"{day} {clock}")
+    for day in (date(2026, 10, 21), date(2027, 6, 16)):     # ordinary Wednesdays
+        for clock in _ROLL_TIMES:
+            add("ordinary_week", f"{day} {clock}")
+    for friday in (date(2026, 10, 23), date(2027, 3, 12)):
+        add("friday_evening", f"{friday} 21:59:59")
+        add("friday_evening", f"{friday} 22:00:00")
+        add("saturday", f"{friday + timedelta(days=1)} 12:00:00")
+        add("sunday_evening", f"{friday + timedelta(days=2)} 21:59:59")
+        add("sunday_evening", f"{friday + timedelta(days=2)} 22:00:00")
+    for eve in (date(2026, 12, 24), date(2026, 12, 31), date(2027, 12, 24), date(2027, 12, 31)):
+        add("holiday_eve", f"{eve} 22:00:00")
+    return rows
+
+
 def read(name, directory=DIRECTORY):
     path = Path(directory) / name
     if not path.exists():
@@ -183,6 +229,8 @@ def merge(existing, proposed, key_fields, prefix):
 
 
 def _group(pair):
+    if not pair:
+        return "all"
     return next((name for name, pairs in GROUPS.items() if pair in pairs), "other")
 
 
@@ -191,11 +239,11 @@ def prioritise(rows, primary=lambda row: row["category"].split("+")[0].split(":"
 
     A row that already has a priority keeps it.
     """
-    first = {(_group(row["pair"]), primary(row)) for row in rows if row.get("priority") == "1"}
+    first = {(_group(row.get("pair")), primary(row)) for row in rows if row.get("priority") == "1"}
     for row in rows:
         if row.get("priority"):
             continue
-        key = (_group(row["pair"]), primary(row))
+        key = (_group(row.get("pair")), primary(row))
         if row["status"] == TO_CONFIRM and key not in first:
             row["priority"] = "1"
             first.add(key)
@@ -219,9 +267,12 @@ def write(name, rows, columns, directory=DIRECTORY):
 def main(argv=None):
     options = prioritise(merge(read(OPTION_FILE), tenor_cases(), ("pair", "trade_date", "tenor"), "O"))
     typed = prioritise(merge(read(TYPED_FILE), typed_cases(), ("pair", "typed_expiry"), "T"))
+    rolls = prioritise(merge(read(ROLLOVER_FILE), rollover_cases(), ("moment", "timezone"), "R"),
+                       primary=lambda row: row["category"])
     write(OPTION_FILE, options, OPTION_COLUMNS)
     write(TYPED_FILE, typed, TYPED_COLUMNS)
-    for name, rows in ((OPTION_FILE, options), (TYPED_FILE, typed)):
+    write(ROLLOVER_FILE, rolls, ROLLOVER_COLUMNS)
+    for name, rows in ((OPTION_FILE, options), (TYPED_FILE, typed), (ROLLOVER_FILE, rolls)):
         status = {}
         for row in rows:
             status[row["status"]] = status.get(row["status"], 0) + 1

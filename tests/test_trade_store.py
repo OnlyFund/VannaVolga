@@ -420,3 +420,61 @@ def test_a_value_dated_forward_prices_at_its_value_date():
 def replace_id(trade, trade_id):
     from dataclasses import replace
     return replace(trade, trade_id=trade_id)
+
+
+# -- the in-memory store (online app) and two sessions opening a new store ---------
+
+def test_an_in_memory_store_books_amends_and_cancels_like_the_file_store(clock, tmp_path):
+    from app.trades.store import MEMORY, MEMORY_NOTICE
+    store, problem = open_trade_store(MEMORY, clock=clock)
+    assert store.in_memory and not store.read_only and problem == MEMORY_NOTICE
+    call, hedge = store.book(Booking((option(), forward(-5e6)),
+                                     hedges={1: [HedgeAllocation(0, -5e6)]}))
+    amended = store.amend(call.trade_id, call.version, {"strike": 1.13}, reason="strike fix")
+    assert amended.version == 2 and len(store.trades()) == 2
+    store.cancel(hedge.trade_id, hedge.version, reason="unwind")
+    assert {t.trade_id: t.status for t in store.trades(status=None)}[hedge.trade_id] == CANCELLED
+    assert not (tmp_path / "backups").exists() and not list(tmp_path.iterdir())   # nothing on disk
+    with pytest.raises(sqlite3.DatabaseError):
+        store._db.execute("DELETE FROM trade_versions")                            # still append-only
+
+
+def test_each_in_memory_store_is_its_own_book(clock):
+    from app.trades.store import MEMORY
+    first, _ = open_trade_store(MEMORY, clock=clock)
+    second, _ = open_trade_store("memory", clock=clock)
+    first.book(Booking((option(),)))
+    assert len(first.trades()) == 1 and second.trades() == []
+
+
+def test_a_second_session_finding_the_schema_just_created_carries_on(tmp_path, clock):
+    path = tmp_path / "trades.sqlite"
+    SqliteTradeStore(path, clock=clock).close()            # the first session created it
+
+    class SecondSession(SqliteTradeStore):
+        """Saw an empty file just before the first session created the schema."""
+        seen_empty = True
+
+        def _schema_version(self):
+            if self.seen_empty:
+                self.seen_empty = False
+                return 0
+            return super()._schema_version()
+
+        def _table_count(self):
+            return 0
+
+    second = SecondSession(path, clock=clock)
+    assert not second.read_only and second.problem is None
+    assert len(second.book(Booking((option(),)))) == 1
+    second.close()
+
+
+def test_the_app_keeps_trades_in_memory_on_streamlit_cloud():
+    from app.trades.store import MEMORY
+    from app.ui.trades_block import DEFAULT_STORE, trade_store_path
+    cloud = "/mount/src/vannavolga/app/ui/trades_block.py"
+    assert trade_store_path({}, here=cloud) == MEMORY
+    assert trade_store_path({}, here="F:/repo/app/ui/trades_block.py") == str(DEFAULT_STORE)
+    assert trade_store_path({"VV_TRADE_STORE": "memory"}, here="F:/x.py") == "memory"
+    assert trade_store_path({"VV_TRADE_STORE": "/data/t.sqlite"}, here=cloud) == "/data/t.sqlite"

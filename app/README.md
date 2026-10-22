@@ -22,6 +22,12 @@ Python version, delete and recreate that Cloud app with Python 3.11 selected.
 Streamlit is pinned to 1.36.0 because the UI still calls
 `st.experimental_rerun()`.
 
+On Streamlit Cloud the trade store is **in memory**: booking, amending and
+cancelling work as locally, but the book lasts only for the browser session
+and is not saved (the app says so). Locally the store is
+`data/local/trades.sqlite`; `VV_TRADE_STORE` names another file, or `memory`
+for an in-memory store.
+
 Bloomberg ingestion is a separate local workflow requiring Bloomberg access;
 it is not installed by the app requirements and cannot use a desktop Bloomberg
 session from Community Cloud. Supply market data separately. Cloud-local

@@ -4,8 +4,11 @@ Each fetch (``market_data.bloomberg_fetch``) saves one market snapshot:
 
 * ``market_id``: a running serial number (1, 2, 3 ...);
 * ``market_source``: where the data came from (``bloomberg``, ``import`` ...);
-* ``date_time``: when the data is from, in the fetch machine's local time
-  (``STORE_TIMEZONE``). For a live fetch, the fetch time; for a fetch of a
+* ``date_time``: when the data is from, in the fetch machine's local time;
+* ``timezone``: that machine's time zone (``STORE_TIMEZONE``, an IANA name;
+  schema 5 - markets stored before it are in ``Europe/London``). The FX date
+  of a snapshot follows from both (17:00 New York rollover,
+  ``apeiron.gaia.market_dates.rollover``). For a live fetch, the fetch time; for a fetch of a
   past date, that date's close, 15:00 New York (``close_date_time``; stores
   from before this used 23:59:59). A market can value any date on or after
   its ``date_time``'s date, never an earlier one;
@@ -42,12 +45,14 @@ market's pinned event set. Rows carry a ``currency`` (empty for now) so the
 calendars can later move to per-currency events without a redesign.
 
 Failsafes: a store written by an older schema (1: ``snapshots``; 2: markets
-without event sets; 3: without per-pair calendars) is copied to a
+without event sets; 3: without per-pair calendars; 4: without time zones) is copied to a
 timestamped backup and migrated in one transaction, all or nothing; a store written by a newer schema is refused
 rather than misread; event rows are validated as a whole and a set with any
 bad row is not stored.
 """
 import json
+import os
+import re
 import shutil
 import sqlite3
 from collections import namedtuple
@@ -58,12 +63,17 @@ from pathlib import Path
 import pandas as pd
 
 DEFAULT_PATH = Path(__file__).resolve().parents[1] / "data" / "local" / "market_data.sqlite"
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 SPOT, DEPO, FWD_PTS = "spot", "depo", "fwd_pts"
 VOL_FIELDS = ("atm", "rr_25", "bf_25", "rr_10", "bf_10")
 VOL_PREFIX = "vol_"
-#: Stored date-times are naive, in the fetch machine's local time.
-STORE_TIMEZONE = "Europe/London"
+#: Stored date-times are naive, in the fetch machine's local time zone, which
+#: each market records (``VV_TIMEZONE``, default ``Europe/London``).
+STORE_TIMEZONE = os.environ.get("VV_TIMEZONE", "Europe/London")
+#: The zone of markets stored before schema 5 (the fetch machine's).
+LEGACY_TIMEZONE = "Europe/London"
+if not re.fullmatch(r"[A-Za-z_]+(/[A-Za-z_+-]+)*", STORE_TIMEZONE):
+    raise ValueError(f"VV_TIMEZONE {STORE_TIMEZONE!r} is not a time zone name")
 #: The close of business: 15:00 New York.
 CLOSE_TIMEZONE, CLOSE_TIME = "America/New_York", "15:00:00"
 #: The close stamped by older code (and still by the schema-1 migration).
@@ -121,7 +131,8 @@ CREATE TABLE IF NOT EXISTS markets (
     date_time TEXT NOT NULL,
     fetched_at TEXT NOT NULL,
     note TEXT NOT NULL DEFAULT '',
-    event_set_id INTEGER REFERENCES event_sets (event_set_id)
+    event_set_id INTEGER REFERENCES event_sets (event_set_id),
+    timezone TEXT NOT NULL DEFAULT 'Europe/London'
 );
 CREATE INDEX IF NOT EXISTS markets_date_time ON markets (date_time);
 CREATE TABLE IF NOT EXISTS quotes (
@@ -135,21 +146,28 @@ CREATE TABLE IF NOT EXISTS quotes (
 CREATE INDEX IF NOT EXISTS quotes_series ON quotes (kind, name, tenor);
 """ + _EVENT_SCHEMA + _PAIR_EVENT_SCHEMA
 
-_SNAPSHOT_FIELDS = ("market_id market_source date_time fetched_at note event_set_id "
-                    "spots depo_curves vols forward_points")
+_SNAPSHOT_FIELDS = ("market_id market_source date_time fetched_at note event_set_id timezone "
+                    "spots depo_curves vols forward_points fx_date")
 
 
 class Snapshot(namedtuple("Snapshot", _SNAPSHOT_FIELDS)):
-    """One stored market: its record and its quotes by kind."""
+    """One stored market: its record and its quotes by kind.
+
+    ``fx_date`` is attached by whoever builds markets from it (Hyperion,
+    ``app.store_markets``): the FX date of ``date_time`` in ``timezone``
+    under the 17:00 New York rollover. The store keeps data only, so it
+    leaves it ``None``.
+    """
     __slots__ = ()
 
     @property
     def date(self):
-        """The date the data is from (``date_time``'s date), ``YYYY-MM-DD``."""
-        return self.date_time[:10]
+        """The date the data is from, ``YYYY-MM-DD``: the FX date when attached,
+        else ``date_time``'s local date."""
+        return self.fx_date or self.date_time[:10]
 
 
-Snapshot.__new__.__defaults__ = ("", None, {}, {}, {}, {})
+Snapshot.__new__.__defaults__ = ("", None, LEGACY_TIMEZONE, {}, {}, {}, {}, None)
 
 #: ``events`` is ``{pair: [(event_date, event, variance_days), ...]}`` in date order.
 EventSet = namedtuple("EventSet", "event_set_id source date_time note events")
@@ -263,6 +281,8 @@ class MarketDataStore:
                 self._migrate_v2(db)
             elif "markets" in tables and "pair_event_versions" not in tables:
                 self._migrate_v3(db)
+            if "markets" in tables and "timezone" not in self._columns(db, "markets"):
+                self._migrate_v4(db)
             with db:
                 db.executescript(_SCHEMA)
                 version = db.execute("SELECT MAX(version) FROM schema_info").fetchone()[0]
@@ -283,6 +303,36 @@ class MarketDataStore:
                                      f"{datetime.now():%Y%m%d_%H%M%S}{self.path.suffix}")
         shutil.copy2(str(self.path), str(backup))
         return backup
+
+    @staticmethod
+    def _columns(db, table):
+        return {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+
+    def _migrate_v4(self, db):
+        """Schema 4 -> 5: ``markets.timezone``; every market stored so far gets
+        ``LEGACY_TIMEZONE`` (the fetch machine's zone).
+
+        Backed up first; one explicit transaction, rolled back on any error.
+        """
+        version = db.execute("SELECT MAX(version) FROM schema_info").fetchone()[0]
+        if version is not None and version > SCHEMA_VERSION:
+            return                               # refused below as newer, unchanged
+        backup = self._backup(4)
+        db.isolation_level = None
+        try:
+            db.execute("BEGIN")
+            db.execute("ALTER TABLE markets ADD COLUMN timezone TEXT NOT NULL "
+                       f"DEFAULT '{LEGACY_TIMEZONE}'")
+            db.execute("DELETE FROM schema_info")
+            db.execute("INSERT INTO schema_info VALUES (?)", (SCHEMA_VERSION,))
+            db.execute("COMMIT")
+        except Exception as exc:
+            db.execute("ROLLBACK")
+            raise MarketDataStoreError(
+                f"could not migrate {self.path} (unchanged; backup at {backup}): {exc}") from exc
+        finally:
+            db.isolation_level = ""
+        self.migrated_from = self.migrated_from or backup
 
     def _migrate_v3(self, db):
         """Schema 3 -> 4: per-pair event calendar versions (empty).
@@ -382,12 +432,13 @@ class MarketDataStore:
         self.migrated_from = backup
 
     def save(self, date_time, market_source, spots=None, depo_curves=None, vols=None,
-             forward_points=None, fetched_at=None, note="", event_set_id=None):
+             forward_points=None, fetched_at=None, note="", event_set_id=None, timezone=None):
         """Store one market in a single transaction and return its ``market_id``.
 
         ``vols`` is ``{pair: {tenor: {field: value}}}`` with fields from
         ``VOL_FIELDS``; ``forward_points`` is ``{pair: {tenor: points}}``;
-        ``event_set_id`` pins the market's events (recorded as a pin).
+        ``event_set_id`` pins the market's events (recorded as a pin);
+        ``timezone`` is ``date_time``'s zone (default ``STORE_TIMEZONE``).
         """
         if not market_source:
             raise ValueError("market_source is required")
@@ -395,9 +446,10 @@ class MarketDataStore:
         fetched_at = _iso(fetched_at or datetime.now())
         with closing(self._connect()) as db, db:
             cursor = db.execute(
-                "INSERT INTO markets (market_source, date_time, fetched_at, note, event_set_id) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (market_source, _iso(date_time), fetched_at, note, event_set_id))
+                "INSERT INTO markets (market_source, date_time, fetched_at, note, event_set_id, "
+                "timezone) VALUES (?, ?, ?, ?, ?, ?)",
+                (market_source, _iso(date_time), fetched_at, note, event_set_id,
+                 timezone or STORE_TIMEZONE))
             market_id = cursor.lastrowid
             db.executemany(
                 "INSERT INTO quotes (market_id, kind, name, tenor, value) VALUES (?, ?, ?, ?, ?)",
@@ -547,11 +599,11 @@ class MarketDataStore:
 
     def snapshots(self, date=None):
         """Markets, newest first: ``market_id, market_source, date_time,
-        fetched_at, note, quotes, vols, forwards`` (``vols`` and ``forwards``
+        fetched_at, note, timezone, quotes, vols, forwards`` (``vols`` and ``forwards``
         count the vol and forward point quotes); ``date`` limits them to data
         of that date."""
         query = ("SELECT m.market_id, m.market_source, m.date_time, m.fetched_at, m.note, "
-                 "COUNT(q.value) AS quotes, "
+                 "m.timezone, COUNT(q.value) AS quotes, "
                  f"COALESCE(SUM(q.kind LIKE '{VOL_PREFIX}%'), 0) AS vols, "
                  f"COALESCE(SUM(q.kind = '{FWD_PTS}'), 0) AS forwards FROM markets m "
                  "LEFT JOIN quotes q ON q.market_id = m.market_id")
@@ -572,7 +624,7 @@ class MarketDataStore:
         date-time; with none of them, the latest market.
         """
         query, args = ("SELECT market_id, market_source, date_time, fetched_at, note, "
-                       "event_set_id FROM markets WHERE 1 = 1"), []
+                       "event_set_id, timezone FROM markets WHERE 1 = 1"), []
         if market_id is not None:
             query += " AND market_id = ?"
             args.append(int(market_id))

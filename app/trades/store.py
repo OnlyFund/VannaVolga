@@ -24,6 +24,16 @@ Fallback: ``open_trade_store`` returns a read-only store when the database
 cannot be opened for writing (failed check, newer schema, locked file), so
 the book can still be viewed and exported; it never starts an empty book in
 place of an unreadable one.
+
+In memory (``MEMORY``, ``":memory:"``): the same store on an in-memory SQLite
+database, for the online app, where there is no durable disk. It books,
+amends and cancels exactly like the file store (same schema, triggers and
+checks), but the book lasts only as long as the browser session, and it
+takes no backups.
+
+Two sessions opening a new store at once: the first creates (or migrates)
+the schema; the second, finding it done when its own attempt fails, carries
+on instead of falling back to read-only.
 """
 import math
 import sqlite3
@@ -38,6 +48,11 @@ from app.trades.model import (
 )
 
 SCHEMA_VERSION = 3
+#: The path of an in-memory store (the online app's: kept for the session only).
+MEMORY = ":memory:"
+#: What the app says about an in-memory store.
+MEMORY_NOTICE = ("Trades are kept for this browser session only (the online app has no "
+                 "trade database): they are not saved.")
 TRADE_PREFIX, PACKAGE_PREFIX = "TR", "PK"
 BACKUPS_KEPT = 14
 
@@ -165,13 +180,16 @@ class SqliteTradeStore:
     """The trade store on one SQLite file. Use ``open_trade_store`` to open."""
 
     def __init__(self, path, read_only=False, clock=_utc_now, backup_dir=None, today=None):
-        self.path = Path(path)
-        self.read_only = read_only
+        self.in_memory = str(path).strip().lower() in (MEMORY, "memory")
+        self.path = Path(MEMORY if self.in_memory else path)
+        self.read_only = read_only and not self.in_memory
         self.clock = clock
         self.backup_dir = Path(backup_dir) if backup_dir else self.path.parent / "backups"
         self.problem = None
         try:
-            if read_only:
+            if self.in_memory:
+                self._db = sqlite3.connect(MEMORY, isolation_level=None, check_same_thread=False)
+            elif read_only:
                 if not self.path.exists():
                     raise TradeStoreUnavailable(f"{self.path} does not exist")
                 self._db = sqlite3.connect(f"file:{self.path.as_posix()}?mode=ro", uri=True,
@@ -186,7 +204,9 @@ class SqliteTradeStore:
         try:
             self._db.execute("PRAGMA foreign_keys = ON")
             self._check_integrity()
-            if not read_only:
+            if self.in_memory:
+                self._prepare_schema()
+            elif not read_only:
                 self._prepare_schema()
                 self._daily_backup(today)
             else:
@@ -244,15 +264,32 @@ class SqliteTradeStore:
         if version == SCHEMA_VERSION:
             return
         if version == 0:
-            tables = self._db.execute(
-                "SELECT count(*) FROM sqlite_master WHERE type = 'table'").fetchone()[0]
-            if tables:
+            if self._table_count():
                 raise TradeStoreUnavailable(f"{self.path} is not a trade store")
-            self._script(_SCHEMA + f"INSERT INTO schema_info (version) VALUES ({SCHEMA_VERSION});")
+            self._script_unless_done(
+                _SCHEMA + f"INSERT INTO schema_info (version) VALUES ({SCHEMA_VERSION});")
             return
         self.backup(self.backup_dir / f"{self.path.stem}_before_schema_{SCHEMA_VERSION}.sqlite")
-        self._script("".join(MIGRATIONS[step] for step in range(version + 1, SCHEMA_VERSION + 1))
-                     + f"UPDATE schema_info SET version = {SCHEMA_VERSION};")
+        self._script_unless_done(
+            "".join(MIGRATIONS[step] for step in range(version + 1, SCHEMA_VERSION + 1))
+            + f"UPDATE schema_info SET version = {SCHEMA_VERSION};")
+
+    def _table_count(self):
+        return self._db.execute("SELECT count(*) FROM sqlite_master WHERE type = 'table'").fetchone()[0]
+
+    def _script_unless_done(self, sql):
+        """Create or migrate the schema, unless another session just did.
+
+        Two sessions can find a store new (or old) at once; the second one's
+        script then fails (``table ... already exists``) after the first has
+        committed. If the schema is now current, that is success.
+        """
+        try:
+            self._script(sql)
+        except sqlite3.OperationalError:
+            if self._schema_version() == SCHEMA_VERSION:
+                return
+            raise
 
     def _script(self, sql):
         """Run a multi-statement script as one transaction.
@@ -579,10 +616,13 @@ def open_trade_store(path, **kwargs):
     """``(store, problem)``: writable if possible, else read-only, else ``None``.
 
     ``problem`` explains a read-only or missing store, or a failed daily
-    backup; it is ``None`` when everything is fine.
+    backup; it is ``None`` when everything is fine. ``path`` ``MEMORY`` opens
+    an in-memory store (``problem`` says the book is not saved).
     """
     try:
         store = SqliteTradeStore(path, **kwargs)
+        if store.in_memory:
+            return store, MEMORY_NOTICE
         return store, store.problem
     except TradeStoreUnavailable as exc:
         reason = str(exc)

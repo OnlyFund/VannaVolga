@@ -189,3 +189,51 @@ def test_a_store_from_a_newer_schema_is_refused(tmp_path):
     db.close()
     with pytest.raises(MarketDataStoreError, match="newer than this code"):
         MarketDataStore(path)
+
+
+# -- schema 5: each market records its time zone ---------------------------------------------
+
+def _schema_4_store(path):
+    """A store as schema 4 wrote it: markets without ``timezone``."""
+    import market_data.store as module
+    ddl = module._SCHEMA.replace(
+        ",\n    timezone TEXT NOT NULL DEFAULT 'Europe/London'\n", "\n")
+    assert "timezone" not in ddl
+    db = sqlite3.connect(str(path))
+    db.executescript(ddl)
+    db.execute("INSERT INTO schema_info VALUES (4)")
+    db.execute("INSERT INTO markets (market_source, date_time, fetched_at) "
+               "VALUES ('bloomberg', '2026-10-21T20:21:27', '2026-10-21T20:21:30')")
+    db.commit()
+    db.close()
+
+
+def test_a_schema_4_store_is_backed_up_and_its_markets_get_the_machine_zone(tmp_path):
+    path = tmp_path / "market_data.sqlite"
+    _schema_4_store(path)
+    store = MarketDataStore(path)
+    assert store.migrated_from is not None and store.migrated_from.exists()
+    snapshot = store.load()
+    assert (snapshot.date_time, snapshot.timezone) == ("2026-10-21T20:21:27", "Europe/London")
+    db = sqlite3.connect(str(path))
+    assert db.execute("SELECT MAX(version) FROM schema_info").fetchone()[0] == SCHEMA_VERSION == 5
+    db.close()
+    assert "timezone" in store.snapshots().columns
+
+
+def test_a_new_market_records_its_time_zone(tmp_path):
+    store = MarketDataStore(tmp_path / "market_data.sqlite")
+    first = store.save("2026-10-21T20:21:27", "bloomberg", spots={"EURUSD": 1.16})
+    second = store.save("2026-10-21T15:21:27", "bloomberg", spots={"EURUSD": 1.16},
+                        timezone="America/New_York")
+    assert store.load(market_id=first).timezone == "Europe/London"
+    assert store.load(market_id=second).timezone == "America/New_York"
+    assert store.migrated_from is None
+
+
+def test_a_snapshot_date_is_its_fx_date_once_attached(tmp_path):
+    store = MarketDataStore(tmp_path / "market_data.sqlite")
+    store.save("2026-10-21T22:30:00", "bloomberg", spots={"EURUSD": 1.16})   # 17:30 New York
+    snapshot = store.load()
+    assert snapshot.date == "2026-10-21"                       # the store: its local date
+    assert snapshot._replace(fx_date="2026-10-22").date == "2026-10-22"

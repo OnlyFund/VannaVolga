@@ -23,14 +23,13 @@ Falling back happens within the run, never by a rerun from the sidebar: a
 rerun before the Markets tab draws its widgets would drop their values (the
 spot) and leave default tables that look edited.
 """
-from datetime import date
 
 import pandas as pd
 import streamlit as st
 
 from market_data.snapshot_filter import (  # noqa: F401  (label, source_code re-exported)
-    apply_filter, close_of_business, label, linked_snapshot, snapshot_day, source_code,
-    usable_snapshots,
+    apply_filter, close_of_business, data_day, data_days, label, linked_snapshot, snapshot_day,
+    source_code, usable_snapshots,
 )
 
 #: The loaded pick (``None`` = Latest); the sync key in ``store_sync`` is cleared to reload.
@@ -42,8 +41,18 @@ LINK, DATE = "link_market_date", "valuation_date"
 
 
 def _snapshots(valuation_date):
+    """The store's snapshots, each with its FX date (``fx_date``, 17:00 New York rollover)."""
     from app.store_markets import app_market_store
-    return app_market_store(pd.Timestamp(valuation_date).normalize()).snapshots()
+    return with_fx_dates(app_market_store(pd.Timestamp(valuation_date).normalize()).snapshots())
+
+
+def with_fx_dates(frame):
+    """``frame`` (``MarketDataStore.snapshots`` rows) with an ``fx_date`` column."""
+    from apeiron.gaia.market_dates.rollover import fx_date
+    frame = frame.copy()
+    zones = frame["timezone"] if "timezone" in frame.columns else [None] * len(frame)
+    frame["fx_date"] = [str(fx_date(stamp, zone)) for stamp, zone in zip(frame["date_time"], zones)]
+    return frame
 
 
 
@@ -51,7 +60,7 @@ def _snapshots(valuation_date):
 def _closes(usable):
     """Market ids that are their day's close for their source."""
     ids = set()
-    for (day, source), _ in usable.groupby([usable["date_time"].str[:10], "market_source"]):
+    for (day, source), _ in usable.groupby([data_days(usable), "market_source"]):
         best = close_of_business(usable, day, source)
         if best is not None:
             ids.add(int(best["market_id"]))
@@ -72,7 +81,9 @@ def linked():
 
 
 def _today():
-    return pd.Timestamp(date.today())
+    """Today's FX date (17:00 New York rollover; weekends are Monday's)."""
+    from apeiron.gaia.market_dates.rollover import fx_today
+    return pd.Timestamp(fx_today())
 
 
 def horizon(valuation_date):
@@ -103,7 +114,7 @@ def init_dates():
     except Exception:                    # no store: today, as before
         return
     if not usable.empty:
-        _set_date(usable.iloc[0]["date_time"][:10])
+        _set_date(data_day(usable.iloc[0]))
 
 
 def on_date_change():
@@ -143,7 +154,7 @@ def _load(choice):
         snapshots = _snapshots(_today())
         if choice is LATEST:
             usable = usable_snapshots(snapshots, _today())
-            day = None if usable.empty else usable.iloc[0]["date_time"][:10]
+            day = None if usable.empty else data_day(usable.iloc[0])
         else:
             day = snapshot_day(snapshots, choice)
     except Exception:
@@ -213,7 +224,7 @@ def render_market_picker(valuation_date, loaded_latest_id=None, last_date=None):
         key=f"market_choice_{st.session_state.get(CHOICE_VERSION, 0)}_{query}",
         help="Latest: the newest snapshot (on or before the valuation date when not "
              "linked). Spot/depo-only snapshots cannot price and are not listed.")
-    hidden = len(snapshots[pd.to_datetime(snapshots["date_time"].str[:10]) <=
+    hidden = len(snapshots[pd.to_datetime(data_days(snapshots)) <=
                            last_date.normalize()]) - len(usable)
     if hidden:
         st.caption(f"{hidden} spot/depo-only snapshots not listed.")

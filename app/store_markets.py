@@ -66,11 +66,29 @@ def app_market_store(valuation_date):
     return store
 
 
+def with_fx_date(snapshot):
+    """``snapshot`` with its FX date attached (17:00 New York rollover); ``None`` stays."""
+    if snapshot is None:
+        return None
+    from apeiron.gaia.market_dates.rollover import fx_date
+    return snapshot._replace(fx_date=str(fx_date(snapshot.date_time, snapshot.timezone)))
+
+
+def fx_cutoff(valuation_date):
+    """The last stored date-time whose FX date is on or before ``valuation_date``."""
+    from apeiron.gaia.market_dates.rollover import cutoff
+    from market_data.store import STORE_TIMEZONE
+    return cutoff(valuation_date, STORE_TIMEZONE)
+
+
 def load_store_markets(valuation_date, market_id=None, store=None, pairs=None):
     """The markets of one stored market snapshot for ``valuation_date``.
 
-    By default the latest market with data on or before ``valuation_date``;
-    ``market_id`` picks one explicitly. ``store`` defaults to the app's
+    By default the latest market whose FX date is on or before
+    ``valuation_date``: taken before 17:00 New York that day (the rollover,
+    ``apeiron.gaia.market_dates.rollover``); ``market_id`` picks one explicitly.
+    The snapshot carries its FX date (``Snapshot.fx_date``), which dates its
+    markets. ``store`` defaults to the app's
     market data store (``app_market_store``); ``pairs`` limits which pairs are built.
     """
     valuation = pd.Timestamp(valuation_date).normalize()
@@ -80,9 +98,10 @@ def load_store_markets(valuation_date, market_id=None, store=None, pairs=None):
         if market_id is not None:
             snapshot = store.load(market_id=market_id)
         else:
-            snapshot = store.load(on_or_before=valuation)
+            snapshot = store.load(at_or_before=fx_cutoff(valuation))
     except Exception as exc:                 # unreadable, locked or corrupt store
         return _failed(f"market data store unavailable: {exc}")
+    snapshot = with_fx_date(snapshot)
 
     if snapshot is None:
         if market_id is not None:

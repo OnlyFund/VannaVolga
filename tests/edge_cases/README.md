@@ -10,6 +10,9 @@ market has confirmed. This directory holds those cases, and
   `trade_date` for `tenor`.
 - **`typed_expiries.csv`** has typed expiries: an option on `pair` expiring
   on `typed_expiry`.
+- **`rollover.csv`** has the FX date of a `moment` recorded in `timezone`
+  (17:00 New York rollover); `new_york` shows the moment in New York time, and
+  `market_fx_date` takes the market's answer.
 
 Each row holds:
 - **`expiry`, `delivery`:** the solver's answer, written when the case was
@@ -36,6 +39,8 @@ The categories:
 | `month_end` | a month tenor from a month-end spot (the end-of-month rule) |
 | `rule_changed` | the rules before item 6 gave other dates |
 | `one_closed`, `both_closed`, `weekend_after_holiday` | typed expiries on such days |
+| `clock_change_gap`, `ordinary_week` | moments around 17:00 New York, with a 4- or 5-hour London gap |
+| `friday_evening`, `saturday`, `sunday_evening`, `holiday_eve` | rollover moments around weekends and 25 Dec / 1 Jan |
 
 ## The practice
 

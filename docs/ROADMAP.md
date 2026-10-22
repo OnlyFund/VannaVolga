@@ -110,6 +110,13 @@ apeiron/
   tenor; month/year tenors on the latest expiry day whose spot is the delivery;
   forwards keep spot + tenor. Checked on Bloomberg's pricing page (36 cases).
   Gaia's date level is now `market_dates`.
+- **Pillar date solver, step 3d:** the FX date rolls at 17:00 New York (DST-aware):
+  snapshots record their time zone (market store schema 5), the loader and the
+  market picker date snapshots by FX date, and "today" is the FX date. Rollover
+  edge cases in `tests/edge_cases/rollover.csv`.
+- **Online booking:** on Streamlit Cloud the trade store is in memory (the session's
+  book, not saved), so booking works without a trade database; two sessions
+  opening a new store at once no longer leave it read-only.
 
 ## Next
 

@@ -11,6 +11,7 @@ from helper_functions.fx_conventions import settlement
 
 OPTIONS = edge_cases.read(edge_cases.OPTION_FILE)
 TYPED = edge_cases.read(edge_cases.TYPED_FILE)
+ROLLS = edge_cases.read(edge_cases.ROLLOVER_FILE)
 STATUSES = {edge_cases.CONFIRMED, edge_cases.TO_CONFIRM, edge_cases.DISPUTED}
 
 
@@ -19,13 +20,14 @@ def _ids(rows):
 
 
 def test_the_case_files_are_well_formed():
-    assert OPTIONS and TYPED
-    for rows in (OPTIONS, TYPED):
+    assert OPTIONS and TYPED and ROLLS
+    for rows in (OPTIONS, TYPED, ROLLS):
         assert len(set(_ids(rows))) == len(rows)
         for row in rows:
             assert row["status"] in STATUSES, row["case_id"]
             if row["status"] == edge_cases.CONFIRMED:
-                assert row["market_delivery"] and row["source"] and row["checked_on"], row["case_id"]
+                answer = row.get("market_delivery") or row.get("market_fx_date")
+                assert answer and row["source"] and row["checked_on"], row["case_id"]
 
 
 @pytest.mark.parametrize("row", OPTIONS, ids=_ids(OPTIONS))
@@ -70,3 +72,14 @@ def test_categories_name_why_a_case_is_an_edge_case():
     assert "expiry_on_holiday" in found
     _, found = edge_cases.categories("EURUSD", "2025-01-10", "1W")      # MLK between
     assert "usd_intermediate" in found
+
+
+@pytest.mark.parametrize("row", ROLLS, ids=_ids(ROLLS))
+def test_rollover_case(row):
+    from apeiron.gaia.market_dates.rollover import fx_date
+    got = str(fx_date(row["moment"], row["timezone"]))
+    if row["status"] == edge_cases.DISPUTED:
+        pytest.skip(f"disputed: {row['note']}")
+    if row["status"] == edge_cases.CONFIRMED:
+        assert got == row["market_fx_date"], "the market's FX date"
+    assert got == row["fx_date"], "moved since proposed: re-check it"

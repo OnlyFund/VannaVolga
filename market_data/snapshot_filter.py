@@ -12,6 +12,10 @@ quick filter.
   close; ``bloomberg 16oct`` the source's close that day. A filter that
   resolves to one snapshot proposes it; it is never loaded here.
 
+A snapshot's day is its FX date (the ``fx_date`` column, attached by the
+caller under the 17:00 New York rollover), else its ``date_time``'s local
+date.
+
 Failsafes: a date after the valuation date is refused (future data); an
 unknown word is reported and the filter is ignored rather than guessed; no
 match says so and names the nearest earlier snapshot. In every case the list
@@ -45,26 +49,40 @@ def _day(value):
     return pd.Timestamp(value).normalize()
 
 
+def data_days(frame):
+    """Each snapshot's day, ``YYYY-MM-DD``: its FX date when attached, else its local date."""
+    if "fx_date" in frame.columns:
+        return frame["fx_date"].astype(str).str[:10]
+    return frame["date_time"].astype(str).str[:10]
+
+
+def data_day(row):
+    value = row.get("fx_date") if hasattr(row, "get") else None
+    return str(value)[:10] if value is not None and str(value) not in ("", "nan", "None") \
+        else str(row["date_time"])[:10]
+
+
 def usable_snapshots(snapshots, valuation_date):
     """Snapshots with vols and forward points, dated on or before
     ``valuation_date``, newest first (``MarketDataStore.snapshots`` rows)."""
     if snapshots is None or snapshots.empty:
         return pd.DataFrame(columns=getattr(snapshots, "columns", []))
     frame = snapshots.copy()
-    dates = pd.to_datetime(frame["date_time"].str[:10], errors="coerce")
+    dates = pd.to_datetime(data_days(frame), errors="coerce")
     keep = (frame["vols"] > 0) & (frame["forwards"] > 0) & (dates <= _day(valuation_date))
     frame = frame[keep]
     return frame.sort_values(["date_time", "market_id"], ascending=False).reset_index(drop=True)
 
 
-def close_minutes_away(date_time):
-    """Minutes between a stored date-time and that day's 15:00 New York close."""
+def close_minutes_away(date_time, day=None, timezone=None):
+    """Minutes between a stored date-time and ``day``'s 15:00 New York close
+    (``day`` defaults to the date-time's own date; ``timezone`` to the store's)."""
     text = str(date_time)
     if text[11:19] == LEGACY_CLOSE:
         return 0.0
-    stamp = pd.Timestamp(text).tz_localize(STORE_TIMEZONE, ambiguous=True,
+    stamp = pd.Timestamp(text).tz_localize(timezone or STORE_TIMEZONE, ambiguous=True,
                                            nonexistent="shift_forward")
-    close = pd.Timestamp(f"{text[:10]} {CLOSE_TIME}").tz_localize(CLOSE_TIMEZONE)
+    close = pd.Timestamp(f"{str(day or text)[:10]} {CLOSE_TIME}").tz_localize(CLOSE_TIMEZONE)
     return abs((stamp.tz_convert("UTC") - close.tz_convert("UTC")).total_seconds()) / 60.0
 
 
@@ -75,12 +93,14 @@ def close_of_business(snapshots, day, source=None):
     later snapshot.
     """
     target = _day(day).strftime("%Y-%m-%d")
-    rows = snapshots[snapshots["date_time"].str[:10] == target]
+    rows = snapshots[data_days(snapshots) == target]
     if source is not None:
         rows = rows[rows["market_source"] == source]
     if rows.empty:
         return None
-    away = rows["date_time"].map(close_minutes_away)
+    zones = rows["timezone"] if "timezone" in rows.columns else [None] * len(rows)
+    away = pd.Series([close_minutes_away(stamp, target, zone)
+                      for stamp, zone in zip(rows["date_time"], zones)], index=rows.index)
     best = away[away == away.min()].index
     return rows.loc[best].sort_values(["date_time", "market_id"]).iloc[-1]
 
@@ -189,14 +209,14 @@ def apply_filter(snapshots, text, valuation_date):
         return FilterResult(rows, None, None, source, None)
     best = close_of_business(usable, day, source)
     if best is None:
-        earlier = usable[usable["date_time"].str[:10] < day.strftime("%Y-%m-%d")]
+        earlier = usable[data_days(usable) < day.strftime("%Y-%m-%d")]
         if source is not None:
             earlier = earlier[earlier["market_source"] == source]
         what = f"{source} " if source else ""
         hint = f"; latest {what}before it: {_label(earlier.iloc[0])}" if not earlier.empty else ""
         return FilterResult(usable, None, f"no usable {what}market on {day:%d-%b-%Y}{hint}",
                             source, day)
-    rows = usable[usable["date_time"].str[:10] == day.strftime("%Y-%m-%d")]
+    rows = usable[data_days(usable) == day.strftime("%Y-%m-%d")]
     if source is not None:
         rows = rows[rows["market_source"] == source]
     return FilterResult(rows.reset_index(drop=True), int(best["market_id"]), None, source, day)
@@ -216,7 +236,7 @@ def linked_snapshot(snapshots, day):
         return int(best["market_id"]), day, None
     if usable.empty:
         return None, day, f"No usable market data on or before {day:%d-%b-%Y}."
-    last_day = _day(usable.iloc[0]["date_time"][:10])
+    last_day = _day(data_day(usable.iloc[0]))
     best = close_of_business(usable, last_day)
     return (int(best["market_id"]), last_day,
             f"No market data on {day:%d-%b-%Y}; using the last good snapshot, "
@@ -226,4 +246,4 @@ def linked_snapshot(snapshots, day):
 def snapshot_day(snapshots, market_id):
     """The data date of ``market_id``, or ``None`` when it is not stored."""
     rows = snapshots[snapshots["market_id"] == market_id]
-    return None if rows.empty else _day(rows.iloc[0]["date_time"][:10])
+    return None if rows.empty else _day(data_day(rows.iloc[0]))

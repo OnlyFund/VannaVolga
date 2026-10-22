@@ -14,10 +14,26 @@ from app.trades import service
 from app.ui.progress_bar import ProgressBar
 from apeiron.hyperion.cache import pricing as cached_pricing
 from app.trades.model import AMENDABLE, CANCELLED, FX_FORWARD, FX_OPTION, LIVE
-from app.trades.store import TradeStoreError, open_trade_store
+from app.trades.store import MEMORY, TradeStoreError, open_trade_store
 
 #: Where the app keeps its trade store unless ``VV_TRADE_STORE`` says otherwise.
 DEFAULT_STORE = Path(__file__).resolve().parents[2] / "data" / "local" / "trades.sqlite"
+#: Streamlit Community Cloud runs the app from here (no durable disk).
+CLOUD_ROOT = "/mount/src/"
+
+
+def on_streamlit_cloud(here=None):
+    return str(here or Path(__file__).resolve().as_posix()).startswith(CLOUD_ROOT)
+
+
+def trade_store_path(environ=None, here=None):
+    """``VV_TRADE_STORE`` (``memory`` for an in-memory store); else in memory on
+    Streamlit Cloud, else ``DEFAULT_STORE``."""
+    import os
+    environ = os.environ if environ is None else environ
+    if environ.get("VV_TRADE_STORE"):
+        return environ["VV_TRADE_STORE"]
+    return MEMORY if on_streamlit_cloud(here) else str(DEFAULT_STORE)
 
 ALL = "All"
 TRADE_COLUMNS = [
@@ -32,13 +48,13 @@ def trade_store():
     """The session's trade store and any problem opening it.
 
     Opened once per session. A store that cannot be written opens read-only;
-    one that cannot be read at all is ``None`` with the reason.
+    one that cannot be read at all is ``None`` with the reason. On Streamlit
+    Cloud (or ``VV_TRADE_STORE=memory``) the store is in memory: booking works,
+    and the book lasts for the session.
     """
-    import os
     opened = st.session_state.get("_trade_store")
     if opened is None:
-        path = Path(os.environ.get("VV_TRADE_STORE", str(DEFAULT_STORE)))
-        opened = open_trade_store(path)
+        opened = open_trade_store(trade_store_path())
         # Returned from the local name: a session cleared mid-run (browser
         # closed) must not turn this into a KeyError.
         st.session_state["_trade_store"] = opened
