@@ -178,15 +178,6 @@ def get_dn_strike(S: float, fwd: float, v: float, expiry_date: str, valuation_da
                           fwd_divisor, deltaBase)
 
 
-# Butterfly / Risk Reversal conversion
-
-def convert_bfly(v: float, BF: float, RR: float) -> float:
-    """
-    Convert butterfly and risk reversal to adjusted vol.
-    """
-    if np.isclose(BF, 0.0):
-        return BF - 0.02 * RR - 0.17 * RR / v
-    return BF - 0.02 * RR + 0.0005778 * abs(RR / BF) - 0.17 * RR / v
 
 
 # Optional: Strike refinement with Black-Scholes PA method

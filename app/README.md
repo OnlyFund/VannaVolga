@@ -6,6 +6,27 @@ Run from the VannaVolga project root:
 streamlit run app/streamlit_app.py
 ```
 
+### Streamlit Community Cloud
+
+Deploy with `app/streamlit_app.py` as the main file and **Python 3.11** in
+Advanced settings. The root `requirements.txt` contains the app and pricing
+dependencies, including Numba and QuantLib. Plotly and Seaborn are only needed
+by the research scripts, not this app.
+
+The entrypoint-local `app/requirements.txt` includes the root requirements and
+takes precedence over the legacy root `Pipfile`/`Pipfile.lock`, which target
+Python 3.7. Push both requirements files when deploying. Do not put competing
+dependency manifests in `app/`. Select Python 3.11 explicitly; requirements
+files do not select the interpreter. If an existing deployment uses another
+Python version, delete and recreate that Cloud app with Python 3.11 selected.
+Streamlit is pinned to 1.36.0 because the UI still calls
+`st.experimental_rerun()`.
+
+Bloomberg ingestion is a separate local workflow requiring Bloomberg access;
+it is not installed by the app requirements and cannot use a desktop Bloomberg
+session from Community Cloud. Supply market data separately. Cloud-local
+SQLite databases and other generated files are not durable across redeploys.
+
 The app shares one market surface across an editable portfolio table. Each row
 contains a numeric strike, delta strike such as `25d`, or ATM alias
 (`atm`, `atmf`, `atms`), expiry, call/put, buy/sell, and notional. Expiry can
@@ -62,6 +83,22 @@ relative spot move. All cash Greeks are reported in base currency, matching
 the delta hedge, even though the underlying price is a term-currency amount.
 
 ### Trade premium currency and delta
+
+Rho and phi are on-demand Greeks in the **rates** picker group, each per
++10bp (0.001 decimal rate), using central differences at fixed spot, strike
+and dates. **Rho** is the sensitivity to the term currency's implied depo rate
+(SOFR for USD), reported in the **term currency**; it moves forward points
+consistently with FX parity while holding the base discount factor fixed.
+**Phi** is the sensitivity to the base currency's implied depo rate (implied
+by spot, forward and the term discount factor), reported in the **base
+currency**, holding the term factor fixed.
+Settlement mode uses simple rates to delivery on each currency's day count;
+legacy mode uses continuous rates to expiry. Sticky-delta holds ATM/RR/BF
+quotes unchanged and rebuilds pillars. Smile additionally applies the existing
+betas to `log(F_bumped/F)`, using original-surface skews to shift quotes without
+moving actual spot. This forward-driven beta response is an explicit modelling
+convention, not an independently calibrated rate/vol correlation. A +10bp
+sensitivity is the derivative times 0.001, not the exact one-sided scenario P&L.
 
 The sidebar's **Delta convention** selects **Forward delta** (default) or
 **Spot delta** for both delta columns, pair totals and spot-ladder reports.

@@ -27,7 +27,7 @@ CSS = """
         font-family: "Material Icons", "Material Symbols Rounded" !important;
     }
 
-    /* Title near the top: Streamlit's default leaves about 6rem above it. */
+    /* Title near the top: Streamlit's default leaves about 8rem above it. */
     /* .block-container: Streamlit 1.23; the test ids: newer releases. */
     [data-testid="stAppViewContainer"] .block-container,
     [data-testid="stAppViewBlockContainer"],
