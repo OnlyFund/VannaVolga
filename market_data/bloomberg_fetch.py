@@ -2,6 +2,11 @@
 
 Everything is fetched for one valuation date (``bdh`` with a one-day or
 short window), not as a historical bulk download.
+
+Run for today, the command also stores today's live pillar dates
+(``store_live_dates``: ``python -m market_data.live_dates --store`` in its own
+process, so the levels stay apart and a failure there never touches the saved
+market). ``--no-dates`` skips it; a past valuation date has no live dates.
 """
 from datetime import datetime
 
@@ -212,11 +217,47 @@ def fetch_and_store(valuation_date=None, store=None, vols=True):
     return market_id
 
 
-if __name__ == '__main__':
+def store_live_dates(run=None):
+    """Store today's live pillar dates (``market_data.live_dates --store``).
+
+    Runs as its own process; returns its exit code (0: stored, 1: refused or
+    failed). Never raises: the market is already saved either way.
+    """
+    import subprocess
+    import sys
+    from pathlib import Path
+    run = run or subprocess.run
+    try:
+        done = run([sys.executable, '-m', 'market_data.live_dates', '--store'],
+                   cwd=str(Path(__file__).resolve().parents[1]))
+        code = done.returncode
+    except Exception as error:                 # the market is saved; say so and go on
+        print(f'Live pillar dates not stored: {type(error).__name__}: {error}')
+        return 1
+    if code:
+        print('Live pillar dates not stored (see above); tenors are solved instead.')
+    return code
+
+
+def main(argv=None, fetch=None, store_dates=None, today=None):
     import argparse
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('valuation_date', nargs='?', help='YYYY-MM-DD; default today')
     parser.add_argument('--no-vols', action='store_true',
                         help='skip the vol surfaces and forward points')
-    args = parser.parse_args()
-    fetch_and_store(args.valuation_date, vols=not args.no_vols)
+    parser.add_argument('--no-dates', action='store_true',
+                        help="skip today's live pillar dates")
+    args = parser.parse_args(argv)
+    (fetch or fetch_and_store)(args.valuation_date, vols=not args.no_vols)
+    today = today or datetime.now().strftime('%Y-%m-%d')
+    if args.no_dates:
+        return 0
+    if args.valuation_date and args.valuation_date != today:
+        print(f'No live pillar dates for {args.valuation_date}: Bloomberg has them for today only.')
+        return 0
+    (store_dates or store_live_dates)()
+    return 0
+
+
+if __name__ == '__main__':
+    main()
