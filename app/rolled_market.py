@@ -30,13 +30,23 @@ Fail-safes (each says why in the returned notes):
   interpolates on), so it keeps forward variance like the rest;
 * a pillar whose forward variance cannot be formed (none left, a failure, no
   segment to extend) keeps its tenor's smile from ``T0`` (sticky tenor);
-* a pair that cannot be rolled at all (no conventions, a vol or forward row
-  without a tenor, dates that do not rise, a rolled market that does not
-  build) raises ``RollError``: the caller values the ``T0`` quotes as of
+* forward points without tenors (a market typed in by hand) move by the
+  calendar days rolled, as theta's earlier roll did; with tenors, a forward
+  row whose tenor cannot be read stops the roll;
+* a pair that cannot be rolled at all (no conventions, a vol row without a
+  tenor, dates that do not rise, a rolled market that does not build) raises
+  ``RollError``: the caller values the ``T0`` quotes as of
   ``T1`` instead, as before, and says so;
 * ``VV_ROLL_MARKET=0`` turns rolling off (``rolling_enabled``).
+
+Cost: a roll builds each pillar's smile once on today's market, so it is
+done only for a pair that is priced (``MarketSet`` rolls lazily) and kept
+(``rolled``: a bounded cache keyed by the market's tables, dates, spot,
+settings and session), so reruns and theta reuse it.
 """
+import hashlib
 import os
+from collections import OrderedDict
 
 import pandas as pd
 
@@ -48,6 +58,11 @@ from app.market_context import (
 ROLL_ENV = "VV_ROLL_MARKET"
 _QUOTES = ("atm", "rr_25", "bf_25", "rr_10", "bf_10")
 _FROM_WINGS = {"atm": "v_atm", "rr_25": "rr_25", "bf_25": "bf_25", "rr_10": "rr_10", "bf_10": "bf_10"}
+
+
+#: Rolled markets kept, most recent last (``rolled``).
+CACHE_SIZE = 256
+_CACHE = OrderedDict()
 
 
 class RollError(ValueError):
@@ -83,7 +98,20 @@ def _variance(market, start, expiry):
     return {wing: vol * vol * days for wing, vol in wing_vols(market).items()}
 
 
-def _extended_quotes(context, expiry, to_date, last, previous):
+def _forward_quotes(variance, passed, expiry, to_date):
+    """Quotes at ``expiry`` seen from ``to_date``: ``variance`` (today's total, by
+    wing) less ``passed`` (the days that pass); raises if none is left."""
+    remaining = (naive_date(expiry) - naive_date(to_date)).days
+    wings = {}
+    for wing, total in variance.items():
+        left = total - passed[wing]
+        if not (left > 0 and remaining > 0):
+            raise ValueError(f"no forward variance left in the {wing} vol")
+        wings[wing] = (left / remaining) ** 0.5
+    return quotes_from_wings(wings)
+
+
+def _extended_quotes(context, expiry, to_date, last, previous, passed=None):
     """Quotes at ``expiry`` (after the last quoted expiry ``last``) seen from
     ``to_date``, holding the forward vol of the segment ``previous`` -> ``last``.
 
@@ -92,7 +120,8 @@ def _extended_quotes(context, expiry, to_date, last, previous):
     start = naive_date(context.valuation_date)
     at_last = _variance(context._market_for_expiry(last), start, last)
     at_previous = _variance(context._market_for_expiry(previous), start, previous)
-    passed = _variance(context._market_for_expiry(to_date, allow_short_end=True), start, to_date)
+    if passed is None:
+        passed = _variance(context._market_for_expiry(to_date, allow_short_end=True), start, to_date)
     # Total variance runs linearly on the variance-day clock between pillars
     # (``MarketContext._market_for_expiry``), so it is extended on that clock.
     segment = context.variance_days_between(previous, last)
@@ -136,6 +165,10 @@ def roll_context(context, to_date):
     previous_quoted = quoted[-2] if len(quoted) > 1 else None
     trade = end.date()
 
+    try:
+        passed = _variance(context._market_for_expiry(end, allow_short_end=True), start, end)
+    except Exception as exc:
+        raise RollError(f"{pair}: no vol for the days that pass: {exc}") from exc
     rows, forward_vol, kept, extended = [], [], [], []
     for (_, row), old_expiry in zip(vols.iterrows(), old_expiries):
         tenor = _tenor(row["tenor"], "vol")
@@ -146,11 +179,13 @@ def roll_context(context, to_date):
         quotes, reason = None, None
         try:
             if expiry <= last_quoted:
-                rolled = context._forward_vol_quotes(expiry, end)
+                variance = _variance(context._market_for_expiry(expiry), start, expiry)
+                rolled = _forward_quotes(variance, passed, expiry, end)
             elif previous_quoted is None:
                 raise ValueError("beyond the only quoted expiry")
             else:
-                rolled = _extended_quotes(context, expiry, end, last_quoted, previous_quoted)
+                rolled = _extended_quotes(context, expiry, end, last_quoted, previous_quoted,
+                                          passed)
                 extended.append(tenor)
             quotes = {name: float(rolled[key]) for name, key in _FROM_WINGS.items()}
         except Exception as exc:              # no forward variance left, a failure
@@ -169,16 +204,21 @@ def roll_context(context, to_date):
         raise RollError(f"{pair}: the rolled pillar expiries do not rise with the tenor")
 
     forwards = context.forward_rows.copy()
-    if "tenor" not in forwards.columns:
-        raise RollError(f"{pair}: the forward points have no tenors, so they cannot be rolled")
-    deliveries = []
-    for value in forwards["tenor"]:
-        tenor = _tenor(value, "forward")
-        try:
-            deliveries.append(pd.Timestamp(pillars.forward_delivery(rules, trade, tenor)))
-        except Exception as exc:
-            raise RollError(f"{pair} {tenor}: no forward delivery from {trade}: {exc}") from exc
-    forwards["delivery_date"] = deliveries
+    by_calendar_days = "tenor" not in forwards.columns
+    if by_calendar_days:
+        shift = pd.Timedelta(days=(end - start).days)
+        forwards["delivery_date"] = [
+            naive_date(day) + shift for day in pd.to_datetime(
+                forwards["delivery_date"], errors="coerce", utc=True).dt.tz_localize(None)]
+    else:
+        deliveries = []
+        for value in forwards["tenor"]:
+            tenor = _tenor(value, "forward")
+            try:
+                deliveries.append(pd.Timestamp(pillars.forward_delivery(rules, trade, tenor)))
+            except Exception as exc:
+                raise RollError(f"{pair} {tenor}: no forward delivery from {trade}: {exc}") from exc
+        forwards["delivery_date"] = deliveries
     forwards = forwards.sort_values("delivery_date").reset_index(drop=True)
     if forwards["delivery_date"].duplicated().any():
         raise RollError(f"{pair}: two forward tenors deliver on the same rolled date")
@@ -191,23 +231,71 @@ def roll_context(context, to_date):
         dates = pd.to_datetime(events["event_date"], errors="coerce", utc=True).dt.tz_localize(None)
         events = events.loc[dates > pd.Timestamp(end)].reset_index(drop=True)
 
+    wings = vol_rows[["atm", "rr_25", "bf_25", "rr_10", "bf_10"]].astype(float)
+    smile = pd.DataFrame({
+        "PUT_10": wings["atm"] + wings["bf_10"] - wings["rr_10"] / 2,
+        "PUT_25": wings["atm"] + wings["bf_25"] - wings["rr_25"] / 2, "ATM": wings["atm"],
+        "CALL_25": wings["atm"] + wings["bf_25"] + wings["rr_25"] / 2,
+        "CALL_10": wings["atm"] + wings["bf_10"] + wings["rr_10"] / 2})
+    values = smile.to_numpy(dtype=float)
+    if not (pd.notna(values).all() and (values > 0).all() and (abs(values) < 1e3).all()):
+        raise RollError(f"{pair}: the rolled smile vols are not finite and positive")
     try:
         rolled = MarketContext(
             pair, pd.Timestamp(end), context.spot, context.forward_divisor, False, vol_rows,
             forwards, events, settings=context.settings, market_service=context.market_service,
             diagnostics=context.diagnostics, short_points=context.short_points,
         )
-        for expiry in vol_rows["expiry"]:           # it must price at every pillar
-            rolled.market_for_expiry(expiry)
     except Exception as exc:
         raise RollError(f"{pair}: the rolled market does not build: {exc}") from exc
     rolled.rolled_from = start
     notes = [f"{pair} quotes of {start:%Y-%m-%d} rolled to {end:%Y-%m-%d}: pillars at "
              f"{end:%Y-%m-%d}'s tenor dates, forward vols held for "
-             f"{', '.join(forward_vol) or 'no tenor'}, forward points sticky tenor"]
+             f"{', '.join(forward_vol) or 'no tenor'}, forward points "
+             + ("moved by the days rolled (no tenors)" if by_calendar_days else "sticky tenor")]
     if extended:
         notes.append(f"{pair}: {', '.join(extended)} beyond the last quote: the last "
                      f"segment's forward vol held over the days rolled")
     if kept:
         notes.append(f"{pair}: tenor smile kept for {', '.join(kept)}")
     return rolled, notes
+
+
+def _fingerprint(context, to_date):
+    """What a rolled market depends on: tables, dates, spot, settings, session."""
+    parts = [context.currency_pair, str(naive_date(context.valuation_date)), str(naive_date(to_date)),
+             repr(float(context.spot)), repr(float(context.forward_divisor)),
+             repr(bool(context.broker_strangle)), repr(context.settings),
+             repr(sorted(context.short_points.items())),
+             context.vol_rows.to_json(date_format="iso"), context.forward_rows.to_json(date_format="iso"),
+             context.event_rows.to_json(date_format="iso"),
+             str(id(context.market_service)), str(id(context.diagnostics))]
+    return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
+
+
+def rolled(context, to_date):  # noqa: D401  (registered as market_context.ROLLER below)
+    """``roll_context``, kept: the same market rolled to the same date is rolled once.
+
+    A ``RollError`` is kept too (and raised again), so a pair that cannot
+    roll is not retried on every rerun.
+    """
+    key = _fingerprint(context, to_date)
+    if key in _CACHE:
+        _CACHE.move_to_end(key)
+        found = _CACHE[key]
+    else:
+        try:
+            found = roll_context(context, to_date)
+        except RollError as exc:
+            found = exc
+        _CACHE[key] = found
+        while len(_CACHE) > CACHE_SIZE:
+            _CACHE.popitem(last=False)
+    if isinstance(found, RollError):
+        raise found
+    return found
+
+
+# Theta's next-day market (``MarketContext._rolled_for``) is this one.
+import app.market_context as _market_context  # noqa: E402
+_market_context.ROLLER = rolled

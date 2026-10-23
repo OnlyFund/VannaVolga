@@ -366,7 +366,7 @@ def _on_spot_edit(key, pairs, market):
 
 def market_spots(market_set):
     """``{pair: spot}`` from the market data, for pairs that can price."""
-    return {pair: float(market_set.market(pair).spot) for pair in market_set.available()}
+    return {pair: float(market_set.spot(pair)) for pair in market_set.available()}
 
 
 def render_portfolio(tab, market_set, mods):

@@ -149,12 +149,16 @@ def test_a_pillar_without_a_tenor_cannot_roll(payloads):
         roll_context(MarketContext.from_payload(payload), "2026-10-16")
 
 
-def test_forward_points_without_tenors_cannot_roll(payloads):
-    """Saved markets always have them; a market built from tables may not."""
+def test_forward_points_without_tenors_move_by_the_days_rolled(payloads):
+    """Saved markets always have tenors; a market typed into the Markets tab may not."""
     context = _context(payloads)
     context.forward_rows = context.forward_rows.drop(columns=["tenor"])
-    with pytest.raises(RollError, match="no tenors"):
-        roll_context(context, "2026-10-16")
+    rolled, notes = roll_context(context, "2026-10-19")
+    before = pd.to_datetime(context.forward_rows["delivery_date"]).dt.tz_localize(None)
+    after = pd.to_datetime(rolled.forward_rows["delivery_date"])
+    assert list(after - before) == [pd.Timedelta(days=4)] * len(before)
+    assert list(rolled.forward_rows["fwd_pts"]) == list(context.forward_rows["fwd_pts"])
+    assert "forward points moved by the days rolled (no tenors)" in notes[0]
 
 
 def test_rolling_can_be_turned_off():

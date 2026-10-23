@@ -27,6 +27,7 @@ from app.market_context import (
     MarketContext, MarketContextError, UnavailableMarket, naive_date,
 )
 from app.market_store import normalize_pair
+from app.rolled_market import RollError, rolled, rolling_enabled
 
 
 class MarketSet:
@@ -36,6 +37,9 @@ class MarketSet:
         self.valuation_date = valuation_date
         self._markets = OrderedDict()
         self._notes = OrderedDict()
+        #: Pairs to roll when first priced: ``{pair: (payload, settings,
+        #: market_service, diagnostics, spot or None)}`` (``_plan_roll``).
+        self._pending = {}
         for context in contexts:
             self.add(context)
 
@@ -62,13 +66,11 @@ class MarketSet:
                 continue
             try:
                 saved = payload.get("valuation_date") if isinstance(payload, dict) else None
-                context = markets._rolled(payload, saved, pair, settings, market_service,
-                                          diagnostics)
-                if context is None:
-                    context = MarketContext.from_payload(
-                        payload, settings, market_service=market_service,
-                        diagnostics=diagnostics, valuation_date=valuation_date,
-                    )
+                context = MarketContext.from_payload(
+                    payload, settings, market_service=market_service,
+                    diagnostics=diagnostics, valuation_date=valuation_date,
+                )
+                markets._plan_roll(payload, saved, pair, settings, market_service, diagnostics)
                 if context.currency_pair != pair:
                     raise MarketContextError(
                         f"market stored under {pair} contains {context.currency_pair}"
@@ -84,31 +86,44 @@ class MarketSet:
             markets.add(live)
         return markets
 
-    def _rolled(self, payload, saved, pair, settings, market_service, diagnostics):
-        """The market rolled from its saved date to this set's date, or ``None``
-        (not earlier, rolling off, or it cannot roll: noted)."""
-        from app.rolled_market import RollError, roll_context, rolling_enabled
+    def _plan_roll(self, payload, saved, pair, settings, market_service, diagnostics):
+        """A market saved before this set's date is rolled, lazily: when the pair
+        is first asked for (``market``), since a roll builds every pillar's smile.
+        Until then it holds its quotes valued as of the set's date."""
         try:
             saved_date = naive_date(saved)
         except (TypeError, ValueError):
-            return None
+            return
         valuation = naive_date(self.valuation_date)
         if saved_date >= valuation:
-            return None
+            return
         as_of = (f"{pair} quotes were saved for {saved_date:%Y-%m-%d} and are valued as of "
                  f"{valuation:%Y-%m-%d}")
         if not rolling_enabled():
             self._notes[pair] = as_of + " (rolling is off: VV_ROLL_MARKET=0)"
-            return None
+            return
+        self._notes[pair] = (f"{pair} quotes of {saved_date:%Y-%m-%d}, rolled to "
+                             f"{valuation:%Y-%m-%d} when priced")
+        self._pending[pair] = (payload, settings, market_service, diagnostics, None)
+
+    def _resolve(self, pair):
+        """Roll a pending pair now; on failure it keeps its quotes valued as of
+        the set's date, and the note says why."""
+        payload, settings, market_service, diagnostics, spot = self._pending.pop(pair)
+        saved_date = naive_date(payload.get("valuation_date"))
         try:
             saved_context = MarketContext.from_payload(
                 payload, settings, market_service=market_service, diagnostics=diagnostics)
-            rolled, notes = roll_context(saved_context, self.valuation_date)
+            if spot is not None:
+                saved_context = saved_context.with_spot(spot)
+            context, notes = rolled(saved_context, self.valuation_date)
         except (RollError, MarketContextError) as exc:
-            self._notes[pair] = f"{as_of}, not rolled: {exc}"
-            return None
+            self._notes[pair] = (f"{pair} quotes were saved for {saved_date:%Y-%m-%d} and are "
+                                 f"valued as of {naive_date(self.valuation_date):%Y-%m-%d}, "
+                                 f"not rolled: {exc}")
+            return
+        self._markets[pair] = context
         self._notes[pair] = "; ".join(notes)
-        return rolled
 
     def add(self, context):
         """Add or replace a pair's market; a stale-dated one becomes unavailable."""
@@ -134,6 +149,9 @@ class MarketSet:
         moved = MarketSet(self.valuation_date)
         moved._notes = OrderedDict(self._notes)
         spots = {normalize_pair(pair): value for pair, value in (spots or {}).items()}
+        # A pair still to roll rolls at its moved spot.
+        moved._pending = {pair: entry[:4] + (spots.get(pair, entry[4]),)
+                          for pair, entry in self._pending.items()}
         for pair, context in self._markets.items():
             if pair in spots and not isinstance(context, UnavailableMarket):
                 context = context.with_spot(spots[pair])
@@ -170,12 +188,25 @@ class MarketSet:
     def market(self, pair):
         """The pair's market; raises ``MarketContextError`` if none is loaded."""
         pair = normalize_pair(pair)
+        if pair in self._pending:
+            self._resolve(pair)
         try:
             return self._markets[pair]
         except KeyError:
             inverse = pair[3:] + pair[:3]
             hint = f"; {inverse} is loaded, enter the pair as {inverse}" if inverse in self._markets else ""
             raise MarketContextError(f"No market loaded for {pair}{hint}") from None
+
+    def spot(self, pair):
+        """The pair's spot, without rolling it (a roll never moves spot)."""
+        pair = normalize_pair(pair)
+        if pair not in self._markets:
+            return self.market(pair).spot                  # raises with the reason
+        return self._markets[pair].spot
+
+    def rolls_when_priced(self, pair):
+        """Whether the pair is still to be rolled (``_plan_roll``)."""
+        return normalize_pair(pair) in self._pending
 
     def available(self):
         """Pairs that can price."""

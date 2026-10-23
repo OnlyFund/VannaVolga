@@ -174,7 +174,8 @@ def usd_per(markets, ccy):
     for pair, invert in ((f"{ccy}USD", False), (f"USD{ccy}", True)):
         if pair in markets.pairs:
             try:
-                spot = float(markets.market(pair).spot)
+                spot = float(markets.spot(pair) if hasattr(markets, "spot")
+                             else markets.market(pair).spot)
             except Exception:
                 continue
             return 1.0 / spot if invert else spot

@@ -86,7 +86,11 @@ def interpolate_delivery_curve(rows, date_column, value_column, target_date, nam
     return float(np.interp(target, curve["_date"], curve["_value"]))
 
 
-THETA_VOL_ROLLS = ("forward", "tenor")
+THETA_VOL_ROLLS = ("rolled", "forward", "tenor")
+#: The rolled market's builder, ``roller(context, to_date) -> (context, notes)``:
+#: registered by ``app.rolled_market`` when it loads (it imports this module,
+#: so this one does not import it). Unset, theta takes the forward-vol roll.
+ROLLER = None
 _WING_QUOTES = ("PUT_10", "PUT_25", "ATM", "CALL_25", "CALL_10")
 
 
@@ -124,9 +128,13 @@ class PricingSettings:
     #: time clock (``market_data.variance_calendar``); ``CALENDAR`` weights
     #: every day 1, the calendar-day clock used before.
     variance_weights: tuple = DEFAULT_WEIGHTS
-    #: The next-day market theta reprices on: ``"forward"`` holds today's
-    #: forward vols (tomorrow's variance to an expiry is today's minus the day
-    #: that passes); ``"tenor"`` keeps each tenor's quotes on its rolled date.
+    #: The next-day market theta reprices on: ``"forward"`` (the default for
+    #: now) holds today's forward vols at each expiry on trading-day-shifted
+    #: pillars; ``"rolled"`` is the rolled market (``app.rolled_market``: the
+    #: next day's pillar dates, forward vols held at them, forward points
+    #: sticky tenor), the market a later valuation date uses, so theta is
+    #: exactly the date roll (becomes the default once its numbers are
+    #: approved); ``"tenor"`` keeps each tenor's quotes on its rolled date.
     theta_vol_roll: str = "forward"
 
     def problems(self):
@@ -330,6 +338,10 @@ class MarketContext:
         delivery = naive_date(delivery)
         if delivery < curve_date:
             raise ValueError("Value date must not be before the valuation date")
+        rolled = self._rolled_for(delivery, as_of)
+        if rolled is not None:
+            return rolled.market_for_delivery(
+                delivery, spot_value=self.spot if spot_value is None else spot_value)
         rows = with_short_end(self.forward_curve(valuation_date), self.currency_pair,
                               valuation_date, self.short_points)
         if curve_date == valuation_date:
@@ -409,10 +421,15 @@ class MarketContext:
     def market_for_expiry(self, expiry, as_of=None, allow_short_end=False, spot_value=None):
         """Build a MarketData object for ``expiry`` from the market tables.
 
-        With ``as_of`` after the valuation date (theta's next day) the forward
-        points and rates roll as described in ``_market_for_expiry`` (carry).
-        The vol quotes, by default (``PricingSettings.theta_vol_roll`` =
-        ``"forward"``), hold today's forward vols. Each of the five smile vols
+        With ``as_of`` after the valuation date (theta's next day), by default
+        (``PricingSettings.theta_vol_roll`` = ``"rolled"``) the market is the
+        rolled market (``app.rolled_market``), the one a later valuation date
+        prices on, so theta is exactly the date roll. If the market cannot
+        roll, the reason is recorded and the forward-vol roll below is used.
+
+        With ``"forward"`` the forward points and rates roll as described in
+        ``_market_for_expiry`` (carry) and the vol quotes hold today's forward
+        vols. Each of the five smile vols
         keeps today's total variance to the expiry minus the variance of the
         days that pass (today's ``as_of`` node), so on an upward-sloping curve
         the passing low-vol day raises the remaining vol. A weekend passes with
@@ -420,8 +437,12 @@ class MarketContext:
         (non-positive remaining variance, or a failure), the sticky-tenor quotes
         are kept and the reason is recorded in the diagnostics.
         """
+        rolled = self._rolled_for(expiry, as_of)
+        if rolled is not None:
+            return rolled.market_for_expiry(
+                expiry, spot_value=self.spot if spot_value is None else spot_value)
         market = self._market_for_expiry(expiry, as_of, allow_short_end, spot_value)
-        if (as_of is None or self.settings.theta_vol_roll != "forward"
+        if (as_of is None or self.settings.theta_vol_roll not in ("forward", "rolled")
                 or naive_date(as_of) <= naive_date(self.valuation_date)
                 or naive_date(expiry) <= naive_date(as_of)):
             return market
@@ -432,6 +453,31 @@ class MarketContext:
                                      f"{self.currency_pair} {naive_date(expiry):%Y-%m-%d}: "
                                      f"theta on tenor-rolled quotes ({exc})"))
             return market
+
+    def _rolled_for(self, end, as_of):
+        """The market rolled to ``as_of`` that prices ``end`` (an expiry or a
+        delivery after it), or ``None``: not the rolled theta, ``as_of`` not
+        later, ``end`` not after it, or the roll failed (recorded; the
+        forward-vol roll is used instead)."""
+        if (as_of is None or self.settings.theta_vol_roll != "rolled"
+                or naive_date(as_of) <= naive_date(self.valuation_date)
+                or naive_date(end) <= naive_date(as_of)):
+            return None
+        # Keyed by spot too: ``with_spot`` copies share this cache.
+        key = (naive_date(as_of), float(self.spot))
+        cache = self.__dict__.setdefault("_rolled_cache", {})
+        if key not in cache:
+            try:
+                if ROLLER is None:
+                    raise RuntimeError("the rolled market is not loaded (app.rolled_market)")
+                cache[key] = ROLLER(self, as_of)[0]
+            except Exception as exc:          # a RollError, or a failure while rolling
+                cache[key] = None
+                self.diagnostics.append((self.settings.pricing_model, "theta",
+                                         f"{self.currency_pair}: theta on the forward-vol roll, "
+                                         f"the market does not roll to {naive_date(as_of):%Y-%m-%d} "
+                                         f"({exc})"))
+        return cache[key]
 
     def _forward_vol_quotes(self, expiry, as_of, spot_value=None):
         """Quotes at ``expiry`` seen from ``as_of`` with today's forward vols held."""

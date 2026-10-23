@@ -99,9 +99,16 @@ def test_market_saved_for_an_earlier_day_is_rolled(payloads):
     stored["USDJPY"]["valuation_date"] = "2026-10-14"
     markets = MarketSet.from_payloads(stored, VALUATION)
     assert sorted(markets.available()) == ["EURUSD", "USDJPY", "USDMXN"]
+    # Rolled only when first priced (a roll builds every pillar's smile).
+    assert markets.rolls_when_priced("USDJPY") and not markets.rolls_when_priced("EURUSD")
+    assert markets.notes()["USDJPY"] == ("USDJPY quotes of 2026-10-14, rolled to 2026-10-15 "
+                                         "when priced")
+    assert markets.spot("USDJPY") == stored["USDJPY"]["spot"]
+    assert markets.rolls_when_priced("USDJPY")                     # a spot is no reason to roll
+    context = markets.market("USDJPY")
+    assert not markets.rolls_when_priced("USDJPY")
     note = markets.notes()["USDJPY"]
     assert note.startswith("USDJPY quotes of 2026-10-14 rolled to 2026-10-15")
-    context = markets.market("USDJPY")
     assert context.rolled_from == pd.Timestamp(2026, 10, 14) and not context.broker_strangle
     results, errors = pricer.price_lines(markets, [trade("USDJPY")], MODS)
     assert errors == [] and len(results) == 1
@@ -113,6 +120,7 @@ def test_a_market_that_cannot_roll_is_valued_as_before_and_says_why(payloads):
     stored["USDJPY"]["vol_data"][0]["tenor"] = ""                  # a pillar without a tenor
     markets = MarketSet.from_payloads(stored, VALUATION)
     assert "USDJPY" in markets.available()
+    markets.market("USDJPY")
     assert "not rolled: a vol row has no tenor" in markets.notes()["USDJPY"]
     assert not hasattr(markets.market("USDJPY"), "rolled_from")
 
@@ -249,3 +257,29 @@ def test_new_grid_line_without_a_premium_prices(markets):
         assert errors == [] and results[0]["pnl_base"] == pytest.approx(results[0]["mtm_base"])
     _, errors = pricer.price_lines(markets, [trade("EURUSD", premium=-1.0)], MODS)
     assert errors == ["Line 1: Premium must be a finite non-negative amount"]
+
+
+def test_a_rolled_market_is_kept_across_market_sets(payloads, monkeypatch):
+    """Reruns build a new set each time; the same market rolled the same day rolls once."""
+    import app.rolled_market as module
+    from app.market_service import MarketService
+    from app.smile_service import DiagnosticsCollector
+    stored = deepcopy(payloads)
+    stored["USDJPY"]["valuation_date"] = "2026-10-14"
+    service, diagnostics = MarketService(DiagnosticsCollector()), DiagnosticsCollector()
+    calls = []
+    real = module.roll_context
+    monkeypatch.setattr(module, "roll_context", lambda *args: calls.append(1) or real(*args))
+    for _ in range(3):
+        markets = MarketSet.from_payloads(stored, VALUATION, market_service=service,
+                                          diagnostics=diagnostics)
+        markets.market("USDJPY")
+    assert len(calls) == 1
+
+
+def test_with_spots_keeps_a_pair_to_roll_and_rolls_it_at_the_moved_spot(payloads):
+    stored = deepcopy(payloads)
+    stored["USDJPY"]["valuation_date"] = "2026-10-14"
+    moved = MarketSet.from_payloads(stored, VALUATION).with_spots({"USDJPY": 151.0})
+    assert moved.rolls_when_priced("USDJPY")
+    assert moved.market("USDJPY").spot == 151.0

@@ -54,7 +54,10 @@ def calibrate_pairs(market_set, pairs, fingerprints, done, settings, valuation_d
         if progress is not None:
             progress(position, len(todo), pair)
         try:
-            if pair in origins and pair in payloads:
+            # A market still to roll calibrates rolled, in the session: the
+            # disk cache holds the quotes' own dates.
+            rolls = getattr(market_set, "rolls_when_priced", lambda name: False)(pair)
+            if pair in origins and pair in payloads and not rolls:
                 try:
                     outcome = ensure_calibrated(payloads[pair], origins[pair], valuation_date,
                                                 settings, surface_cache, market_service, cache)
