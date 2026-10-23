@@ -76,19 +76,45 @@ def test_broken_pair_fails_only_its_own_lines(payloads):
     assert errors[1].startswith("Line 3: USDMXN Invalid market")
 
 
-def test_market_saved_for_another_day_is_valued_as_of_the_set_date(payloads):
+def test_market_saved_for_another_day_is_valued_as_of_the_set_date_when_rolling_is_off(
+        payloads, monkeypatch):
+    monkeypatch.setenv("VV_ROLL_MARKET", "0")
     stored = deepcopy(payloads)
     stored["USDJPY"]["valuation_date"] = "2026-10-14"
     markets = MarketSet.from_payloads(stored, VALUATION)
     assert sorted(markets.available()) == ["EURUSD", "USDJPY", "USDMXN"]
     assert markets.notes() == {"USDJPY": "USDJPY quotes were saved for 2026-10-14 "
-                                         "and are valued as of 2026-10-15"}
+                                         "and are valued as of 2026-10-15 "
+                                         "(rolling is off: VV_ROLL_MARKET=0)"}
     results, errors = pricer.price_lines(markets, [trade("USDJPY")], MODS)
     assert errors == []
     # Same quotes as the correctly dated market, so the same price.
     expected, _ = pricer.price_lines(MarketSet.from_payloads(payloads, VALUATION),
                                      [trade("USDJPY")], MODS)
     assert results == expected
+
+
+def test_market_saved_for_an_earlier_day_is_rolled(payloads):
+    stored = deepcopy(payloads)
+    stored["USDJPY"]["valuation_date"] = "2026-10-14"
+    markets = MarketSet.from_payloads(stored, VALUATION)
+    assert sorted(markets.available()) == ["EURUSD", "USDJPY", "USDMXN"]
+    note = markets.notes()["USDJPY"]
+    assert note.startswith("USDJPY quotes of 2026-10-14 rolled to 2026-10-15")
+    context = markets.market("USDJPY")
+    assert context.rolled_from == pd.Timestamp(2026, 10, 14) and not context.broker_strangle
+    results, errors = pricer.price_lines(markets, [trade("USDJPY")], MODS)
+    assert errors == [] and len(results) == 1
+
+
+def test_a_market_that_cannot_roll_is_valued_as_before_and_says_why(payloads):
+    stored = deepcopy(payloads)
+    stored["USDJPY"]["valuation_date"] = "2026-10-14"
+    stored["USDJPY"]["vol_data"][0]["tenor"] = ""                  # a pillar without a tenor
+    markets = MarketSet.from_payloads(stored, VALUATION)
+    assert "USDJPY" in markets.available()
+    assert "not rolled: a vol row has no tenor" in markets.notes()["USDJPY"]
+    assert not hasattr(markets.market("USDJPY"), "rolled_from")
 
 
 def test_context_added_for_another_date_is_not_silently_redated(payloads):

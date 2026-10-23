@@ -504,3 +504,23 @@ page checks above). 58 are marked `priority` 1 as the next batch to confirm.
   `/mount/src/`) or with `VV_TRADE_STORE=memory`. Booking works, the book
   lasts for the browser session, and a notice says it is not saved. Locally,
   an unreadable store still never becomes an empty book.
+
+## The rolled market (Hyperion, 2026-10-23)
+
+`app.rolled_market.roll_context(context, to_date)` rolls a market quoted on
+T0 to a later T1:
+- pillars at T1's tenor dates (the solver);
+- each of the five smile vols keeps today's forward variance
+  (`MarketContext._forward_vol_quotes`); a last pillar past today's final
+  quote extends the last segment per variance day;
+- forward points and rates are sticky tenor, at T1's forward deliveries;
+- passed events drop out;
+- quotes become smile butterflies (`broker_strangle=False`).
+
+`MarketSet.from_payloads` rolls every market saved for an earlier date than
+the valuation date (the store's stale snapshots, loaded JSON files). A pair
+that cannot roll (`RollError`) is valued with its own dates, as before, and
+noted; `VV_ROLL_MARKET=0` turns rolling off. Theta still uses its own roll
+(`market_for_expiry(as_of=...)`); moving it onto the rolled market is the
+next step.
+

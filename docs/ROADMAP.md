@@ -148,7 +148,7 @@ pillar date solver, in this order (agreed 2026-10-22):
 1. move today's date logic (`option_dates`: Modified Following and end of month
    on QuantLib's joint calendar) into `gaia/market_dates` as the solver, with pricing
    identical;
-2. build the rolled market on it;
+2. build the rolled market on it (built 2026-10-23: later-date valuation; theta next);
 3. add the test that theta equals the date roll;
 4. validate widely on random past and future dates.
 
@@ -215,6 +215,36 @@ after item 6.
      4. the portfolio is priced on that market.
 
      Rolling several days uses the forward surface to that date directly.
+
+     **Built (2026-10-23):** `app.rolled_market.roll_context`, used by
+     `MarketSet.from_payloads` when a market's quotes are from an earlier date
+     than the valuation date.
+     - Its quotes come out as smile butterflies, converted with the market's
+       own settings.
+     - A last pillar that rolls past today's final quote holds the last
+       segment's forward rate per variance day.
+     - A pillar whose forward variance can't be formed keeps its tenor smile.
+     - A pair that can't roll is valued as before (its own dates, valued
+       later), with the reason in the note; `VV_ROLL_MARKET=0` turns rolling
+       off.
+
+     **Validated** by rolling the 22 Oct store market (48) to 23 Oct, for all
+     65 pairs:
+     - pillar expiries (510) and forward deliveries match the actual 23 Oct
+       market (50) exactly;
+     - each smile vol keeps today's forward variance exactly at every pillar
+       (tests);
+     - on a book of 260 ATM calls (1W, 1M, 3M and 1Y per pair), the rolled
+       day's P&L against 22 Oct theta is 0.98×, 1.00×, 0.86× and 1.00× (the
+       old way 0.69–0.76×);
+     - against the actual 23 Oct prices both ways are equally far, 2–18% of
+       MTM by tenor: the overnight market move.
+
+     The rest of the gap to theta is structural. An option on an old pillar's
+     expiry is interpolated across the old curve's bend between the new
+     pillars, while theta takes the exact forward variance at its expiry.
+     Next: theta priced on the rolled market, and the test that they
+     reconcile exactly (one 1M line at 612bp of value to look into).
    - The conventions:
      - forward points are **sticky tenor** (spot and rates unchanged, so
        fixed-delivery forwards roll down the curve);

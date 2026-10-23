@@ -45,6 +45,13 @@ class MarketSet:
         """Build from saved market dicts ``{pair: payload}``, all valued as of
         ``valuation_date``.
 
+        A market saved for an earlier date is **rolled** to ``valuation_date``
+        (``app.rolled_market``: the new date's pillar dates, forward vols
+        held, forward points sticky tenor). If it cannot be rolled, or rolling
+        is off (``VV_ROLL_MARKET=0``), its quotes are valued as of
+        ``valuation_date`` with their own dates, as before, and the note says
+        why.
+
         ``live`` is a context for the pair being edited; it replaces that
         pair's stored payload, so pricing uses the tables as currently edited.
         """
@@ -55,15 +62,19 @@ class MarketSet:
                 continue
             try:
                 saved = payload.get("valuation_date") if isinstance(payload, dict) else None
-                context = MarketContext.from_payload(
-                    payload, settings, market_service=market_service, diagnostics=diagnostics,
-                    valuation_date=valuation_date,
-                )
+                context = markets._rolled(payload, saved, pair, settings, market_service,
+                                          diagnostics)
+                if context is None:
+                    context = MarketContext.from_payload(
+                        payload, settings, market_service=market_service,
+                        diagnostics=diagnostics, valuation_date=valuation_date,
+                    )
                 if context.currency_pair != pair:
                     raise MarketContextError(
                         f"market stored under {pair} contains {context.currency_pair}"
                     )
-                markets._note_saved_date(pair, saved)
+                if pair not in markets._notes:
+                    markets._note_saved_date(pair, saved)
             except MarketContextError as exc:
                 # Name the pair: in a mixed book the line alone may not say.
                 reason = str(exc) if pair in str(exc) else f"{pair} {exc}"
@@ -72,6 +83,32 @@ class MarketSet:
         if live is not None and re.fullmatch(r"[A-Z]{6}", live.currency_pair):
             markets.add(live)
         return markets
+
+    def _rolled(self, payload, saved, pair, settings, market_service, diagnostics):
+        """The market rolled from its saved date to this set's date, or ``None``
+        (not earlier, rolling off, or it cannot roll: noted)."""
+        from app.rolled_market import RollError, roll_context, rolling_enabled
+        try:
+            saved_date = naive_date(saved)
+        except (TypeError, ValueError):
+            return None
+        valuation = naive_date(self.valuation_date)
+        if saved_date >= valuation:
+            return None
+        as_of = (f"{pair} quotes were saved for {saved_date:%Y-%m-%d} and are valued as of "
+                 f"{valuation:%Y-%m-%d}")
+        if not rolling_enabled():
+            self._notes[pair] = as_of + " (rolling is off: VV_ROLL_MARKET=0)"
+            return None
+        try:
+            saved_context = MarketContext.from_payload(
+                payload, settings, market_service=market_service, diagnostics=diagnostics)
+            rolled, notes = roll_context(saved_context, self.valuation_date)
+        except (RollError, MarketContextError) as exc:
+            self._notes[pair] = f"{as_of}, not rolled: {exc}"
+            return None
+        self._notes[pair] = "; ".join(notes)
+        return rolled
 
     def add(self, context):
         """Add or replace a pair's market; a stale-dated one becomes unavailable."""

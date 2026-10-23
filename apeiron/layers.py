@@ -86,6 +86,7 @@ _HYPERION = [
     "app", "app.calibration_cache", "app.calibration_plan", "app.event_calendar",
     "app.hedge_delta", "app.market_context", "app.market_layers", "app.market_service",
     "app.market_set", "app.pair_input", "app.premium_side", "app.pricer", "app.progress",
+    "app.rolled_market",
     "app.smile_service", "app.spot_forwards", "app.store_markets", "app.vol_override",
     "app.trades.service", "app.reports", "app.reports.risk_grid", "app.reports.spot_ladder",
     # Bloomberg's live dates, checked against the solver (combines market data and dates)
