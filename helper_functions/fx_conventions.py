@@ -246,7 +246,7 @@ PAIRS: Dict[str, PairConv] = {p.name: p for p in [
     _P("EUR", "CLP", 2, 1,    True,  "EUR", "dn", deliverable=False),
     _P("EUR", "COP", 2, 1,    True,  "EUR", "dn", deliverable=False),
     _P("EUR", "ARS", 2, 1e-2, True,  "EUR", "dn", deliverable=False),
-    _P("EUR", "TRY", 1, 1e-4, True,  "EUR", "dn"),   # T+1
+    _P("EUR", "TRY", 2, 1e-4, True,  "EUR", "dn"),   # T+2: a cross takes its legs' longer lag
     _P("EUR", "ZAR", 2, 1e-4, True,  "EUR", "dn"),
     _P("EUR", "ILS", 2, 1e-4, True,  "EUR", "dn"),
     _P("EUR", "SGD", 2, 1e-4, True,  "EUR", "dn"),
@@ -258,7 +258,7 @@ PAIRS: Dict[str, PairConv] = {p.name: p for p in [
     _P("EUR", "MYR", 2, 1e-4, True,  "EUR", "dn", deliverable=False),
     _P("EUR", "THB", 2, 1e-2, True,  "EUR", "dn"),
     _P("EUR", "IDR", 2, 1,    True,  "EUR", "dn", deliverable=False),
-    _P("EUR", "PHP", 1, 1e-4, True,  "EUR", "dn", deliverable=False),
+    _P("EUR", "PHP", 2, 1e-4, True,  "EUR", "dn", deliverable=False),  # T+2 (legs' longer lag)
     _P("EUR", "VND", 2, 1,    True,  "EUR", "dn", deliverable=False),
 ]}
 

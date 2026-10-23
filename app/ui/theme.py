@@ -27,18 +27,18 @@ CSS = """
         font-family: "Material Icons", "Material Symbols Rounded" !important;
     }
 
-    /* Title near the top: Streamlit's default leaves about 8rem above it. */
+    /* Title near the top: Streamlit's default leaves about 2rem above it. */
     /* .block-container: Streamlit 1.23; the test ids: newer releases. */
     [data-testid="stAppViewContainer"] .block-container,
     [data-testid="stAppViewBlockContainer"],
     [data-testid="stMainBlockContainer"] {
-        padding-top: 2rem !important;
+        padding-top: 1.5rem !important;
     }
-    /* Newer releases (the online app) fix a 3.75rem header over the page:
+    /* Newer releases (the online app) fix a 2rem header over the page:
        start the title below it. 1.23's container has no test id. */
     [data-testid="stAppViewContainer"] [data-testid="stAppViewBlockContainer"],
     [data-testid="stAppViewContainer"] [data-testid="stMainBlockContainer"] {
-        padding-top: 4.5rem !important;
+        padding-top: 3rem !important;
     }
     [data-testid="stAppViewContainer"] h1 {
         padding-top: 0 !important;
@@ -70,9 +70,9 @@ CSS = """
     }
     section[data-testid="stSidebar"],
     section[data-testid="stSidebar"] > div {
-        width: 260px !important;
-        min-width: 260px !important;
-        max-width: 260px !important;
+        width: 220px !important;
+        min-width: 220px !important;
+        max-width: 220px !important;
     }
     section[data-testid="stSidebar"] * {
         font-size: 13px !important;

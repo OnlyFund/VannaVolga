@@ -232,3 +232,22 @@ def test_recorded_events_are_bounded(monkeypatch):
     for n in range(10):
         pillars._record(log, n)
     assert log == [7, 8, 9]
+
+
+def test_a_cross_takes_the_longer_spot_lag_of_its_usd_legs():
+    """EUR is T+2 and TRY T+1, so EURTRY is T+2 (Bloomberg: 44 of 44 spot dates)."""
+    import re
+    from pathlib import Path
+    from helper_functions import fx_conventions as fc
+    source = Path(fc.__file__).read_text(encoding="utf-8")
+    pairs = sorted({a + b for a, b in re.findall(r'_P\("([A-Z]{3})", "([A-Z]{3})"', source)})
+
+    def usd_lag(ccy):
+        for pair in ("USD" + ccy, ccy + "USD"):
+            if pair in pairs:
+                return fc.settlement(pair).spot_lag
+
+    for pair in (p for p in pairs if "USD" not in p):
+        legs = [lag for lag in (usd_lag(pair[:3]), usd_lag(pair[3:])) if lag is not None]
+        if legs:
+            assert fc.settlement(pair).spot_lag == max(legs), pair

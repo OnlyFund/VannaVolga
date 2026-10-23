@@ -262,6 +262,66 @@ after item 6.
 15. Smile study: a smoother wing, butterfly negatives on steep smiles (HKD, CNH,
     TRY), vv-sabr gamma noise.
 
+### Pricing review: tests and validation backlog
+
+Recorded 2026-10-22 against revision `e867ce3`. These are points to test and
+validate, not blanket confirmed defects or approved implementation changes.
+Distinguish the legacy `VannaVolga` batch API from the wrapped smile API used
+by the app; findings in one do not automatically apply to the other.
+
+**VV-01 is closed as intended behaviour:** at expiry the option delivers to
+spot, so its value is spot intrinsic. Do not change that pricing convention.
+Exercise and the resulting spot trade remain part of lifecycle item 8.
+
+- **VV-02 - Projection convergence:** stress the legacy batch projection on
+  dense and irregular strike grids and steep/oscillating smiles. Measure final
+  monotonicity and convexity residuals after the 100-iteration limit, including
+  price-to-vol inversion error. Establish scale-aware acceptance tolerances
+  and validate how non-convergence should be reported; the current iteration
+  limit alone does not guarantee an arbitrage-free result.
+- **VV-03 - Scalar/batch consistency:** quantify legacy scalar-versus-batch
+  vol, price and Greek differences, separating five-pillar versus
+  three-pillar construction from projection effects. Include grid-composition
+  dependence and the actual consumer paths. Preserve scalar/batch equality
+  in the wrapped API and decide the intended contract for the legacy API.
+- **VV-04 - Discounting fallback:** test missing or mismatched carried
+  resolved inputs, unsupported conventions and invalid discount factors.
+  Compare settlement-date simple discounting with the legacy continuous
+  expiry-date fallback. Validate normal app paths, standalone callers and
+  risk bumps; determine which fallbacks are intentional and whether counters,
+  per-result diagnostics or explicit failures provide adequate visibility.
+- **VV-05 - Volatility fallback:** exercise pillar preparation, interpolation
+  and wing failures, distinguishing invalid inputs from expected numerical
+  limits. Validate legacy substitute pillars/boundary vols and wrapped
+  fallback diagnostics, including strict mode. Quantify effects on prices
+  and Greeks and check that degraded results are identifiable by consumers.
+- **VV-06 - Batch strike validation:** cover zero, negative, NaN, infinite,
+  empty, duplicate and unsorted strike inputs in legacy and wrapped APIs.
+  Establish the input contract and require clear, consistent rejection of
+  malformed inputs rather than downstream math-domain or indexing errors.
+- **VV-07 - Gamma convention:** reconcile the docstring's fixed base discount
+  factor with the implemented derivative of that factor under fixed forward
+  points. Validate against finite differences of the reported delta for
+  spot/forward, premium-adjusted/unadjusted, call/put and buy/sell cases;
+  identify documentation corrections separately from any calculation defect.
+- **VV-08 - Implied-volatility diagnostics:** test bracket endpoint roots,
+  unattainable prices, non-finite evaluations and root-finder failures.
+  Assess whether errors expose the strike, target price, bracket endpoints,
+  endpoint prices/residuals and underlying cause without concealing failure.
+- **VV-09 - Quoted-pillar preservation:** measure how much the legacy
+  no-arbitrage projection moves included quoted anchors and reprices the
+  original quotes, across representative and stressed markets. Separate this
+  from wrapped preparation and validate its quote/premium matching too.
+  Decide acceptable tolerances and the policy when quote preservation and
+  arbitrage constraints conflict.
+- **VV-10 - Historical reproducibility and provenance:** replay valuations
+  using the existing market snapshots, trade versions and event/calendar
+  inputs. Inventory which inputs and diagnostics are already persisted, then
+  identify gaps in code revision, dependency versions, model/settings/betas,
+  calendar overrides and fallback provenance. Validate cache invalidation
+  across pricing changes; a manual cache version is not a full valuation
+  audit record. Coordinate with the lifecycle and historical stages.
+
 ## UI
 
 16. **Users and saved settings:** all users see all portfolios and trades; each

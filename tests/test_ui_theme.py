@@ -15,7 +15,7 @@ def test_font_stack_falls_back_to_installed_font():
 
 
 def test_css_covers_title_tabs_and_font():
-    assert "padding-top: 2rem" in theme.CSS
+    assert "padding-top: 1.5rem" in theme.CSS
     assert 'button[data-baseweb="tab"]' in theme.CSS
     assert theme.FONT_STACK in theme.CSS and theme.FONT_URL in theme.CSS
 

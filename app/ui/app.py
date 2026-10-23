@@ -123,8 +123,7 @@ def format_pricer_aggregation(aggregation):
 
 def render_app():
     """Render the complete Streamlit application."""
-    st.title("FXO Risk Analyzer")
-    st.caption("Prices a portfolio of vanilla FX options and aggregates MTM/P&L and Greeks.")
+
 
     for key, default in (("spot", 1.1700), ("forward_divisor", 10000.0),
                          ("currency_pair", "EURUSD")):
@@ -254,7 +253,31 @@ def render_app():
             )
         )
 
+    st.markdown("""
+                <style>
+                [data-testid="stSidebar"] h1 {
+                    font-size: 40px !important;
+                    font-weight: 700 !important;
+                }
+                </style>
+            """, unsafe_allow_html=True)
+
+    st.markdown("""
+                    <style>
+                    [data-testid="stSidebar"] h2 {
+                        font-size: 20px !important;
+                        font-weight: 600 !important;
+                    }
+                    </style>
+                """, unsafe_allow_html=True)
+
+
     with st.sidebar:
+
+
+        st.title(" FXO Risk Analyzer ")
+        st.caption("Prices a portfolio of vanilla FX options and aggregates MTM/P&L and Greeks.")
+
         st.header("Valuation")
         market_picker.init_dates()
         valuation_date = st.date_input("Valuation date", key=market_picker.DATE,
