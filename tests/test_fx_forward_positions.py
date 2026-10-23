@@ -301,6 +301,11 @@ def test_pricer_display_formats_monetary_and_greek_values_with_commas():
 
 def test_strike_display_uses_pair_specific_precision():
     assert format_strike_for_pair("EURUSD", 1.123456) == "1.1235"
+    assert format_strike_for_pair("USDJPY", 155.75122) == "155.75"           # divisor 100
+    assert format_strike_for_pair("USDHUF", 371.123456) == "371.12"          # divisor 100
+    assert format_strike_for_pair("EURCZK", 24.3456789) == "24.346"          # divisor 1000
+    assert format_strike_for_pair("USDMXN", 18.0394261) == "18.0394"         # divisor 10000
+    assert format_strike_for_pair("ABCJPY", 1.23456) == "1.23"               # no conventions
     assert format_strike_for_pair("USDJPY", 156.789) == "156.79"
     assert format_strike_for_pair("JPYEUR", 0.006789) == "0.01"
 

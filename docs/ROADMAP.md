@@ -415,7 +415,13 @@ apeiron/
   so it starts as research in Delphi and moves to Atlas only if it proves out.
 
 15. Smile study: a smoother wing, butterfly negatives on steep smiles (HKD, CNH,
-    TRY), vv-sabr gamma noise.
+    TRY), vv-sabr gamma noise. The Bloomberg benchmark (`tests/benchmark`,
+    2026-10-23) agrees to 0.02 vol points (median) at ATM and delta strikes,
+    and its deltas match. The far wing is where it parts:
+    - USDCHF 1W, 4.6% out of the money: +1.55 vol points against Bloomberg;
+    - EM fixed strikes: USDTRY −0.25, USDILS +0.15, USDZAR −0.13.
+
+    These are the wing cases to study first.
 
 ### Pricing review: tests and validation backlog
 

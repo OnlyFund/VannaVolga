@@ -31,3 +31,38 @@ in.
 
 Dates are YYYY-MM-DD. Excel rewrites them when it saves the file, so re-save
 them in that format.
+
+## Results (Bloomberg filled in 2026-10-23)
+
+- **Vols:** median difference 0.021 vol points across the 30 trades, mean
+  0.088.
+
+  | Strike | Trades | Mean difference (vol pts) | Largest |
+  |---|---|---|---|
+  | ATM, pillar | 6 | 0.013 | 0.035 |
+  | ATM, broken date | 2 | 0.030 | 0.040 |
+  | Delta, pillar | 9 | 0.025 | 0.096 |
+  | Delta, broken date | 7 | 0.023 | 0.042 |
+  | Fixed, broken date | 4 | 0.138 | 0.249 |
+  | Fixed, pillar | 2 | 0.775 | 1.549 |
+
+  Our pillar ATMs equal the stored quotes exactly. Bloomberg's own pillar
+  ATMs differ by up to 0.035 (CADJPY 2M +0.035; EURUSD 2M and EURAUD 1M about
+  0.02), so differences of that size are market data, not model.
+- **Premiums:** within about 0.01% of the base notional. The largest are the
+  EM fixed strikes: USDTRY −0.10%, USDILS +0.05%, USDZAR +0.03%.
+- **Deltas:** Bloomberg's screen delta is our Black-Scholes delta at the
+  strike's vol, within about 0.2 delta for every trade.
+  - With the premium adjustment for USD-base pairs, crosses, EM and GBPUSD;
+    without it for EURUSD and AUDUSD.
+  - Our delta strikes reproduce Bloomberg's nominal deltas, so the strike
+    conventions agree. For example, our 25-delta USDCNH strike shows −25.009
+    on Bloomberg.
+
+  The app's own delta column is the smile delta, which includes the spot
+  dynamics, so it is not Bloomberg's number.
+- **To look into (item 15, smile study):** strikes beyond the 10-delta wing.
+  - B18, USDCHF 1W, 4.6% out of the money: 11.98 against Bloomberg's 10.44,
+    +1.55 vol points, on a tiny premium.
+  - The EM fixed strikes: USDTRY −0.25, USDILS +0.15, USDZAR −0.13.
+- **Entry slips the comparison flags:** B27's delta sign.

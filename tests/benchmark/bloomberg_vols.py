@@ -87,7 +87,10 @@ def generate(seed=SEED, count=COUNT, today=FX_DATE):
 
 
 def _line(trade, markets):
-    """The pricer's line for ``trade``; a ``fwd+x`` strike becomes the forward times (1 + x)."""
+    """The pricer's line for ``trade``, its strike solved as the Pricer grid solves it:
+    to a number at the pair's precision (``pricer.strike_decimals``: 4 decimals, 2 for
+    JPY/HUF/KRW, 3 for CZK), the strike then priced. A ``fwd+x`` strike is the forward
+    times (1 + x)."""
     pair = trade["pair"]
     expiry = trade["expiry_input"]
     if len(expiry) == 10:                       # ISO date -> the app's mm/dd/yyyy
@@ -98,10 +101,17 @@ def _line(trade, markets):
         market = context.market_for_expiry(context.resolve_market_expiry(expiry)
                                            if len(expiry) != 10 else _as_date(expiry))
         forward = market.s + market.fwd_pts / market.forward_divisor
-        strike = f"{forward * (1 + float(strike[3:])):.6g}"
-    return dict(currency_pair=pair, strike=strike, expiry=expiry, call_put=trade["call_put"],
+        from app.pricer import format_strike_for_pair
+        strike = format_strike_for_pair(pair, forward * (1 + float(strike[3:])))
+    line = dict(currency_pair=pair, strike=strike, expiry=expiry, call_put=trade["call_put"],
                 buy_sell=trade["buy_sell"], notional=str(trade["notional"]), premium=0.0,
                 premium_ccy=pair[3:])
+    import pandas as pd
+    from app.pricer import resolve_line_inputs
+    resolved, _, failures = resolve_line_inputs(markets, pd.DataFrame([line]))
+    if failures:
+        raise ValueError(failures[0])
+    return resolved.iloc[0].to_dict()
 
 
 def _as_date(text):
@@ -115,6 +125,7 @@ def price(trades):
     import logging
     logging.disable(logging.CRITICAL)
     from app import pricer
+    from app.pricer import format_strike_for_pair
     from app.market_set import MarketSet
     from app.store_markets import load_store_markets
     from market_data import Modifications
@@ -139,7 +150,7 @@ def price(trades):
         context = markets.market(trade["pair"])
         expiry = result["expiry"]
         row.update(
-            strike=f"{float(result['strike']):.6f}", expiry=str(expiry)[:10],
+            strike=format_strike_for_pair(trade["pair"], result["strike"]), expiry=str(expiry)[:10],
             delivery=str(context.delivery(expiry))[:10], vol=f"{result['vol_pct']:.4f}",
             premium_pct=f"{result['mtm_pct_base']:.4f}", premium_term=f"{result['mtm_term'] / notional:.6f}",
             spot_delta_pct=f"{result['spot_delta'] / notional * 100:.3f}",
@@ -150,11 +161,24 @@ def price(trades):
     return priced
 
 
+def _iso(text):
+    """A date as Excel may save it (``7/15/2027``) back to ``2027-07-15``; other text as is."""
+    import re
+    found = re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{4})", str(text).strip())
+    return f"{found.group(3)}-{int(found.group(1)):02d}-{int(found.group(2)):02d}" if found else text
+
+
 def read(path=FILE):
+    """The file's rows, with dates Excel rewrote read back as YYYY-MM-DD."""
     if not path.exists():
         return []
-    with path.open(newline="", encoding="utf-8") as handle:
-        return list(csv.DictReader(handle))
+    with path.open(newline="", encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle))
+    for row in rows:
+        for column in ("expiry_input", "expiry", "delivery", "checked_on"):
+            if row.get(column):
+                row[column] = _iso(row[column])
+    return rows
 
 
 def write(rows, path=FILE):
@@ -176,27 +200,86 @@ def refresh(path=FILE):
     return rows
 
 
-def compare(path=FILE, out=print):
-    """Our vol, premium and delta against Bloomberg's, where filled in."""
+def _bs_deltas(rows):
+    """``{case_id: (BS delta %, BS delta incl. premium %)}`` at each row's stored strike,
+    signed by ``buy_sell`` (Bloomberg's screen delta is one of the two); ``{}`` if market
+    52 cannot be loaded."""
+    try:
+        warnings.filterwarnings("ignore")
+        import logging
+        logging.disable(logging.CRITICAL)
+        from app import pricer
+        from app.market_set import MarketSet
+        from app.store_markets import load_store_markets
+        from market_data import Modifications
+        loaded = load_store_markets(FX_DATE, market_id=MARKET_ID)
+        markets = MarketSet.from_payloads(loaded.payloads, FX_DATE)
+    except Exception:
+        return {}
+    mods = Modifications(beta_atm=0.7, beta_rr=0.5, beta_bf=0.0)
+    found = {}
+    for row in rows:
+        try:
+            expiry = row["expiry"]
+            line = dict(currency_pair=row["pair"], strike=row["strike"],
+                        expiry=f"{expiry[5:7]}/{expiry[8:10]}/{expiry[:4]}", call_put=row["call_put"],
+                        buy_sell=row["buy_sell"], notional=row["notional"], premium=0.0,
+                        premium_ccy=row["pair"][3:])
+            (result,), errors = pricer.price_lines(markets, [line], mods,
+                                                   extras=("bs_delta", "bs_delta_prem"))
+            notional = float(row["notional"])
+            found[row["case_id"]] = (result["bs_delta"] / notional * 100,
+                                     result["bs_delta_prem"] / notional * 100)
+        except Exception:
+            continue
+    return found
+
+
+def compare(path=FILE, out=print, deltas=None):
+    """Our vol, premium and delta against Bloomberg's, where filled in.
+
+    Bloomberg's premium and delta are taken as entered, signed by ``buy_sell``
+    like ours; a row whose premium sign is the other way is read as entered for a
+    bought option and flagged. Bloomberg's screen delta is a Black-Scholes delta
+    at the strike's vol, with or without the premium adjustment (the pair and
+    premium currency decide), so it is compared with both of ours.
+    """
     rows = [row for row in read(path) if row.get("bbg_vol")]
     if not rows:
         out(f"no Bloomberg answers in {path} yet")
         return []
+    deltas = _bs_deltas(rows) if deltas is None else deltas
     diffs = []
     for row in rows:
-        # Ours are signed by buy_sell; Bloomberg's are for one bought option.
-        side = -1.0 if row["buy_sell"].upper() == "SELL" else 1.0
+        ours_premium = float(row["premium_pct"])
+        side, flagged = 1.0, ""
+        if row.get("bbg_premium_pct") and ours_premium * float(row["bbg_premium_pct"]) < 0:
+            side, flagged = -1.0, " (Bloomberg's sign is the other way: taken as a bought option)"
         vol = float(row["vol"]) - float(row["bbg_vol"])
-        premium = (side * float(row["premium_pct"]) - float(row["bbg_premium_pct"])
+        premium = (ours_premium - side * float(row["bbg_premium_pct"])
                    if row.get("bbg_premium_pct") else None)
-        delta = (side * float(row["spot_delta_pct"]) - float(row["bbg_delta_pct"])
-                 if row.get("bbg_delta_pct") else None)
+        delta = None
+        if row.get("bbg_delta_pct") and row["case_id"] in deltas:
+            bbg = side * float(row["bbg_delta_pct"])
+            ours = deltas[row["case_id"]]
+            if bbg * ours[0] < 0:                 # the delta alone entered the other way
+                bbg, flagged = -bbg, flagged + " (Bloomberg's delta sign is the other way)"
+            delta = min((value - bbg for value in ours), key=abs)
         diffs.append((row["case_id"], row["pair"], row["strike_input"], row["expiry_input"], vol, premium, delta))
-        out(f"{row['case_id']} {row['pair']} {row['strike_input']:>9} {row['expiry_input']:>10}: "
+        out(f"{row['case_id']} {row['pair']} {row['strike_input']:>10} {row['expiry_input']:>10}: "
             f"vol {vol:+.3f} pts" + (f", premium {premium:+.4f}% of base" if premium is not None else "")
-            + (f", delta {delta:+.2f}%" if delta is not None else ""))
+            + (f", BS delta {delta:+.2f}" if delta is not None else "") + flagged)
     vols = [abs(d[4]) for d in diffs]
-    out(f"{len(diffs)} compared: vol |diff| mean {sum(vols) / len(vols):.3f} pts, max {max(vols):.3f} pts")
+    out(f"{len(diffs)} compared: vol |diff| mean {sum(vols) / len(vols):.3f} pts, "
+        f"median {sorted(vols)[len(vols) // 2]:.3f}, max {max(vols):.3f}")
+    groups = {}
+    for case, pair, strike, expiry, vol, _, _ in diffs:
+        kind = ("ATM" if strike == "atm" else "delta" if strike.endswith("d") else "fixed")
+        kind += ", pillar" if expiry in TENORS else ", broken date"
+        groups.setdefault(kind, []).append(abs(vol))
+    for kind, values in sorted(groups.items()):
+        out(f"  {kind:20s} n={len(values):2d}  mean |vol diff| {sum(values) / len(values):.3f} pts, "
+            f"max {max(values):.3f}")
     return diffs
 
 

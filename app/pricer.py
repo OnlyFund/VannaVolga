@@ -40,11 +40,26 @@ def format_notional(value):
     return f"{amount:,.0f}"
 
 
+def strike_decimals(currency_pair):
+    """A strike's decimals: those of the pair's forward divisor (10000 -> 4,
+    1000 -> 3, 100 -> 2: JPY, HUF, KRW). A pair without conventions: 2 for JPY,
+    else 4."""
+    import math
+    pair = str(currency_pair).strip().replace("/", "").upper()
+    try:
+        from helper_functions.fx_conventions import get_pair
+        divisor = float(get_pair(pair).fwd_divisor)
+        decimals = round(math.log10(divisor))
+        if divisor > 0 and 0 <= decimals <= 6:
+            return int(decimals)
+    except Exception:
+        pass
+    return 2 if "JPY" in pair else 4
+
+
 def format_strike_for_pair(currency_pair, strike):
-    """Format FX strikes using JPY and non-JPY market conventions."""
-    pair = str(currency_pair).strip().upper()
-    decimals = 2 if "JPY" in pair else 4
-    return f"{float(strike):.{decimals}f}"
+    """A strike at the pair's precision (``strike_decimals``)."""
+    return f"{float(strike):.{strike_decimals(currency_pair)}f}"
 
 
 def is_complete_strike_alias(row):
