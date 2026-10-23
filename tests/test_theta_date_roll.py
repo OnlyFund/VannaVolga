@@ -83,7 +83,11 @@ def test_the_earlier_rolls_remain_for_comparison(payloads):
         (row,), errors = pricer.price_lines(markets, [dict(line)], MODS)
         assert errors == []
         thetas[mode] = row["theta"]
-    assert len(set(round(value, 6) for value in thetas.values())) == 3
+    # With today's pillar dates kept as nodes the rolled vols are exactly the
+    # forward vols, and EURUSD's forward dates move one day either way, so the
+    # rolled and forward-vol thetas agree here; the sticky-tenor one does not.
+    assert thetas["rolled"] == pytest.approx(thetas["forward"], rel=1e-6)
+    assert abs(thetas["tenor"] - thetas["rolled"]) > 1e-3
 
 
 def test_a_market_that_cannot_roll_takes_the_forward_vol_theta_and_says_why(payloads, monkeypatch):

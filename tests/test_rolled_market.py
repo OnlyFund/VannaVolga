@@ -74,15 +74,38 @@ def test_each_smile_vol_keeps_todays_forward_variance(payloads, to_date, wing):
     assert checked == 7
 
 
-def test_a_fixed_expiry_between_pillars_is_close_to_its_forward_variance(payloads):
-    """Off the pillars the rolled smile interpolates its own pillars, so it is close, not exact."""
+@pytest.mark.parametrize("expiry", ["2026-11-17", "2026-12-01", "2027-01-15", "2027-03-10"])
+@pytest.mark.parametrize("to_date", ["2026-10-16", "2026-10-19"])
+def test_a_fixed_expiry_keeps_exactly_its_forward_variance_between_pillars_too(payloads, expiry,
+                                                                              to_date):
+    """Today's pillar dates stay as interpolation nodes, so the rolled surface runs through
+    the same points: today's 1M and 3M expiries (17 Nov, 15 Jan) and dates between pillars."""
     context = _context(payloads)
-    rolled, _ = roll_context(context, "2026-10-16")
-    expiry = "2026-12-01"
+    rolled, _ = roll_context(context, to_date)
     today = _var(context._market_for_expiry(expiry), T0, expiry)
-    passed = _var(context._market_for_expiry("2026-10-16", allow_short_end=True), T0, "2026-10-16")
-    after = _var(rolled.market_for_expiry(expiry), "2026-10-16", expiry)
-    assert after == pytest.approx(today - passed, rel=2e-3)
+    passed = _var(context._market_for_expiry(to_date, allow_short_end=True), T0, to_date)
+    after = _var(rolled.market_for_expiry(expiry), to_date, expiry)
+    assert after == pytest.approx(today - passed, rel=1e-9)
+
+
+def test_todays_pillar_dates_are_nodes_not_tenors(payloads):
+    context = _context(payloads)
+    rolled, notes = roll_context(context, "2026-10-19")
+    old = {naive_date(day) for day in context.vol_rows["expiry"]}
+    nodes = {naive_date(day) for day in rolled.interpolation_nodes["expiry"]}
+    assert nodes == old - {naive_date(day) for day in rolled.vol_rows["expiry"]}
+    assert set(rolled.interpolation_nodes["tenor"]) == {""}
+    assert len(rolled.vol_rows) == len(context.vol_rows)                     # tenors only
+    assert rolled.pillar_expiries() == sorted(naive_date(day) for day in rolled.vol_rows["expiry"])
+    assert any("of today's pillar dates kept as interpolation nodes" in note for note in notes)
+
+
+def test_rolling_a_rolled_market_carries_its_nodes(payloads):
+    friday, _ = roll_context(_context(payloads), "2026-10-16")
+    monday, _ = roll_context(friday, "2026-10-19")
+    knots = {naive_date(day) for day in friday.interpolation_rows()["expiry"]}
+    kept = {naive_date(day) for day in monday.interpolation_rows()["expiry"]}
+    assert {day for day in knots if day > pd.Timestamp("2026-10-19")} <= kept
 
 
 def test_forward_points_and_rates_stay_with_their_tenor(payloads):

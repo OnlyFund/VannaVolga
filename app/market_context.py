@@ -128,14 +128,15 @@ class PricingSettings:
     #: time clock (``market_data.variance_calendar``); ``CALENDAR`` weights
     #: every day 1, the calendar-day clock used before.
     variance_weights: tuple = DEFAULT_WEIGHTS
-    #: The next-day market theta reprices on: ``"forward"`` (the default for
-    #: now) holds today's forward vols at each expiry on trading-day-shifted
-    #: pillars; ``"rolled"`` is the rolled market (``app.rolled_market``: the
-    #: next day's pillar dates, forward vols held at them, forward points
-    #: sticky tenor), the market a later valuation date uses, so theta is
-    #: exactly the date roll (becomes the default once its numbers are
-    #: approved); ``"tenor"`` keeps each tenor's quotes on its rolled date.
-    theta_vol_roll: str = "forward"
+    #: The next-day market theta reprices on: ``"rolled"`` is the rolled
+    #: market (``app.rolled_market``: the next day's pillar dates, today's
+    #: pillar dates kept as nodes, forward variance held at all of them,
+    #: forward points sticky tenor), the market a later valuation date uses,
+    #: so theta is exactly the date roll; ``"forward"`` holds today's forward
+    #: vols at each expiry on trading-day-shifted pillars (theta before
+    #: 2026-10-23); ``"tenor"`` keeps each tenor's quotes on its rolled date.
+    #: The last two remain for comparison.
+    theta_vol_roll: str = "rolled"
 
     def problems(self):
         found = []
@@ -175,7 +176,8 @@ class MarketContext:
 
     def __init__(self, currency_pair, valuation_date, spot, forward_divisor,
                  broker_strangle, vol_rows, forward_rows, event_rows=None,
-                 settings=None, market_service=None, diagnostics=None, short_points=None):
+                 settings=None, market_service=None, diagnostics=None, short_points=None,
+                 interpolation_nodes=None):
         problems = []
         pair = str(currency_pair or "").replace("/", "").replace(" ", "").strip().upper()
         if not re.fullmatch(r"[A-Z]{6}", pair):
@@ -210,6 +212,13 @@ class MarketContext:
         #: Quoted ON/TN/SN swap points (``app.market_store.SHORT_TENORS``);
         #: only value-dated deals read them (``market_for_delivery``).
         self.short_points = dict(short_points or {})
+        #: Extra vol nodes (``expiry`` and the five ATM/RR/BF quotes) the surface
+        #: interpolates through but that are no tenor: a rolled market's
+        #: forward-variance nodes at the earlier day's pillar dates
+        #: (``app.rolled_market``). Tenor lookups, calibration and the risk
+        #: buckets see the tenor pillars (``vol_rows``) only.
+        self.interpolation_nodes = (pd.DataFrame(columns=list(VOL_COLUMNS))
+                                    if interpolation_nodes is None else interpolation_nodes.copy())
         self.settings = settings
         if diagnostics is None:
             diagnostics = DiagnosticsCollector()
@@ -454,6 +463,29 @@ class MarketContext:
                                      f"theta on tenor-rolled quotes ({exc})"))
             return market
 
+    def interpolation_rows(self):
+        """The vol curve the surface interpolates: the tenor pillars and any
+        extra nodes, by expiry (naive timestamps)."""
+        rows = self.vol_rows.copy()
+        rows["expiry"] = pd.to_datetime(rows["expiry"], errors="coerce", utc=True).dt.tz_localize(None)
+        rows = rows.dropna(subset=["expiry"]).sort_values("expiry").reset_index(drop=True)
+        return self._with_interpolation_nodes(rows)
+
+    def _with_interpolation_nodes(self, rows):
+        nodes = self.interpolation_nodes
+        if nodes is None or nodes.empty:
+            return rows
+        extra = nodes.copy()
+        extra["expiry"] = pd.to_datetime(extra["expiry"], errors="coerce", utc=True).dt.tz_localize(None)
+        extra = extra.dropna(subset=["expiry"])
+        extra = extra.loc[~extra["expiry"].isin(set(rows["expiry"]))]
+        if extra.empty:
+            return rows
+        if "tenor" not in extra.columns:
+            extra["tenor"] = ""
+        merged = pd.concat([rows, extra[list(rows.columns)]], ignore_index=True)
+        return merged.sort_values("expiry").reset_index(drop=True)
+
     def _rolled_for(self, end, as_of):
         """The market rolled to ``as_of`` that prices ``end`` (an expiry or a
         delivery after it), or ``None``: not the rolled theta, ``as_of`` not
@@ -528,6 +560,7 @@ class MarketContext:
         rows = rows.dropna(subset=["expiry"]).sort_values("expiry").reset_index(drop=True)
         if rows.empty:
             raise ValueError("Volatility expiries must be valid dates")
+        rows = self._with_interpolation_nodes(rows)
         forward_rows = self.forward_rows
         roll_days = (curve_date - naive_date(valuation_date)).days
         # A rolled pillar (moved by trading days) keeps its tenor's

@@ -13,6 +13,13 @@ its tenors (ROADMAP item 6):
    total variance to ``E`` less the variance of the days that pass. Only the
    passing days' own variance drops out, so weekends and event days follow
    the variance-day weighting; events on or before ``T1`` are gone;
+   Today's pillar dates still ahead stay as extra interpolation nodes
+   (``interpolation_nodes``), each at its exact forward variance: the rolled
+   surface then interpolates through the same points as today's, so a fixed
+   expiry keeps exactly today's forward variance between pillars too, not
+   only at them (a tenor pillar that moves days, across a steep part of the
+   curve, would otherwise interpolate over today's bend; decided 2026-10-23).
+   Tenor lookups, calibration and the risk buckets see the tenor pillars only;
 3. **forward points are sticky tenor**: each tenor keeps its points and term
    rate (and the short ON/TN/SN swaps theirs), at its new forward delivery, so
    a fixed-delivery forward slides down the curve;
@@ -160,8 +167,10 @@ def roll_context(context, to_date):
     old_expiries = pd.to_datetime(vols["expiry"], errors="coerce", utc=True).dt.tz_localize(None)
     if old_expiries.isna().any():
         raise RollError(f"{pair} has a vol pillar without a valid expiry")
-    last_quoted = naive_date(old_expiries.max())
-    quoted = sorted({naive_date(day) for day in old_expiries})
+    # Today's whole interpolation curve: its tenor pillars and its own extra nodes.
+    knots = sorted({naive_date(day) for day in context.interpolation_rows()["expiry"]})
+    last_quoted = knots[-1]
+    quoted = knots
     previous_quoted = quoted[-2] if len(quoted) > 1 else None
     trade = end.date()
 
@@ -203,6 +212,22 @@ def roll_context(context, to_date):
     if not vol_rows["expiry"].is_monotonic_increasing or vol_rows["expiry"].duplicated().any():
         raise RollError(f"{pair}: the rolled pillar expiries do not rise with the tenor")
 
+    # Today's knots still ahead (and not a new pillar) stay as nodes, at their
+    # exact forward variance; one that cannot be formed is left out.
+    pillars_at = {naive_date(day) for day in vol_rows["expiry"]}
+    nodes, dropped = [], []
+    for knot in knots:
+        if knot <= end or knot in pillars_at:
+            continue
+        try:
+            quotes = _forward_quotes(_variance(context._market_for_expiry(knot), start, knot),
+                                     passed, knot, end)
+            nodes.append({"tenor": "", "expiry": pd.Timestamp(knot),
+                          **{name: float(quotes[key]) for name, key in _FROM_WINGS.items()}})
+        except Exception as exc:
+            dropped.append(f"{knot:%Y-%m-%d} ({exc})")
+    node_rows = pd.DataFrame(nodes, columns=list(VOL_COLUMNS))
+
     forwards = context.forward_rows.copy()
     by_calendar_days = "tenor" not in forwards.columns
     if by_calendar_days:
@@ -231,7 +256,7 @@ def roll_context(context, to_date):
         dates = pd.to_datetime(events["event_date"], errors="coerce", utc=True).dt.tz_localize(None)
         events = events.loc[dates > pd.Timestamp(end)].reset_index(drop=True)
 
-    wings = vol_rows[["atm", "rr_25", "bf_25", "rr_10", "bf_10"]].astype(float)
+    wings = pd.concat([vol_rows, node_rows])[["atm", "rr_25", "bf_25", "rr_10", "bf_10"]].astype(float)
     smile = pd.DataFrame({
         "PUT_10": wings["atm"] + wings["bf_10"] - wings["rr_10"] / 2,
         "PUT_25": wings["atm"] + wings["bf_25"] - wings["rr_25"] / 2, "ATM": wings["atm"],
@@ -245,6 +270,7 @@ def roll_context(context, to_date):
             pair, pd.Timestamp(end), context.spot, context.forward_divisor, False, vol_rows,
             forwards, events, settings=context.settings, market_service=context.market_service,
             diagnostics=context.diagnostics, short_points=context.short_points,
+            interpolation_nodes=node_rows,
         )
     except Exception as exc:
         raise RollError(f"{pair}: the rolled market does not build: {exc}") from exc
@@ -256,6 +282,11 @@ def roll_context(context, to_date):
     if extended:
         notes.append(f"{pair}: {', '.join(extended)} beyond the last quote: the last "
                      f"segment's forward vol held over the days rolled")
+    if len(node_rows):
+        notes.append(f"{pair}: {len(node_rows)} of today's pillar dates kept as interpolation "
+                     f"nodes at their forward variance")
+    if dropped:
+        notes.append(f"{pair}: nodes left out: {', '.join(dropped)}")
     if kept:
         notes.append(f"{pair}: tenor smile kept for {', '.join(kept)}")
     return rolled, notes
@@ -269,6 +300,7 @@ def _fingerprint(context, to_date):
              repr(sorted(context.short_points.items())),
              context.vol_rows.to_json(date_format="iso"), context.forward_rows.to_json(date_format="iso"),
              context.event_rows.to_json(date_format="iso"),
+             context.interpolation_nodes.to_json(date_format="iso"),
              str(id(context.market_service)), str(id(context.diagnostics))]
     return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
 
