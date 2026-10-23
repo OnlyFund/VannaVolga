@@ -129,7 +129,7 @@ def test_a_schema_3_store_migrates_with_a_backup_and_keeps_its_markets(tmp_path)
     assert store.load(market_id=market_id).spots["EURUSD"] == 1.12
     assert store.save_pair_events("EURUSD", NFP) == 1
     db = sqlite3.connect(str(path))
-    assert db.execute("SELECT MAX(version) FROM schema_info").fetchone()[0] == SCHEMA_VERSION == 6
+    assert db.execute("SELECT MAX(version) FROM schema_info").fetchone()[0] == SCHEMA_VERSION == 7
     db.execute("DELETE FROM schema_info")
     db.execute("INSERT INTO schema_info VALUES (?)", (SCHEMA_VERSION + 1,))
     db.commit()

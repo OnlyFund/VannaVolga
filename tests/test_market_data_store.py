@@ -216,7 +216,7 @@ def test_a_schema_4_store_is_backed_up_and_its_markets_get_the_machine_zone(tmp_
     snapshot = store.load()
     assert (snapshot.date_time, snapshot.timezone) == ("2026-10-21T20:21:27", "Europe/London")
     db = sqlite3.connect(str(path))
-    assert db.execute("SELECT MAX(version) FROM schema_info").fetchone()[0] == SCHEMA_VERSION == 6
+    assert db.execute("SELECT MAX(version) FROM schema_info").fetchone()[0] == SCHEMA_VERSION == 7
     db.close()
     assert "timezone" in store.snapshots().columns
     assert store.load_pillar_dates("2026-10-21") is None          # schema 6 tables, empty
@@ -261,7 +261,7 @@ def test_a_schema_5_store_is_backed_up_and_gets_the_pillar_date_tables(tmp_path)
     assert store.migrated_from is not None and ".v5-backup-" in store.migrated_from.name
     assert store.load().date_time == "2026-10-22T09:54:49"           # markets untouched
     db = sqlite3.connect(str(path))
-    assert db.execute("SELECT MAX(version) FROM schema_info").fetchone()[0] == 6
+    assert db.execute("SELECT MAX(version) FROM schema_info").fetchone()[0] == 7
     db.close()
     assert MarketDataStore(path).migrated_from is None                # migrated once
 
@@ -314,3 +314,34 @@ def test_duplicate_pillar_dates_store_nothing(tmp_path):
     with pytest.raises(ValueError, match="duplicate"):
         store.save_pillar_dates("2026-10-23", "2026-10-23T08:00:00", None, "bloomberg",
                                 [_rows()[0], _rows()[0]])
+
+
+# -- schema 7: month expiries from the forward date; Bloomberg's vol expiry kept beside them -----
+
+def _schema_6_store(path):
+    """A store as schema 6 wrote it: pillar dates without ``quoted_expiry``, one usable fetch."""
+    import market_data.store as module
+    db = sqlite3.connect(str(path))
+    db.executescript(module._SCHEMA.replace("    quoted_expiry TEXT NOT NULL DEFAULT '',\n", ""))
+    db.execute("INSERT INTO schema_info VALUES (6)")
+    db.execute("INSERT INTO markets (market_source, date_time, fetched_at, timezone) "
+               "VALUES ('bloomberg', '2026-10-23T09:01:00', '2026-10-23T09:01:01', 'Europe/London')")
+    db.execute("INSERT INTO date_fetches (fx_date, fetched_at, timezone, source) "
+               "VALUES ('2026-10-23', '2026-10-23T09:01:23', 'Europe/London', 'bloomberg')")
+    db.execute("INSERT INTO pillar_dates VALUES (1, 'NZDUSD', '1M', '2026-11-25', '2026-11-30', "
+               "'bloomberg', '2026-11-26', '2026-11-30')")
+    db.commit()
+    db.close()
+
+
+def test_a_schema_6_store_is_backed_up_and_its_fetches_are_superseded(tmp_path):
+    from market_data.store import SUPERSEDED
+    path = tmp_path / "market_data.sqlite"
+    _schema_6_store(path)
+    store = MarketDataStore(path)
+    assert store.migrated_from is not None and ".v6-backup-" in store.migrated_from.name
+    assert store.load_pillar_dates("2026-10-23") is None              # never used again
+    old = store.load_pillar_dates(fetch_id=1)
+    assert old.refused == SUPERSEDED and old.dates[("NZDUSD", "1M")][0] == "2026-11-25"
+    assert store.load().date_time == "2026-10-23T09:01:00"            # markets untouched
+    assert MarketDataStore(path).migrated_from is None

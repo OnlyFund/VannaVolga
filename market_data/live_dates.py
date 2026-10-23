@@ -3,12 +3,17 @@
 Once a day, before the 17:00 New York cut, Bloomberg's live dates for every
 pair and tenor:
 
-* **expiry**: ``OPT_EXPIRE_DT`` on the ATM vol ticker (``<PAIR>V<TENOR> Curncy``),
-  the expiry the vol quote is for;
-* **delivery**: month and year tenors, ``SETTLE_DT`` on the outright forward
-  ticker (the forward's settlement for the tenor); ON, day and week tenors, the
-  expiry's spot date (expiry plus the spot lag). A month tenor without a
-  forward date delivers on its expiry's spot date too (``partial``);
+* **ON, day and week tenors**: the expiry is ``OPT_EXPIRE_DT`` on the ATM vol
+  ticker (``<PAIR>V<TENOR> Curncy``); the delivery is the expiry's spot date
+  (expiry plus the spot lag);
+* **month and year tenors**: the delivery is ``SETTLE_DT`` on the outright
+  forward ticker, the date the forward reference rate maps to; the expiry is
+  derived from it (``pillars.expiry_for_delivery``: the latest expiry day whose
+  spot date is that delivery). ``OPT_EXPIRE_DT`` is then a cross-check only:
+  kept as ``quoted`` and, where it differs, listed in ``mismatches`` (decided
+  2026-10-23: NZDUSD 1M's ``OPT_EXPIRE_DT`` 25 Nov is not the pricing page's
+  26 Nov, the date the 30 Nov forward implies). A month tenor without a
+  forward date falls back to the solver;
 * **spot**: ``SETTLE_DT`` on ``<PAIR> Curncy``, a check only.
 
 Bloomberg's dates win over the solver's (decided 2026-10-23); a difference is a
@@ -21,9 +26,10 @@ and says why (``LiveDates.rejected``):
 * **the fetch** is refused after the cut or for any FX date but today's
   (``LiveDates.refused``); a failed request is retried pair by pair; a pair or
   ticker without an answer falls back alone;
-* **a tenor** falls back when its date is unreadable, its expiry is not a
-  weekday after the FX date, its delivery is not after its expiry, or its
-  expiry is further from the solver's than ``TOLERANCE_DAYS`` (a stale or
+* **a tenor** falls back when its date is missing or unreadable, no expiry
+  day delivers on a month tenor's forward date, its expiry is not a weekday
+  after the FX date, its delivery is not after its expiry, or its expiry or
+  delivery is further from the solver's than ``TOLERANCE_DAYS`` (a stale or
   mis-mapped ticker, not a holiday rule);
 * **a pair** falls back whole when its expiries or deliveries do not rise with
   the tenor, or Bloomberg's spot date is not after the FX date (stale data);
@@ -31,8 +37,8 @@ and says why (``LiveDates.rejected``):
   tenors disagree with the solver: something is systematically wrong.
 
 Stored (``save``, ``--store``) in the market store's pillar date tables
-(schema 6), with the solver's answer beside each date and every fallback with
-its reason. A fetch refused before asking Bloomberg (after the cut, at a
+(schema 7), with the solver's answer and ``OPT_EXPIRE_DT`` beside each date
+and every fallback with its reason. A fetch refused before asking Bloomberg (after the cut, at a
 weekend) stores nothing; one refused after (the cut passed, too many
 disputes) is stored as refused, for the record, and never used.
 
@@ -67,7 +73,9 @@ class LiveDates:
     fetched_at: datetime
     timezone: str = None
     dates: dict = field(default_factory=dict)       # (pair, tenor) -> PillarDates
-    sources: dict = field(default_factory=dict)     # (pair, tenor) -> "bloomberg" | "partial"
+    sources: dict = field(default_factory=dict)     # (pair, tenor) -> "bloomberg"
+    quoted: dict = field(default_factory=dict)      # (pair, tenor) -> OPT_EXPIRE_DT (or None)
+    mismatches: list = field(default_factory=list)  # (pair, tenor, OPT_EXPIRE_DT, expiry used)
     rejected: list = field(default_factory=list)    # (pair, tenor or "*", reason)
     disputes: list = field(default_factory=list)    # (pair, tenor, bloomberg PillarDates, solver PillarDates)
     refused: str = ""                               # why nothing is used
@@ -134,6 +142,41 @@ def _readable(text):
         return None
 
 
+def _tenor(rules, fx_day, tenor, got):
+    """``(PillarDates, OPT_EXPIRE_DT or None, solver PillarDates)``, or why it falls back."""
+    quoted = _readable(got.get("expiry"))
+    if got.get("expiry") and quoted is None:
+        return f"unreadable expiry {got['expiry']!r}"
+    solver = pillars.tenor_dates(rules, fx_day, tenor)
+    limit = TOLERANCE_DAYS["short" if _short(tenor) else "long"]
+    if _short(tenor):
+        if quoted is None:
+            return "no expiry from Bloomberg"
+        expiry = quoted
+        if expiry <= fx_day or expiry.weekday() >= 5:
+            return f"expiry {expiry} is no weekday after {fx_day}"
+        delivery = pillars.delivery_for_expiry(rules, expiry)
+    else:
+        if not got.get("forward"):
+            return "no forward settlement date from Bloomberg"
+        delivery = _readable(got["forward"])
+        if delivery is None:
+            return f"unreadable forward settlement date {got['forward']!r}"
+        if abs((delivery - solver.delivery).days) > limit:
+            return f"forward date {delivery} is over {limit} days from the solver's {solver.delivery}"
+        try:
+            expiry = pillars.expiry_for_delivery(rules, delivery)
+        except ValueError as error:
+            return f"no expiry for the forward date {delivery}: {error}"
+        if expiry <= fx_day:
+            return f"expiry {expiry} is not after {fx_day}"
+    if abs((expiry - solver.expiry).days) > limit:
+        return f"expiry {expiry} is over {limit} days from the solver's {solver.expiry}"
+    if delivery <= expiry:
+        return f"delivery {delivery} is not after expiry {expiry}"
+    return PillarDates(tenor, fx_day, solver.spot, expiry, delivery), quoted, solver
+
+
 def check(raw, fx_day, settlement_of, fetched_at=None, timezone=None, tenors=None):
     """Apply the fail-safes to ``raw`` (``fetch_raw``'s answer) for ``fx_day``."""
     tenors = tenors or TENORS
@@ -152,32 +195,15 @@ def check(raw, fx_day, settlement_of, fetched_at=None, timezone=None, tenors=Non
         mine = {}
         for tenor in tenors:
             got = answers.get(tenor) or {}
-            if not got.get("expiry"):
-                result.rejected.append((pair, tenor, "no expiry from Bloomberg"))
+            dated = _tenor(rules, fx_day, tenor, got)
+            if isinstance(dated, str):
+                result.rejected.append((pair, tenor, dated))
                 continue
-            expiry = _readable(got["expiry"])
-            if expiry is None:
-                result.rejected.append((pair, tenor, f"unreadable expiry {got['expiry']!r}"))
-                continue
-            if expiry <= fx_day or expiry.weekday() >= 5:
-                result.rejected.append((pair, tenor, f"expiry {expiry} is no weekday after {fx_day}"))
-                continue
-            solver = pillars.tenor_dates(rules, fx_day, tenor)
-            limit = TOLERANCE_DAYS["short" if _short(tenor) else "long"]
-            if abs((expiry - solver.expiry).days) > limit:
-                result.rejected.append((pair, tenor, f"expiry {expiry} is over {limit} days from the solver's {solver.expiry}"))
-                continue
-            source = "bloomberg"
-            if _short(tenor):
-                delivery = pillars.delivery_for_expiry(rules, expiry)
-            else:
-                delivery = _readable(got.get("forward"))
-                if delivery is None:
-                    delivery, source = pillars.delivery_for_expiry(rules, expiry), "partial"
-            if delivery <= expiry:
-                result.rejected.append((pair, tenor, f"delivery {delivery} is not after expiry {expiry}"))
-                continue
-            mine[tenor] = (PillarDates(tenor, fx_day, solver.spot, expiry, delivery), source, solver)
+            dates, quoted, solver = dated
+            result.quoted[(pair, tenor)] = quoted
+            if quoted is not None and quoted != dates.expiry:
+                result.mismatches.append((pair, tenor, quoted, dates.expiry))
+            mine[tenor] = (dates, "bloomberg", solver)
         ordered = [mine[t] for t in tenors if t in mine]
         rising = all(a[0].expiry < b[0].expiry and a[0].delivery < b[0].delivery
                      for a, b in zip(ordered, ordered[1:]))
@@ -243,7 +269,7 @@ def save(result, store):
     for (pair, tenor), dates in result.dates.items():
         ours = solver.get((pair, tenor), dates)           # no dispute: the solver agreed
         rows.append((pair, tenor, dates.expiry, dates.delivery, result.sources[(pair, tenor)],
-                     ours.expiry, ours.delivery))
+                     ours.expiry, ours.delivery, result.quoted.get((pair, tenor)) or ""))
     return store.save_pillar_dates(result.fx_date, result.fetched_at, result.timezone, SOURCE,
                                    rows, result.rejected, result.refused)
 
@@ -252,13 +278,14 @@ def report(result, out=print):
     out(f"FX date {result.fx_date}, fetched {result.fetched_at} ({result.timezone})")
     if result.refused:
         out(f"REFUSED: {result.refused}")
-    partial = sum(1 for s in result.sources.values() if s == "partial")
-    out(f"accepted {len(result.dates)} ({partial} partial), fell back {len(result.rejected)}, "
-        f"disputes {len(result.disputes)}")
+    out(f"accepted {len(result.dates)}, fell back {len(result.rejected)}, "
+        f"disputes {len(result.disputes)}, OPT_EXPIRE_DT differs on {len(result.mismatches)}")
     for pair, tenor, reason in result.rejected:
         out(f"  fallback {pair} {tenor}: {reason}")
     for pair, tenor, bbg, ours in result.disputes:
         out(f"  dispute {pair} {tenor}: bloomberg {bbg.expiry} -> {bbg.delivery}, solver {ours.expiry} -> {ours.delivery}")
+    for pair, tenor, quoted, used in result.mismatches:
+        out(f"  cross-check {pair} {tenor}: OPT_EXPIRE_DT {quoted}, expiry used {used}")
 
 
 def main(argv=None):

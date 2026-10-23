@@ -117,6 +117,29 @@ apeiron/
 - **Online booking:** on Streamlit Cloud the trade store is in memory (the session's
   book, not saved), so booking works without a trade database; two sessions
   opening a new store at once no longer leave it read-only.
+- **Edge cases confirmed on Bloomberg** (2026-10-22/23): the tenor cases are
+  bulk-checked (`market_data.bloomberg_edge_cases`) and stand at 308
+  confirmed and 52 house rule, with none disputed. The house rule is that a
+  weekday when both currencies are closed is no expiry day. Expiry overrides
+  (`market_data/calendars/expiry_overrides.csv`, or
+  `pillars.set_expiry_override` on the fly) change it for a pair and day.
+- **Spot rules:** USDILS counts its spot lag on weekdays (Bloomberg, 708 of
+  708 days). A cross takes the longer spot lag of its USD legs, so EURTRY
+  and EURPHP are T+2.
+- **Live pillar dates, steps 1–3** (`market_data.live_dates`): once a day,
+  before 17:00 New York, Bloomberg's dates for today are fetched with `bdp`.
+  - ON and week tenors take the expiry from `OPT_EXPIRE_DT` and deliver on
+    its spot date.
+  - Month and year tenors deliver on the outright forward's `SETTLE_DT`,
+    with the expiry derived from that date. `OPT_EXPIRE_DT` is then a
+    cross-check only. NZDUSD 1M (26 Nov → 30 Nov) is verified against the
+    pricing page and bank pricing.
+
+  Each date is checked against the solver, with fail-safes, and stored with
+  the solver's answer beside it (market store schema 7). The daily
+  `bloomberg_fetch` run stores the dates too. The day's markets use them, and
+  a tenor booked that day takes them; expiry overrides win, and the solver
+  is the fallback.
 
 ## Next
 
@@ -204,6 +227,21 @@ after item 6.
    - Open: the USD intermediate-day rule for crosses' spot, T+1 pairs, expiry for
      a delivery date, holiday-file gaps (some currencies use the USD calendar),
      whether options use the SN point.
+   - **Live pillar dates, still to do:**
+     - **Step 4:** disputes between the live dates and the solver
+       (`store.pillar_date_disputes`, `pillar_expiry_mismatches`) go to
+       `tests/edge_cases` for review, with a command.
+     - **Step 5:** an offline rateslib check, for personal use, in a separate
+       Python 3.10 environment. It compares spot and tenor dates with ours.
+   - **Trades store their delivery** (decided 2026-10-23): booking records the
+     expiry and the delivery. A month tenor delivers on the forward settlement
+     date; ON and week tenors deliver on the expiry's spot date. Pricing uses
+     the stored delivery, and older trades derive it from their expiry. This
+     is a trade store schema change (3 → 4), with a backup.
+   - **Delivery override on the pricing page:** the solved delivery can be
+     overwritten for edge cases and disputes with the market. The override is
+     marked on the line, refused when it isn't after the expiry or isn't a
+     business day for the pair, and stored on the booked trade.
    - **Validation:** random past and future dates and edge cases (month ends,
      holidays in either currency and USD-only, weekends, 25 Dec / 1 Jan, 28/29
      February and leap years, year ends, T+1 pairs, clock-change weeks) against

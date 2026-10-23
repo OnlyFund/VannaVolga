@@ -70,12 +70,12 @@ CSS = """
     }
     section[data-testid="stSidebar"],
     section[data-testid="stSidebar"] > div {
-        width: 220px !important;
-        min-width: 220px !important;
-        max-width: 220px !important;
+        width: 260px !important;
+        min-width: 260px !important;
+        max-width: 260px !important;
     }
     section[data-testid="stSidebar"] * {
-        font-size: 13px !important;
+        font-size: 12px !important;
     }
     /* Sidebar content starts under its close button, not 6rem down. */
     section[data-testid="stSidebar"] div:has(> .block-container),

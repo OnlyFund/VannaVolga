@@ -460,7 +460,20 @@ page checks above). 58 are marked `priority` 1 as the next batch to confirm.
   migrated on 23 Oct 2026 at 08:44 (backup
   `market_data.v5-backup-20261023_084458.sqlite`). Its 49 markets and event
   data are identical to before. The first fetch stored 585 dates and 40
-  disputes. Nothing uses the stored dates yet (step 3).
+  disputes.
+- **Schema 7 (23 Oct 2026):** month and year tenors deliver on the forward's
+  `SETTLE_DT`, and their expiry is derived from it. `OPT_EXPIRE_DT` is kept
+  as `quoted_expiry`, a cross-check (`pillar_expiry_mismatches()`). The
+  migration marks schema 6's fetches refused (`SUPERSEDED`), because their
+  month expiries came from the vol tickers. The user's store migrated at
+  09:41 (backup `market_data.v6-backup-20261023_094114.sqlite`), with its 50
+  markets identical to before. Fetch 4 stored 585 dates, with 9 disputes
+  (the NZD ON pillars on NZ Labour Day) and 31 `OPT_EXPIRE_DT` mismatches.
+- **The day's markets use the stored dates (`app.store_markets`):**
+  `live_pillar_dates` loads the fetch for the snapshot's own FX date. An
+  expiry override wins; a date failing the re-check, or an unreadable store,
+  falls back to the solver; `VV_LIVE_DATES=0` turns the dates off. Trades
+  resolve tenors through the vol table, so they follow.
 - **The store keeps data only, so Gaia market imports no date rule.** Hyperion's
   loader (`app.store_markets`) picks the latest snapshot taken before 17:00
   New York on the valuation date, and attaches its FX date

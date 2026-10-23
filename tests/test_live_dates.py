@@ -38,26 +38,43 @@ def test_agreeing_answers_are_accepted_without_disputes():
 
 
 def test_bloomberg_wins_and_the_difference_is_a_dispute():
-    result = _check(_raw(**{"1M": {"expiry": "2026-11-24", "forward": "2026-11-27"}}))
+    result = _check(_raw(**{"1W": {"expiry": "2026-11-02"}, "2M": {"forward": "2026-12-29"}}))
+    week, two = result.dates[("EURUSD", "1W")], result.dates[("EURUSD", "2M")]
+    assert (week.expiry, week.delivery) == (date(2026, 11, 2), date(2026, 11, 4))   # spot of expiry
+    assert (two.expiry, two.delivery) == (date(2026, 12, 24), date(2026, 12, 29))   # from the forward
+    assert [(p, t) for p, t, _, _ in result.disputes] == [("EURUSD", "1W"), ("EURUSD", "2M")]
+
+
+def test_a_month_expiry_comes_from_the_forward_date_and_opt_expire_dt_is_a_cross_check():
+    """NZDUSD 1M on 23 Oct 2026: OPT_EXPIRE_DT 25 Nov, forward 30 Nov -> 26 Nov (the pricing page)."""
+    result = _check(_raw(**{"1M": {"expiry": "2026-11-24"}}))
     dates = result.dates[("EURUSD", "1M")]
-    assert (dates.expiry, dates.delivery) == (date(2026, 11, 24), date(2026, 11, 27))
-    assert [(p, t) for p, t, _, _ in result.disputes] == [("EURUSD", "1M")]
+    assert (dates.expiry, dates.delivery) == (date(2026, 11, 25), date(2026, 11, 27))
+    assert not result.disputes
+    assert result.mismatches == [("EURUSD", "1M", date(2026, 11, 24), date(2026, 11, 25))]
+    assert result.quoted[("EURUSD", "1M")] == date(2026, 11, 24)
+    nzd = live.check({"NZDUSD": {"spot": "2026-10-28",
+                                 "1M": {"expiry": "2026-11-25", "forward": "2026-11-30"}}},
+                     DAY, settlement, tenors=("1M",))
+    assert nzd.dates[("NZDUSD", "1M")].expiry == date(2026, 11, 26)
 
 
-def test_week_delivery_is_the_expirys_spot_date_and_a_missing_forward_is_partial():
-    result = _check(_raw(**{"1W": {"expiry": "2026-11-02"}, "2M": {"forward": ""}}))
-    assert result.dates[("EURUSD", "1W")].delivery == date(2026, 11, 4)
-    assert result.sources[("EURUSD", "2M")] == "partial"
-    assert result.dates[("EURUSD", "2M")].delivery == date(2026, 12, 28)
+def test_a_month_tenor_needs_no_opt_expire_dt():
+    result = _check(_raw(**{"2M": {"expiry": ""}}))
+    assert result.dates[("EURUSD", "2M")].expiry == date(2026, 12, 23)
+    assert result.quoted[("EURUSD", "2M")] is None and not result.mismatches
 
 
 @pytest.mark.parametrize("change,reason", [
-    ({"1M": {"expiry": ""}}, "no expiry"),
-    ({"1M": {"expiry": "soon"}}, "unreadable"),
-    ({"1M": {"expiry": "2026-11-28"}}, "no weekday"),              # a Saturday
+    ({"1W": {"expiry": ""}}, "no expiry"),
+    ({"1W": {"expiry": "soon"}}, "unreadable"),
+    ({"1W": {"expiry": "2026-10-31"}}, "no weekday"),              # a Saturday
     ({"ON": {"expiry": "2026-10-23"}}, "no weekday after"),        # not after the FX date
-    ({"1M": {"expiry": "2026-12-09"}}, "days from the solver"),
-    ({"1M": {"forward": "2026-11-20"}}, "not after expiry"),
+    ({"1W": {"expiry": "2026-11-06"}}, "days from the solver"),
+    ({"1M": {"forward": ""}}, "no forward settlement date"),
+    ({"1M": {"forward": "soon"}}, "unreadable forward"),
+    ({"1M": {"forward": "2026-12-10"}}, "days from the solver"),
+    ({"1M": {"expiry": "Nov 25"}}, "unreadable expiry"),
 ])
 def test_a_doubtful_tenor_falls_back_alone(change, reason):
     result = _check(_raw(**change))
@@ -68,8 +85,7 @@ def test_a_doubtful_tenor_falls_back_alone(change, reason):
 
 @pytest.mark.parametrize("change,reason", [
     ({"spot": "2026-10-23"}, "stale"),
-    ({"2M": {"expiry": "2026-11-24", "forward": "2026-11-26"}, "1M": {"expiry": "2026-11-25", "forward": "2026-11-27"}},
-     "do not rise"),
+    ({"2M": {"forward": "2026-11-26"}}, "do not rise"),             # 2M before 1M
 ])
 def test_a_doubtful_pair_falls_back_whole(change, reason, monkeypatch):
     monkeypatch.setitem(live.TOLERANCE_DAYS, "long", 40)          # let the 2M through to the pair check
@@ -79,7 +95,7 @@ def test_a_doubtful_pair_falls_back_whole(change, reason, monkeypatch):
 
 def test_too_many_disputes_refuse_the_fetch(monkeypatch):
     monkeypatch.setattr(live, "MAX_DISPUTED", 0.2)
-    result = _check(_raw(**{"1M": {"expiry": "2026-11-24"}}))      # 1 of 4 disagree
+    result = _check(_raw(**{"1W": {"expiry": "2026-11-02"}}))      # 1 of 4 disagree
     assert result.refused and "disagree" in result.refused
 
 
@@ -141,16 +157,20 @@ def test_a_failing_request_is_retried_ticker_by_ticker():
 def test_save_stores_dates_solver_answers_and_fallbacks(tmp_path, monkeypatch):
     from market_data.store import MarketDataStore
     monkeypatch.setattr(live, "MAX_DISPUTED", 0.5)            # 1 of 3 disagree
-    result = _check(_raw(**{"1M": {"expiry": "2026-11-24"}, "2M": {"expiry": ""}}))
+    result = _check(_raw(**{"1W": {"expiry": "2026-11-02"}, "1M": {"expiry": "2026-11-24"},
+                            "2M": {"forward": ""}}))
     result.fetched = True
     store = MarketDataStore(tmp_path / "market_data.sqlite")
     fetch_id = live.save(result, store)
     day = store.load_pillar_dates(DAY)
     assert day.fetch_id == fetch_id and len(day.dates) == 3
-    assert day.dates[("EURUSD", "1M")] == ("2026-11-24", "2026-11-27", "bloomberg")
-    assert day.fallbacks == [("EURUSD", "2M", "no expiry from Bloomberg")]
+    assert day.dates[("EURUSD", "1W")] == ("2026-11-02", "2026-11-04", "bloomberg")
+    assert day.fallbacks == [("EURUSD", "2M", "no forward settlement date from Bloomberg")]
     disputes = store.pillar_date_disputes(DAY)
-    assert list(zip(disputes.tenor, disputes.solver_expiry)) == [("1M", "2026-11-25")]
+    assert list(zip(disputes.tenor, disputes.solver_expiry)) == [("1W", "2026-10-30")]
+    mismatches = store.pillar_expiry_mismatches(DAY)
+    assert list(zip(mismatches.tenor, mismatches.quoted_expiry, mismatches.expiry)) == [
+        ("1M", "2026-11-24", "2026-11-25")]
 
 
 def test_nothing_is_stored_when_bloomberg_was_never_asked(tmp_path):
@@ -164,7 +184,7 @@ def test_nothing_is_stored_when_bloomberg_was_never_asked(tmp_path):
 def test_a_fetch_refused_after_asking_is_recorded_but_never_used(tmp_path, monkeypatch):
     from market_data.store import MarketDataStore
     monkeypatch.setattr(live, "MAX_DISPUTED", 0.2)
-    result = _check(_raw(**{"1M": {"expiry": "2026-11-24"}}))
+    result = _check(_raw(**{"1W": {"expiry": "2026-11-02"}}))
     result.fetched = True
     store = MarketDataStore(tmp_path / "market_data.sqlite")
     fetch_id = live.save(result, store)

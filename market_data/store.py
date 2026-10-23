@@ -50,13 +50,15 @@ tenor) is kept as a ``date_fetches`` record (``fx_date``, ``fetched_at``,
 ``timezone``, ``source``, and ``refused`` with the reason when none may be
 used), its ``pillar_dates`` (``pair``, ``tenor``, ``expiry``, ``delivery``,
 ``source``, and the solver's ``solver_expiry`` / ``solver_delivery`` beside
-them, so disputes can be found later) and its ``pillar_date_fallbacks``
+them, so disputes can be found later, and since schema 7 Bloomberg's vol
+ticker expiry ``quoted_expiry``, a cross-check) and its ``pillar_date_fallbacks``
 (what fell back to the solver, and why). Fetches are only ever added;
 ``load_pillar_dates`` reads the latest usable one for an FX date.
 
 Failsafes: a store written by an older schema (1: ``snapshots``; 2: markets
 without event sets; 3: without per-pair calendars; 4: without time zones;
-5: without pillar dates) is copied to a
+5: without pillar dates; 6: without ``quoted_expiry``, whose fetches took month
+expiries from the vol tickers and are marked refused, superseded) is copied to a
 timestamped backup and migrated in one transaction, all or nothing; a store written by a newer schema is refused
 rather than misread; event rows are validated as a whole and a set with any
 bad row is not stored.
@@ -74,7 +76,10 @@ from pathlib import Path
 import pandas as pd
 
 DEFAULT_PATH = Path(__file__).resolve().parents[1] / "data" / "local" / "market_data.sqlite"
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
+#: Why schema 6's fetches are not used (their month expiries were the vol tickers').
+SUPERSEDED = ("superseded: month expiries were OPT_EXPIRE_DT, not derived from the "
+              "forward date (schema 7, 2026-10-23)")
 SPOT, DEPO, FWD_PTS = "spot", "depo", "fwd_pts"
 VOL_FIELDS = ("atm", "rr_25", "bf_25", "rr_10", "bf_10")
 VOL_PREFIX = "vol_"
@@ -153,6 +158,7 @@ CREATE TABLE IF NOT EXISTS pillar_dates (
     source TEXT NOT NULL,
     solver_expiry TEXT NOT NULL DEFAULT '',
     solver_delivery TEXT NOT NULL DEFAULT '',
+    quoted_expiry TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (fetch_id, pair, tenor),
     CHECK (expiry < delivery)
 );
@@ -331,6 +337,8 @@ class MarketDataStore:
                 self._migrate_v4(db)
             if "markets" in tables and "date_fetches" not in tables:
                 self._migrate_v5(db)
+            elif "pillar_dates" in tables and "quoted_expiry" not in self._columns(db, "pillar_dates"):
+                self._migrate_v6(db)
             with db:
                 db.executescript(_SCHEMA)
                 version = db.execute("SELECT MAX(version) FROM schema_info").fetchone()[0]
@@ -355,6 +363,32 @@ class MarketDataStore:
     @staticmethod
     def _columns(db, table):
         return {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+
+    def _migrate_v6(self, db):
+        """Schema 6 -> 7: ``pillar_dates.quoted_expiry``; schema 6's fetches are
+        marked refused (``SUPERSEDED``), so none is used again.
+
+        Backed up first; one explicit transaction, rolled back on any error.
+        """
+        version = db.execute("SELECT MAX(version) FROM schema_info").fetchone()[0]
+        if version is not None and version >= SCHEMA_VERSION:
+            return
+        backup = self._backup(6)
+        db.isolation_level = None
+        try:
+            db.execute("BEGIN")
+            db.execute("ALTER TABLE pillar_dates ADD COLUMN quoted_expiry TEXT NOT NULL DEFAULT ''")
+            db.execute("UPDATE date_fetches SET refused = ? WHERE refused = ''", (SUPERSEDED,))
+            db.execute("DELETE FROM schema_info")
+            db.execute("INSERT INTO schema_info VALUES (?)", (SCHEMA_VERSION,))
+            db.execute("COMMIT")
+        except Exception as exc:
+            db.execute("ROLLBACK")
+            raise MarketDataStoreError(
+                f"could not migrate {self.path} (unchanged; backup at {backup}): {exc}") from exc
+        finally:
+            db.isolation_level = ""
+        self.migrated_from = self.migrated_from or backup
 
     def _migrate_v5(self, db):
         """Schema 5 -> 6: the pillar date tables (empty).
@@ -540,7 +574,7 @@ class MarketDataStore:
         """Store one fetch of the day's pillar dates; returns its ``fetch_id``.
 
         ``dates`` is ``[(pair, tenor, expiry, delivery, source, solver_expiry,
-        solver_delivery)]``, ``fallbacks`` ``[(pair, tenor, reason)]``. Checked
+        solver_delivery[, quoted_expiry])]``, ``fallbacks`` ``[(pair, tenor, reason)]``. Checked
         as a whole (pairs, tenors, dates, expiry before delivery, no duplicate)
         and stored whole or not at all. A refused fetch is stored too, with its
         reason, for the record; it is never loaded as usable.
@@ -550,7 +584,10 @@ class MarketDataStore:
         clean, errors, seen = [], [], set()
         for number, row in enumerate(dates, start=1):
             try:
-                pair, tenor, expiry, delivery, kind, solver_expiry, solver_delivery = row
+                pair, tenor, expiry, delivery, kind, solver_expiry, solver_delivery, *rest = row
+                if len(rest) > 1:
+                    raise ValueError(f"{len(row)} fields")
+                quoted = rest[0] if rest else ""
                 pair = str(pair).replace("/", "").upper()
                 if not re.fullmatch(r"[A-Z]{6}", pair):
                     raise ValueError(f"pair {row[0]!r}")
@@ -565,7 +602,8 @@ class MarketDataStore:
                 seen.add((pair, tenor))
                 clean.append((pair, tenor, expiry, delivery, str(kind),
                               _day(solver_expiry) if solver_expiry else "",
-                              _day(solver_delivery) if solver_delivery else ""))
+                              _day(solver_delivery) if solver_delivery else "",
+                              _day(quoted) if quoted else ""))
             except (TypeError, ValueError) as exc:
                 errors.append(f"row {number}: {exc}")
         if errors:
@@ -576,7 +614,9 @@ class MarketDataStore:
                 "VALUES (?, ?, ?, ?, ?)",
                 (_day(fx_date), _iso(fetched_at), timezone or STORE_TIMEZONE, source,
                  refused or "")).lastrowid
-            db.executemany("INSERT INTO pillar_dates VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            db.executemany("INSERT INTO pillar_dates (fetch_id, pair, tenor, expiry, delivery, source, "
+                           "solver_expiry, solver_delivery, quoted_expiry) "
+                           "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                            [(fetch_id, *row) for row in clean])
             db.executemany("INSERT INTO pillar_date_fallbacks VALUES (?, ?, ?, ?)",
                            [(fetch_id, str(p), str(t), str(r)) for p, t, r in fallbacks])
@@ -612,6 +652,20 @@ class MarketDataStore:
                  "JOIN date_fetches f ON f.fetch_id = d.fetch_id "
                  "WHERE f.refused = '' AND d.solver_expiry != '' "
                  "AND (d.expiry != d.solver_expiry OR d.delivery != d.solver_delivery)")
+        args = ()
+        if fx_date is not None:
+            query += " AND f.fx_date = ?"
+            args = (_day(fx_date),)
+        with closing(self._connect()) as db:
+            return pd.read_sql_query(
+                query + " ORDER BY f.fx_date DESC, f.fetch_id DESC, d.pair, d.tenor", db, params=args)
+
+    def pillar_expiry_mismatches(self, fx_date=None):
+        """Where Bloomberg's vol ticker expiry (``quoted_expiry``) differs from the
+        expiry used: ``fx_date, fetch_id, pair, tenor, quoted_expiry, expiry``."""
+        query = ("SELECT f.fx_date, f.fetch_id, d.pair, d.tenor, d.quoted_expiry, d.expiry "
+                 "FROM pillar_dates d JOIN date_fetches f ON f.fetch_id = d.fetch_id "
+                 "WHERE f.refused = '' AND d.quoted_expiry != '' AND d.quoted_expiry != d.expiry")
         args = ()
         if fx_date is not None:
             query += " AND f.fx_date = ?"
