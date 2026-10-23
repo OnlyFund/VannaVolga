@@ -39,7 +39,7 @@ def render_greek_picker(key, default=catalog.BASE_GREEKS, label="Greeks"):
              "Sticky-delta and smile deltas include the premium where the pair's "
              "convention does (e.g. USDJPY); BS delta never, BS delta incl. premium "
              "always. Decay is the change to the next business day; gamma per vol is "
-             "gamma's change per vol point; weighted Greeks are scaled by 0.25/T^0.4. "
+             "gamma's change per vol point; weighted Greeks are scaled by (0.25/T)^0.5. "
              "Extras are computed when you price.")
     if not chosen:
         st.caption("No Greeks chosen: showing " + ", ".join(

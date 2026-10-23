@@ -512,6 +512,22 @@ currency. Its undiscounted term-currency MTM/P&L is
 is that amount divided by scenario spot. Each forward contributes its signed
 base amount to both fixed and smile delta totals.
 
+### Weighted Greeks
+
+Weighted gamma and weighted vega multiply the gamma (smile or fixed) and the
+fixed vega by an expiry weight, `Greeks.weighted_greeks.scale_t`:
+
+```
+weight = (ref_tenor / T) ** alpha        ref_tenor = 0.25 (3M), alpha = 0.5
+```
+
+The weight is 1 at the reference tenor (a 3M expiry; 0.997 on actual-day
+counts), above 1 for shorter expiries and below 1 for longer ones. The default
+alpha of 0.5 is the usual square-root-of-time vega weighting. Both
+`ref_tenor` and `alpha` are parameters of `scale_t`. Earlier versions used
+`0.25 / T**0.4`, which was not normalised to any tenor (0.43 at 3M, 0.25 at 1Y),
+so stored weighted values from before 23 Oct 2026 are not comparable.
+
 ## Forward volatility and events
 
 `market_data/vol_data.py` builds a forward volatility curve from total

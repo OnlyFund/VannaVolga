@@ -4,12 +4,12 @@ from Greeks.fixed_greeks import FixedGamma, FixedVega
 from Greeks.smile_greeks import SmileGreeks
 from market_data import MarketData, Modifications
 
-def scale_t(expiry_date, valuation_date, alpha=0.4):
-    """Return the repository's expiry-dependent risk scaling factor."""
+def scale_t(expiry_date, valuation_date, alpha=0.5, ref_tenor=0.25):
+    """Return ``(ref_tenor / T) ** alpha``, equal to 1 at ``ref_tenor`` years (default 3M)."""
     time_to_expiry = year_fraction(expiry_date, valuation_date)
     if time_to_expiry <= 0:
         raise ValueError("Expiry must be after valuation date")
-    return 0.25 / (time_to_expiry ** alpha)
+    return (ref_tenor / time_to_expiry) ** alpha
 
 
 class WeightedGreeks(FixedGamma):

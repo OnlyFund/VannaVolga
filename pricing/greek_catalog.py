@@ -13,7 +13,7 @@ the ``EXTRA_GREEKS`` only when a report asks for them
 * cross (``gamma_vol``): change in gamma per vol point, all quoted vols
   scaled together (``Greeks.cross_greeks``);
 * weighted (``weighted_gamma``, ``weighted_vega``): gamma and vega times the
-  expiry weight ``0.25 / T**0.4`` (``Greeks.weighted_greeks.scale_t``);
+  expiry weight ``(0.25 / T)**0.5`` (``Greeks.weighted_greeks.scale_t``);
 * theta parts (``theta_static``, ``theta_vol_roll``, ``theta_carry``): theta
   split into its static day decay (vol, forward and rates held: what
   Bloomberg reports as theta), the strike vol's overnight move and the
@@ -72,8 +72,8 @@ _DECAY_LABELS = {"delta": "Delta decay (charm)", "gamma": "Gamma decay (color)",
 _DECAY = tuple(Greek(f"{name}_decay", _DECAY_LABELS[name], "change per business day", "decay")
                for name in DECAY_OF)
 _CROSS = (Greek("gamma_vol", "Gamma per vol", "gamma change per vol point", "cross"),)
-_WEIGHTED = (Greek("weighted_gamma", "Weighted gamma", "gamma x 0.25/T^0.4", "weighted"),
-             Greek("weighted_vega", "Weighted vega", "vega x 0.25/T^0.4", "weighted"))
+_WEIGHTED = (Greek("weighted_gamma", "Weighted gamma", "gamma x (0.25/T)^0.5", "weighted"),
+             Greek("weighted_vega", "Weighted vega", "vega x (0.25/T)^0.5", "weighted"))
 _THETA_PARTS = (Greek("theta_static", "Theta static", "premium ccy per day", "theta"),
                 Greek("theta_vol_roll", "Theta vol roll", "premium ccy per day", "theta"),
                 Greek("theta_carry", "Theta carry", "premium ccy per day", "theta"))

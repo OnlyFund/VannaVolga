@@ -155,6 +155,13 @@ apeiron/
   store's 22 Oct market rolled to 23 Oct (65 pairs): the dates match the
   actual 23 Oct market exactly.
 
+- **Weighted Greeks normalised to 3M** (2026-10-23): the expiry weight was
+  `0.25 / T**0.4`, which was not 1 at any tenor. It is now
+  `(ref_tenor / T) ** alpha` with `ref_tenor` 0.25 (3M) and `alpha` 0.5
+  (square-root-of-time), so a 3M weighted vega equals its plain vega. Weighted
+  gamma shares `scale_t` and changes the same way; both parameters are
+  arguments of `scale_t`. Labels updated in the Greek catalog and picker.
+
 ## Priorities (2026-10-23)
 
 **P1, now: the performance foundation, then finish item 6 (dates).**
