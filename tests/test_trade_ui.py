@@ -171,7 +171,7 @@ def test_theta_usd_columns_are_offered_in_the_column_picker():
     from app.ui.trades_block import column_options
     options = column_options()
     assert options.index("fixed_theta_usd") == options.index("theta") + 1
-    assert options.index("theta_usd") == options.index("fixed_theta_usd") + 1
+    assert "theta_usd" in options[:options.index("theta")]     # a default column: listed first
 
 
 def test_portfolio_spot_reprices_without_moving_the_market(store, markets):

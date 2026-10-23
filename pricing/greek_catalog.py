@@ -66,8 +66,8 @@ _BASE = (
     Greek("spot_delta", "Spot delta", "base ccy", "first order"),
     Greek("fwd_delta", "Forward delta", "base ccy forward", "first order"),
 )
-_DECAY_LABELS = {"delta": "Delta decay (charm)", "gamma": "Gamma decay (color)",
-                 "vega": "Vega decay (veta)", "vanna": "Vanna decay", "volga": "Volga decay",
+_DECAY_LABELS = {"delta": "Delta decay", "gamma": "Gamma decay",
+                 "vega": "Vega decay", "vanna": "Vanna decay", "volga": "Volga decay",
                  "rega": "Rega decay", "sega": "Sega decay"}
 _DECAY = tuple(Greek(f"{name}_decay", _DECAY_LABELS[name], "change per business day", "decay")
                for name in DECAY_OF)

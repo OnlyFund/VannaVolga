@@ -85,7 +85,8 @@ def test_columns_map_to_their_greek():
 
 def test_portfolio_prices_only_the_extras_its_columns_need():
     from app.ui.trades_block import DEFAULT_COLUMNS, chosen_extras, extra_columns
-    assert chosen_extras(DEFAULT_COLUMNS) == []
+    # The defaults show weighted vega, rho and the delta and gamma decays: those are priced.
+    assert chosen_extras(DEFAULT_COLUMNS) == ["delta_decay", "gamma_decay", "weighted_vega", "rho"]
     assert chosen_extras(["pnl_usd", "vega_decay_usd", "fixed_gamma_vol"]) == [
         "vega_decay", "gamma_vol"]
     columns = extra_columns()

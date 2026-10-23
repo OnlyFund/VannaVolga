@@ -457,8 +457,8 @@ def portfolio_spots(market, overrides, snapshot_spots=None):
 #: By-pair columns always shown, and the optional ones shown until the user changes them.
 FIXED_COLUMNS = ("currency_pair", "spot")
 RATE_COLUMNS = ("currency_pair", "spot", "market_spot")
-DEFAULT_COLUMNS = ("pnl_usd", "delta", "fixed_delta", "gamma", "vega_usd", "vanna_usd",
-                   "volga_usd", "rega_usd", "sega_usd")
+DEFAULT_COLUMNS = ("pnl_usd", "delta", "fixed_delta", "gamma", "vega_usd",'weighted_vega_usd','theta_usd', "vanna_usd",
+                   "volga_usd", "rega_usd", "sega_usd",'rho','delta_decay','gamma_decay')
 _PAIR_COLUMNS = "_portfolio_pair_columns_choice"
 
 
