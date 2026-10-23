@@ -30,9 +30,16 @@ and says why (``LiveDates.rejected``):
 * **the whole fetch** is refused when more than ``MAX_DISPUTED`` of the accepted
   tenors disagree with the solver: something is systematically wrong.
 
+Stored (``save``, ``--store``) in the market store's pillar date tables
+(schema 6), with the solver's answer beside each date and every fallback with
+its reason. A fetch refused before asking Bloomberg (after the cut, at a
+weekend) stores nothing; one refused after (the cut passed, too many
+disputes) is stored as refused, for the record, and never used.
+
 Run on a machine with a Bloomberg terminal (``xbbg``):
 
-    python -m market_data.live_dates            # fetch and report (nothing stored yet)
+    python -m market_data.live_dates            # fetch and report
+    python -m market_data.live_dates --store    # ... and store them
 """
 import argparse
 import sys
@@ -64,6 +71,7 @@ class LiveDates:
     rejected: list = field(default_factory=list)    # (pair, tenor or "*", reason)
     disputes: list = field(default_factory=list)    # (pair, tenor, bloomberg PillarDates, solver PillarDates)
     refused: str = ""                               # why nothing is used
+    fetched: bool = False                           # Bloomberg was asked
 
 
 def _short(tenor):
@@ -216,9 +224,28 @@ def live_dates(pairs=None, timezone=None, bdp=None, settlement_of=None, clock=da
     if bdp is None:
         from xbbg.blp import bdp
     result = check(fetch_raw(bdp, list(pairs)), today, settlement_of, now, timezone)
+    result.fetched = True
     if in_session(clock(), timezone) != today:
         result.refused = "the 17:00 New York cut passed during the fetch"
     return result
+
+
+SOURCE = "bloomberg"
+
+
+def save(result, store):
+    """Store ``result`` (``LiveDates``); returns the ``fetch_id``, or ``None`` when
+    Bloomberg was never asked."""
+    if not result.fetched:
+        return None
+    solver = {(pair, tenor): ours for pair, tenor, _, ours in result.disputes}
+    rows = []
+    for (pair, tenor), dates in result.dates.items():
+        ours = solver.get((pair, tenor), dates)           # no dispute: the solver agreed
+        rows.append((pair, tenor, dates.expiry, dates.delivery, result.sources[(pair, tenor)],
+                     ours.expiry, ours.delivery))
+    return store.save_pillar_dates(result.fx_date, result.fetched_at, result.timezone, SOURCE,
+                                   rows, result.rejected, result.refused)
 
 
 def report(result, out=print):
@@ -237,9 +264,15 @@ def report(result, out=print):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--pairs", nargs="+")
+    parser.add_argument("--store", action="store_true", help="store the dates in the market store")
     args = parser.parse_args(argv)
     result = live_dates(pairs=args.pairs)
     report(result)
+    if args.store:
+        from market_data.store import open_market_data_store
+        store = open_market_data_store()
+        fetch_id = save(result, store)
+        print(f"stored as fetch {fetch_id} in {store.path}" if fetch_id else "nothing stored")
     return 1 if result.refused else 0
 
 

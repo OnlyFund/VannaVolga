@@ -44,8 +44,19 @@ date (``load_pair_events(as_of=...)``); a pair without one falls back to the
 market's pinned event set. Rows carry a ``currency`` (empty for now) so the
 calendars can later move to per-currency events without a redesign.
 
+**Pillar dates** (schema 6): each live fetch of the day's market dates
+(``market_data.live_dates``: Bloomberg's expiry and delivery for each pair and
+tenor) is kept as a ``date_fetches`` record (``fx_date``, ``fetched_at``,
+``timezone``, ``source``, and ``refused`` with the reason when none may be
+used), its ``pillar_dates`` (``pair``, ``tenor``, ``expiry``, ``delivery``,
+``source``, and the solver's ``solver_expiry`` / ``solver_delivery`` beside
+them, so disputes can be found later) and its ``pillar_date_fallbacks``
+(what fell back to the solver, and why). Fetches are only ever added;
+``load_pillar_dates`` reads the latest usable one for an FX date.
+
 Failsafes: a store written by an older schema (1: ``snapshots``; 2: markets
-without event sets; 3: without per-pair calendars; 4: without time zones) is copied to a
+without event sets; 3: without per-pair calendars; 4: without time zones;
+5: without pillar dates) is copied to a
 timestamped backup and migrated in one transaction, all or nothing; a store written by a newer schema is refused
 rather than misread; event rows are validated as a whole and a set with any
 bad row is not stored.
@@ -63,7 +74,7 @@ from pathlib import Path
 import pandas as pd
 
 DEFAULT_PATH = Path(__file__).resolve().parents[1] / "data" / "local" / "market_data.sqlite"
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 SPOT, DEPO, FWD_PTS = "spot", "depo", "fwd_pts"
 VOL_FIELDS = ("atm", "rr_25", "bf_25", "rr_10", "bf_10")
 VOL_PREFIX = "vol_"
@@ -123,6 +134,36 @@ CREATE TABLE IF NOT EXISTS pair_events (
 );
 """
 
+_PILLAR_DATE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS date_fetches (
+    fetch_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fx_date TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    timezone TEXT NOT NULL,
+    source TEXT NOT NULL,
+    refused TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS date_fetches_fx_date ON date_fetches (fx_date);
+CREATE TABLE IF NOT EXISTS pillar_dates (
+    fetch_id INTEGER NOT NULL REFERENCES date_fetches (fetch_id),
+    pair TEXT NOT NULL,
+    tenor TEXT NOT NULL,
+    expiry TEXT NOT NULL,
+    delivery TEXT NOT NULL,
+    source TEXT NOT NULL,
+    solver_expiry TEXT NOT NULL DEFAULT '',
+    solver_delivery TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (fetch_id, pair, tenor),
+    CHECK (expiry < delivery)
+);
+CREATE TABLE IF NOT EXISTS pillar_date_fallbacks (
+    fetch_id INTEGER NOT NULL REFERENCES date_fetches (fetch_id),
+    pair TEXT NOT NULL,
+    tenor TEXT NOT NULL,
+    reason TEXT NOT NULL
+);
+"""
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_info (version INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS markets (
@@ -144,7 +185,12 @@ CREATE TABLE IF NOT EXISTS quotes (
     PRIMARY KEY (market_id, kind, name, tenor)
 );
 CREATE INDEX IF NOT EXISTS quotes_series ON quotes (kind, name, tenor);
-""" + _EVENT_SCHEMA + _PAIR_EVENT_SCHEMA
+""" + _EVENT_SCHEMA + _PAIR_EVENT_SCHEMA + _PILLAR_DATE_SCHEMA
+
+#: One stored day of pillar dates: ``dates`` is ``{(pair, tenor): (expiry,
+#: delivery, source)}`` with ISO dates; ``fallbacks`` ``[(pair, tenor, reason)]``.
+PillarDateFetch = namedtuple("PillarDateFetch", "fetch_id fx_date fetched_at timezone source "
+                                                "refused dates fallbacks")
 
 _SNAPSHOT_FIELDS = ("market_id market_source date_time fetched_at note event_set_id timezone "
                     "spots depo_curves vols forward_points fx_date")
@@ -283,6 +329,8 @@ class MarketDataStore:
                 self._migrate_v3(db)
             if "markets" in tables and "timezone" not in self._columns(db, "markets"):
                 self._migrate_v4(db)
+            if "markets" in tables and "date_fetches" not in tables:
+                self._migrate_v5(db)
             with db:
                 db.executescript(_SCHEMA)
                 version = db.execute("SELECT MAX(version) FROM schema_info").fetchone()[0]
@@ -307,6 +355,32 @@ class MarketDataStore:
     @staticmethod
     def _columns(db, table):
         return {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+
+    def _migrate_v5(self, db):
+        """Schema 5 -> 6: the pillar date tables (empty).
+
+        Backed up first; one explicit transaction, rolled back on any error.
+        Skipped when an older step of this opening has just migrated.
+        """
+        version = db.execute("SELECT MAX(version) FROM schema_info").fetchone()[0]
+        if version is not None and version >= SCHEMA_VERSION:
+            return               # newer: refused below; current: an older step migrated it
+        backup = self._backup(5)
+        db.isolation_level = None
+        try:
+            db.execute("BEGIN")
+            for statement in filter(str.strip, _PILLAR_DATE_SCHEMA.split(";")):
+                db.execute(statement)
+            db.execute("DELETE FROM schema_info")
+            db.execute("INSERT INTO schema_info VALUES (?)", (SCHEMA_VERSION,))
+            db.execute("COMMIT")
+        except Exception as exc:
+            db.execute("ROLLBACK")
+            raise MarketDataStoreError(
+                f"could not migrate {self.path} (unchanged; backup at {backup}): {exc}") from exc
+        finally:
+            db.isolation_level = ""
+        self.migrated_from = self.migrated_from or backup
 
     def _migrate_v4(self, db):
         """Schema 4 -> 5: ``markets.timezone``; every market stored so far gets
@@ -458,6 +532,93 @@ class MarketDataStore:
                 db.execute("INSERT INTO event_pins VALUES (?, ?, ?, ?)",
                            (market_id, event_set_id, fetched_at, "pinned when saved"))
         return market_id
+
+    # -- pillar dates --------------------------------------------------------
+
+    def save_pillar_dates(self, fx_date, fetched_at, timezone, source, dates=(), fallbacks=(),
+                          refused=""):
+        """Store one fetch of the day's pillar dates; returns its ``fetch_id``.
+
+        ``dates`` is ``[(pair, tenor, expiry, delivery, source, solver_expiry,
+        solver_delivery)]``, ``fallbacks`` ``[(pair, tenor, reason)]``. Checked
+        as a whole (pairs, tenors, dates, expiry before delivery, no duplicate)
+        and stored whole or not at all. A refused fetch is stored too, with its
+        reason, for the record; it is never loaded as usable.
+        """
+        if not source:
+            raise ValueError("pillar date source is required")
+        clean, errors, seen = [], [], set()
+        for number, row in enumerate(dates, start=1):
+            try:
+                pair, tenor, expiry, delivery, kind, solver_expiry, solver_delivery = row
+                pair = str(pair).replace("/", "").upper()
+                if not re.fullmatch(r"[A-Z]{6}", pair):
+                    raise ValueError(f"pair {row[0]!r}")
+                tenor = str(tenor).strip().upper()
+                if not re.fullmatch(r"ON|\d+[DWMY]", tenor):
+                    raise ValueError(f"tenor {row[1]!r}")
+                expiry, delivery = _day(expiry), _day(delivery)
+                if not expiry < delivery:
+                    raise ValueError(f"expiry {expiry} is not before delivery {delivery}")
+                if (pair, tenor) in seen:
+                    raise ValueError(f"duplicate {pair} {tenor}")
+                seen.add((pair, tenor))
+                clean.append((pair, tenor, expiry, delivery, str(kind),
+                              _day(solver_expiry) if solver_expiry else "",
+                              _day(solver_delivery) if solver_delivery else ""))
+            except (TypeError, ValueError) as exc:
+                errors.append(f"row {number}: {exc}")
+        if errors:
+            raise ValueError("pillar dates not stored: " + "; ".join(errors))
+        with closing(self._connect()) as db, db:
+            fetch_id = db.execute(
+                "INSERT INTO date_fetches (fx_date, fetched_at, timezone, source, refused) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (_day(fx_date), _iso(fetched_at), timezone or STORE_TIMEZONE, source,
+                 refused or "")).lastrowid
+            db.executemany("INSERT INTO pillar_dates VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                           [(fetch_id, *row) for row in clean])
+            db.executemany("INSERT INTO pillar_date_fallbacks VALUES (?, ?, ?, ?)",
+                           [(fetch_id, str(p), str(t), str(r)) for p, t, r in fallbacks])
+        return fetch_id
+
+    def load_pillar_dates(self, fx_date=None, fetch_id=None):
+        """The latest usable (not refused) fetch for ``fx_date``, or ``None``.
+
+        ``fetch_id`` reads that fetch instead (refused ones included).
+        """
+        with closing(self._connect()) as db:
+            if fetch_id is not None:
+                head = db.execute("SELECT * FROM date_fetches WHERE fetch_id = ?",
+                                  (int(fetch_id),)).fetchone()
+            else:
+                head = db.execute(
+                    "SELECT * FROM date_fetches WHERE fx_date = ? AND refused = '' "
+                    "ORDER BY fetched_at DESC, fetch_id DESC LIMIT 1", (_day(fx_date),)).fetchone()
+            if head is None:
+                return None
+            dates = {(pair, tenor): (expiry, delivery, kind) for pair, tenor, expiry, delivery, kind in
+                     db.execute("SELECT pair, tenor, expiry, delivery, source FROM pillar_dates "
+                                "WHERE fetch_id = ?", (head[0],))}
+            fallbacks = db.execute("SELECT pair, tenor, reason FROM pillar_date_fallbacks "
+                                   "WHERE fetch_id = ? ORDER BY rowid", (head[0],)).fetchall()
+        return PillarDateFetch(*head, dates, [tuple(row) for row in fallbacks])
+
+    def pillar_date_disputes(self, fx_date=None):
+        """Stored dates that differ from the solver's: ``fx_date, fetch_id, pair, tenor,
+        expiry, delivery, solver_expiry, solver_delivery`` (usable fetches, newest first)."""
+        query = ("SELECT f.fx_date, f.fetch_id, d.pair, d.tenor, d.expiry, d.delivery, "
+                 "d.solver_expiry, d.solver_delivery FROM pillar_dates d "
+                 "JOIN date_fetches f ON f.fetch_id = d.fetch_id "
+                 "WHERE f.refused = '' AND d.solver_expiry != '' "
+                 "AND (d.expiry != d.solver_expiry OR d.delivery != d.solver_delivery)")
+        args = ()
+        if fx_date is not None:
+            query += " AND f.fx_date = ?"
+            args = (_day(fx_date),)
+        with closing(self._connect()) as db:
+            return pd.read_sql_query(
+                query + " ORDER BY f.fx_date DESC, f.fetch_id DESC, d.pair, d.tenor", db, params=args)
 
     # -- event sets ----------------------------------------------------------
 

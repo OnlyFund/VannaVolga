@@ -196,7 +196,7 @@ def test_a_store_from_a_newer_schema_is_refused(tmp_path):
 def _schema_4_store(path):
     """A store as schema 4 wrote it: markets without ``timezone``."""
     import market_data.store as module
-    ddl = module._SCHEMA.replace(
+    ddl = module._SCHEMA.replace(module._PILLAR_DATE_SCHEMA, "").replace(
         ",\n    timezone TEXT NOT NULL DEFAULT 'Europe/London'\n", "\n")
     assert "timezone" not in ddl
     db = sqlite3.connect(str(path))
@@ -216,9 +216,10 @@ def test_a_schema_4_store_is_backed_up_and_its_markets_get_the_machine_zone(tmp_
     snapshot = store.load()
     assert (snapshot.date_time, snapshot.timezone) == ("2026-10-21T20:21:27", "Europe/London")
     db = sqlite3.connect(str(path))
-    assert db.execute("SELECT MAX(version) FROM schema_info").fetchone()[0] == SCHEMA_VERSION == 5
+    assert db.execute("SELECT MAX(version) FROM schema_info").fetchone()[0] == SCHEMA_VERSION == 6
     db.close()
     assert "timezone" in store.snapshots().columns
+    assert store.load_pillar_dates("2026-10-21") is None          # schema 6 tables, empty
 
 
 def test_a_new_market_records_its_time_zone(tmp_path):
@@ -237,3 +238,79 @@ def test_a_snapshot_date_is_its_fx_date_once_attached(tmp_path):
     snapshot = store.load()
     assert snapshot.date == "2026-10-21"                       # the store: its local date
     assert snapshot._replace(fx_date="2026-10-22").date == "2026-10-22"
+
+
+# -- schema 6: the day's pillar dates ---------------------------------------------------------
+
+def _schema_5_store(path):
+    """A store as schema 5 wrote it: no pillar date tables."""
+    import market_data.store as module
+    db = sqlite3.connect(str(path))
+    db.executescript(module._SCHEMA.replace(module._PILLAR_DATE_SCHEMA, ""))
+    db.execute("INSERT INTO schema_info VALUES (5)")
+    db.execute("INSERT INTO markets (market_source, date_time, fetched_at, timezone) "
+               "VALUES ('bloomberg', '2026-10-22T09:54:49', '2026-10-22T09:54:50', 'Europe/London')")
+    db.commit()
+    db.close()
+
+
+def test_a_schema_5_store_is_backed_up_and_gets_the_pillar_date_tables(tmp_path):
+    path = tmp_path / "market_data.sqlite"
+    _schema_5_store(path)
+    store = MarketDataStore(path)
+    assert store.migrated_from is not None and ".v5-backup-" in store.migrated_from.name
+    assert store.load().date_time == "2026-10-22T09:54:49"           # markets untouched
+    db = sqlite3.connect(str(path))
+    assert db.execute("SELECT MAX(version) FROM schema_info").fetchone()[0] == 6
+    db.close()
+    assert MarketDataStore(path).migrated_from is None                # migrated once
+
+
+def _rows():
+    return [("EURUSD", "1W", "2026-10-30", "2026-11-03", "bloomberg", "2026-10-30", "2026-11-03"),
+            ("NZDUSD", "ON", "2026-10-27", "2026-10-29", "bloomberg", "2026-10-26", "2026-10-28")]
+
+
+def test_pillar_dates_round_trip_and_disputes(tmp_path):
+    store = MarketDataStore(tmp_path / "market_data.sqlite")
+    fetch_id = store.save_pillar_dates("2026-10-23", "2026-10-23T08:26:11", "Europe/London",
+                                       "bloomberg", _rows(), [("USDXXX", "*", "no conventions")])
+    day = store.load_pillar_dates("2026-10-23")
+    assert day.fetch_id == fetch_id and day.fx_date == "2026-10-23"
+    assert day.dates[("NZDUSD", "ON")] == ("2026-10-27", "2026-10-29", "bloomberg")
+    assert day.fallbacks == [("USDXXX", "*", "no conventions")]
+    disputes = store.pillar_date_disputes("2026-10-23")
+    assert list(disputes.pair) == ["NZDUSD"]
+    assert store.load_pillar_dates("2026-10-22") is None
+
+
+def test_the_latest_usable_fetch_wins_and_a_refused_one_is_only_recorded(tmp_path):
+    store = MarketDataStore(tmp_path / "market_data.sqlite")
+    first = store.save_pillar_dates("2026-10-23", "2026-10-23T08:00:00", None, "bloomberg", _rows())
+    refused = store.save_pillar_dates("2026-10-23", "2026-10-23T09:00:00", None, "bloomberg",
+                                      refused="over 30% disagree")
+    assert store.load_pillar_dates("2026-10-23").fetch_id == first
+    assert store.load_pillar_dates(fetch_id=refused).refused == "over 30% disagree"
+    later = store.save_pillar_dates("2026-10-23", "2026-10-23T10:00:00", None, "bloomberg", _rows()[:1])
+    assert store.load_pillar_dates("2026-10-23").fetch_id == later
+
+
+@pytest.mark.parametrize("row,reason", [
+    (("EURUSD", "1W", "2026-11-03", "2026-10-30", "bloomberg", "", ""), "not before delivery"),
+    (("EUR", "1W", "2026-10-30", "2026-11-03", "bloomberg", "", ""), "pair"),
+    (("EURUSD", "week", "2026-10-30", "2026-11-03", "bloomberg", "", ""), "tenor"),
+    (("EURUSD", "1W", "soon", "2026-11-03", "bloomberg", "", ""), "row 2"),
+])
+def test_a_bad_pillar_date_row_stores_nothing(tmp_path, row, reason):
+    store = MarketDataStore(tmp_path / "market_data.sqlite")
+    with pytest.raises(ValueError, match=reason):
+        store.save_pillar_dates("2026-10-23", "2026-10-23T08:00:00", None, "bloomberg",
+                                [_rows()[0], row])
+    assert store.load_pillar_dates("2026-10-23") is None
+
+
+def test_duplicate_pillar_dates_store_nothing(tmp_path):
+    store = MarketDataStore(tmp_path / "market_data.sqlite")
+    with pytest.raises(ValueError, match="duplicate"):
+        store.save_pillar_dates("2026-10-23", "2026-10-23T08:00:00", None, "bloomberg",
+                                [_rows()[0], _rows()[0]])

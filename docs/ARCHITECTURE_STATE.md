@@ -441,6 +441,26 @@ page checks above). 58 are marked `priority` 1 as the next batch to confirm.
   `Europe/London`. The user's live store migrated on their own fetch at 09:54
   (backup `market_data.v4-backup-20261022_095449.sqlite`). Markets 1–43 are
   identical to the backup, and market 44 is recorded in `Europe/London`.
+- **The market store, schema 6: the day's live pillar dates.**
+  `market_data.live_dates` (Hyperion) fetches Bloomberg's dates for today
+  with `bdp`:
+  - the expiry from `OPT_EXPIRE_DT` on the ATM vol tickers;
+  - the month and year delivery from `SETTLE_DT` on the outright forwards;
+  - for ON and week tenors, delivery on the expiry's spot date.
+
+  Each date is checked against the solver, and anything doubtful falls back
+  with its reason. The fetch is refused outside New York's session, or when
+  over 30% of tenors disagree. `--store` keeps every fetch: `date_fetches`,
+  `pillar_dates` (with the solver's answer beside each) and
+  `pillar_date_fallbacks`. `load_pillar_dates(fx_date)` reads the latest
+  usable fetch, and `pillar_date_disputes()` lists where it differs from the
+  solver.
+
+  The migration only adds the tables, with a backup first. The user's store
+  migrated on 23 Oct 2026 at 08:44 (backup
+  `market_data.v5-backup-20261023_084458.sqlite`). Its 49 markets and event
+  data are identical to before. The first fetch stored 585 dates and 40
+  disputes. Nothing uses the stored dates yet (step 3).
 - **The store keeps data only, so Gaia market imports no date rule.** Hyperion's
   loader (`app.store_markets`) picks the latest snapshot taken before 17:00
   New York on the valuation date, and attaches its FX date

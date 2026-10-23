@@ -136,3 +136,37 @@ def test_a_failing_request_is_retried_ticker_by_ticker():
             raise RuntimeError("bad ticker")
         return pd.DataFrame({flds.lower(): ["2026-10-26"]}, index=tickers)
     assert live._ask(bdp, ["A Curncy", "BAD Curncy"], "OPT_EXPIRE_DT") == {"A Curncy": "2026-10-26"}
+
+
+def test_save_stores_dates_solver_answers_and_fallbacks(tmp_path, monkeypatch):
+    from market_data.store import MarketDataStore
+    monkeypatch.setattr(live, "MAX_DISPUTED", 0.5)            # 1 of 3 disagree
+    result = _check(_raw(**{"1M": {"expiry": "2026-11-24"}, "2M": {"expiry": ""}}))
+    result.fetched = True
+    store = MarketDataStore(tmp_path / "market_data.sqlite")
+    fetch_id = live.save(result, store)
+    day = store.load_pillar_dates(DAY)
+    assert day.fetch_id == fetch_id and len(day.dates) == 3
+    assert day.dates[("EURUSD", "1M")] == ("2026-11-24", "2026-11-27", "bloomberg")
+    assert day.fallbacks == [("EURUSD", "2M", "no expiry from Bloomberg")]
+    disputes = store.pillar_date_disputes(DAY)
+    assert list(zip(disputes.tenor, disputes.solver_expiry)) == [("1M", "2026-11-25")]
+
+
+def test_nothing_is_stored_when_bloomberg_was_never_asked(tmp_path):
+    from market_data.store import MarketDataStore
+    store = MarketDataStore(tmp_path / "market_data.sqlite")
+    result = live.live_dates(["EURUSD"], "Europe/London", _fake_bdp({}), settlement,
+                             clock=lambda: datetime(2026, 10, 24, 10))     # Saturday
+    assert result.refused and live.save(result, store) is None
+
+
+def test_a_fetch_refused_after_asking_is_recorded_but_never_used(tmp_path, monkeypatch):
+    from market_data.store import MarketDataStore
+    monkeypatch.setattr(live, "MAX_DISPUTED", 0.2)
+    result = _check(_raw(**{"1M": {"expiry": "2026-11-24"}}))
+    result.fetched = True
+    store = MarketDataStore(tmp_path / "market_data.sqlite")
+    fetch_id = live.save(result, store)
+    assert store.load_pillar_dates(DAY) is None
+    assert "disagree" in store.load_pillar_dates(fetch_id=fetch_id).refused
