@@ -29,6 +29,13 @@ It never raises. Every failure is reported instead:
   pair relying on it unavailable (pricing without the events it should
   have would be wrong). The calendar used is named in the market's
   ``event_source``;
+* pillar dates: the day's live Bloomberg dates stored for the snapshot's FX
+  date (``live_pillar_dates``: ``market_data.live_dates``), else solved. A
+  tenor is solved instead when an expiry override (``pillars.EXPIRY_OVERRIDES``)
+  is on Bloomberg's or the solver's expiry day (the override wins), or when
+  its stored dates fail the re-check (an expiry after the FX date on a
+  weekday, before its delivery). A store whose dates cannot be read is
+  noted, and every tenor solved; ``VV_LIVE_DATES=0`` turns them off;
 * a pair cannot be built (no spot, no discount rate ...), its build raises,
   or the result fails the app's market validation -> that pair is in
   ``unavailable`` with the reason; the other pairs still load.
@@ -72,6 +79,51 @@ def with_fx_date(snapshot):
         return None
     from apeiron.gaia.market_dates.rollover import fx_date
     return snapshot._replace(fx_date=str(fx_date(snapshot.date_time, snapshot.timezone)))
+
+
+#: ``VV_LIVE_DATES=0`` solves every tenor (the stored live dates are not used).
+LIVE_DATES_ENV = "VV_LIVE_DATES"
+
+
+def live_pillar_dates(store, snapshot, environ=None):
+    """``({(pair, tenor): (expiry, delivery)}, notes)``: the stored live dates
+    usable for ``snapshot`` (which carries its FX date), after the fail-safes.
+
+    Never raises: anything unusable is left to the solver, and noted.
+    """
+    import os
+    from apeiron.gaia.market_dates import pillars
+    from helper_functions.fx_conventions import settlement
+    environ = os.environ if environ is None else environ
+    if environ.get(LIVE_DATES_ENV, "1").strip() == "0":
+        return {}, [f"live pillar dates off ({LIVE_DATES_ENV}=0): every tenor solved"]
+    try:
+        fetch = store.load_pillar_dates(snapshot.date)
+    except Exception as exc:                 # an older or unreadable store
+        return {}, [f"live pillar dates unavailable ({exc}): every tenor solved"]
+    if fetch is None:
+        return {}, []
+    fx_day = pd.Timestamp(snapshot.date).date()
+    usable, skipped = {}, []
+    for (pair, tenor), (expiry, delivery, _source) in sorted(fetch.dates.items()):
+        try:
+            expiry, delivery = pd.Timestamp(expiry).date(), pd.Timestamp(delivery).date()
+            if not (fx_day < expiry < delivery and expiry.weekday() < 5):
+                skipped.append(f"{pair} {tenor} (dates fail the re-check)")
+                continue
+            solved = pillars.tenor_dates(settlement(pair), fx_day, tenor).expiry
+            if any((pair, day) in pillars.EXPIRY_OVERRIDES for day in (expiry, solved)):
+                skipped.append(f"{pair} {tenor} (expiry override)")
+                continue
+        except Exception as exc:             # unknown pair, unreadable date ...
+            skipped.append(f"{pair} {tenor} ({exc})")
+            continue
+        usable[(pair, tenor)] = (expiry, delivery)
+    notes = [f"live pillar dates: Bloomberg fetch {fetch.fetch_id} ({fetch.fetched_at}), "
+             f"{len(usable)} of {len(fetch.dates)} tenors used"]
+    if skipped:
+        notes.append("solved instead: " + ", ".join(skipped))
+    return usable, notes
 
 
 def fx_cutoff(valuation_date):
@@ -135,6 +187,8 @@ def load_store_markets(valuation_date, market_id=None, store=None, pairs=None):
         return _failed(f"cannot build markets: {exc}", snapshot, notes)
 
     wanted = sorted(set(snapshot.vols) | set(snapshot.forward_points)) if pairs is None else pairs
+    live_dates, date_notes = live_pillar_dates(store, snapshot)
+    notes.extend(date_notes)
     event_set, events_problem = None, None
     if snapshot.event_set_id is None:
         notes.append(f"{label} has no event set pinned; markets built without events")
@@ -186,7 +240,8 @@ def load_store_markets(valuation_date, market_id=None, store=None, pairs=None):
         else:
             rows, source = event_table(None, pair), "no events"
         try:
-            payload, pair_notes = market(snapshot, pair, curves=curves, event_rows=rows)
+            payload, pair_notes = market(snapshot, pair, curves=curves, event_rows=rows,
+                                         live_dates=live_dates)
             if payload is not None:
                 payload["event_source"] = source
         except Exception as exc:             # one pair's failure must not stop the others

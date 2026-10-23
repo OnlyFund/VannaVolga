@@ -45,26 +45,40 @@ def forward_delivery(pair, valuation_date, tenor):
     return pd.Timestamp(_forward_delivery(pair, pd.Timestamp(valuation_date).date(), tenor.upper()))
 
 
-def vol_table(surface, pair, valuation_date, tenors=APP_TENORS):
+def vol_table(surface, pair, valuation_date, tenors=APP_TENORS, live=None):
     """The app's vol table for one pair from ``{tenor: {field: vol}}``.
 
     Tenors the surface does not have are left out; rows are in tenor order.
+    ``live`` (``{tenor: (expiry, delivery)}``, the day's checked Bloomberg
+    dates) gives a tenor's dates; the others are solved.
     """
     rows = []
     for tenor in tenors:
         if tenor not in surface:
             continue
-        expiry, delivery = tenor_dates(pair, valuation_date, tenor)
+        if live and tenor in live:
+            expiry, delivery = (pd.Timestamp(day) for day in live[tenor][:2])
+        else:
+            expiry, delivery = tenor_dates(pair, valuation_date, tenor)
         rows.append({"tenor": tenor, "expiry": expiry, "delivery_date": delivery,
                      **{field: surface[tenor][field] for field in COLUMNS[3:]}})
     return pd.DataFrame(rows, columns=list(COLUMNS))
 
 
-def vol_tables(snapshot, pairs=None, tenors=APP_TENORS):
-    """``{pair: vol table}`` for a stored snapshot (all its pairs by default)."""
+def vol_tables(snapshot, pairs=None, tenors=APP_TENORS, live_dates=None):
+    """``{pair: vol table}`` for a stored snapshot (all its pairs by default).
+
+    ``live_dates`` is ``{(pair, tenor): (expiry, delivery)}`` (see ``vol_table``).
+    """
     pairs = sorted(snapshot.vols) if pairs is None else pairs
-    return {pair: vol_table(snapshot.vols[pair], pair, snapshot.date, tenors)
+    return {pair: vol_table(snapshot.vols[pair], pair, snapshot.date, tenors,
+                            _for_pair(live_dates, pair))
             for pair in pairs if pair in snapshot.vols}
+
+
+def _for_pair(live_dates, pair):
+    """``{tenor: dates}`` of one pair from ``{(pair, tenor): dates}``."""
+    return {tenor: dates for (name, tenor), dates in (live_dates or {}).items() if name == pair}
 
 
 FORWARD_COLUMNS = ("tenor", "delivery_date", "fwd_pts", "term_discount")
@@ -94,7 +108,7 @@ def forward_table(snapshot, pair, tenors=APP_TENORS, curves=None):
 
 
 def market(snapshot, pair, broker_strangle=None, event_rows=None, tenors=APP_TENORS,
-           curves=None):
+           curves=None, live_dates=None):
     """``(market dict, notes)`` for ``pair`` in the app's saved-market format,
     or ``(None, notes)`` when the snapshot cannot build it.
 
@@ -104,6 +118,8 @@ def market(snapshot, pair, broker_strangle=None, event_rows=None, tenors=APP_TEN
     given. Events are empty unless ``event_rows`` (``event_date``,
     ``variance_days``) is given. ``curves`` (a ``DiscountCurves``) lets
     several markets share one snapshot's discount curves and fallbacks.
+    ``live_dates`` (``{(pair, tenor): (expiry, delivery)}``, the day's checked
+    Bloomberg dates) gives those tenors' expiries; the others are solved.
     """
     from app.market_context import EVENT_COLUMNS
     from app.market_service import pair_divisor
@@ -117,8 +133,14 @@ def market(snapshot, pair, broker_strangle=None, event_rows=None, tenors=APP_TEN
     spot = pair_spot(pair, snapshot.spots)
     if not spot == spot:            # nan: no spot for either leg
         return None, [f"{pair}: no spot in market {snapshot.market_id}"]
-    vols = vol_table(snapshot.vols.get(pair, {}), pair, snapshot.date, tenors)
+    live = _for_pair(live_dates, pair)
+    vols = vol_table(snapshot.vols.get(pair, {}), pair, snapshot.date, tenors, live)
     forwards, notes, source = forward_table(snapshot, pair, tenors, curves)
+    if live:
+        used = [tenor for tenor in vols["tenor"] if tenor in live]
+        notes.append(f"{pair}: Bloomberg's live expiries for {', '.join(used) or 'no tenor'}"
+                     + (f"; solved for {', '.join(t for t in vols['tenor'] if t not in live)}"
+                        if len(used) < len(vols) else ""))
     if source == "unavailable":
         return None, notes + [f"{pair}: unavailable, no {pair[3:]} discount rate"]
     both = [tenor for tenor in vols["tenor"] if tenor in set(forwards["tenor"])]
