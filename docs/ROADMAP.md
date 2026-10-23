@@ -1,6 +1,7 @@
 # FXO Risk Analyzer roadmap
 
-Last updated 2026-10-22. Decisions are recorded with the item they belong to.
+Last updated 2026-10-23. Decisions are recorded with the item they belong to.
+Item numbers are stable references; the order of work is in **Priorities**.
 
 ## Design principles
 
@@ -141,19 +142,66 @@ apeiron/
   a tenor booked that day takes them; expiry overrides win, and the solver
   is the fallback.
 
-## Next
+- **The rolled market** (`app.rolled_market`, 2026-10-23): a market valued on
+  a later date is rolled to it, not reused with its old dates.
+  - Pillars move to the new date's tenor dates, and today's pillar dates
+    stay as interpolation nodes.
+  - Each smile vol keeps today's forward variance everywhere.
+  - Forward points are sticky tenor, and passed events drop out.
+  - Only the pairs priced are rolled, and rolled markets are cached.
 
-Items 1–3 are done, and item 5's Atlas step (see above). Next is item 6, the
-pillar date solver, in this order (agreed 2026-10-22):
-1. move today's date logic (`option_dates`: Modified Following and end of month
-   on QuantLib's joint calendar) into `gaia/market_dates` as the solver, with pricing
-   identical;
-2. build the rolled market on it (built 2026-10-23: later-date valuation; theta next);
-3. add the test that theta equals the date roll;
-4. validate widely on random past and future dates.
+  **Theta is the date roll:** it is priced on the market rolled to the next
+  business day, exactly (`tests/test_theta_date_roll.py`). Validated on the
+  store's 22 Oct market rolled to 23 Oct (65 pairs): the dates match the
+  actual 23 Oct market exactly.
 
-Item 6's open questions are answered before step 2. Item 4 is paused and resumes
-after item 6.
+## Priorities (2026-10-23)
+
+**P1, now: the performance foundation, then finish item 6 (dates).**
+1. Item 14, performance steps 0–2: a benchmark, profiling and timing budgets;
+   quick wins; pre-warming after the daily fetch. Accuracy (rolling,
+   calibration, theta on the rolled market) now costs real time, and the app
+   stalled once on it (2026-10-23). The first profile on 3.7 is the baseline.
+2. Item 14, performance step 3: Python 3.7 → 3.11, right after the baseline,
+   so the optimising is done on the version that runs (and the same one as
+   Streamlit Cloud).
+3. Test-suite speed: tests run in parallel (`pytest-xdist`), a quick tier per
+   change and the full suite before commits, calibrated fixtures shared. The
+   full run takes 9–11 minutes.
+4. Item 6, live pillar dates step 4: disputes with the solver go to
+   `tests/edge_cases` for review, with a command. Small; it keeps the
+   market-confirmed date practice going.
+5. Item 6, trades store their delivery, and the delivery override on the
+   pricing page. Booked month tenors deliver on the forward settlement date.
+   Medium; a trade store schema change.
+6. Item 6, wide validation: random past and future dates against Bloomberg's
+   historical dates, plus the offline rateslib check (step 5).
+7. A scheduled daily fetch (a Windows scheduled task before 17:00 New York),
+   and a note in the app when today's live dates are missing. Live pillar
+   dates exist only if the fetch runs; otherwise the solver is used silently.
+
+**P2, next: the gate to the strategy stages.**
+8. Continuous integration: the quick test tier on every push (GitHub
+    Actions); later the place to build Rust wheels.
+9. The date snapping back: with "Link to market data date" on, a future date
+    returns to the market's date; say so in one line.
+10. Item 4, the intraday cut (paused until item 6 is done).
+11. Item 5, Apeiron: Gaia's move (after item 6), then Hyperion's (before item 8).
+12. Item 8, the full option lifecycle: the gate for stages 4–6.
+13. The pricing review backlog (VV-02 … VV-10), taken alongside items 8 and 15;
+   VV-10 (reproducibility) goes with item 8.
+14. Item 7, market data deployment and cross forward points.
+
+**P3, later: features, models and UI.**
+15. Items 9–13: vol compare, P&L attribution, surface analytics,
+    cross-consistent spot moves, term-currency notional.
+16. Item 14, performance steps 4–6: a process pool per pair; Numba and Rust
+    kernels; fast and full accuracy modes.
+17. Items 14a, 14b and 15: pure SABR, local vol (research), smile study.
+18. Items 16–21: UI.
+19. **Later**, as listed at the end.
+
+## Paused
 
 4. **Intraday time to the expiry cut** (New York / Tokyo; paused), built in `gaia/market_dates`.
    Decided:
@@ -196,14 +244,17 @@ after item 6.
      the `app.ui` ↔ `app.ui.app` load-time cycle is removed.
 
    Suggested slots: Gaia after item 6, Hyperion before item 8, Olympus with item 17.
-6. **Pillar date solver** (next) (in `gaia/market_dates`): one date service for O/N, days,
+6. **Pillar date solver** (in `gaia/market_dates`; the solver, live dates and the
+   rolled market are done, the rest is P1): one date service for O/N, days,
    weeks, months and years from any valuation date.
    - Delivery is spot plus tenor with **Modified Following** (a weekend or holiday
      in either currency moves to the next good day, back to the previous one if
      that crosses the month) and the **end-of-month rule** (spot on the month's
      last business day gives the target month's last business day).
    - Week tenors count from the valuation date. Expiries skip weekends and
-     25 Dec / 1 Jan. Each currency settles on its own holiday calendar.
+     any weekday when both currencies are closed (a house rule, 2026-10-22;
+     expiry overrides change it for a pair and day). Each currency settles on
+     its own holiday calendar.
    - **One rolled market** for any later valuation date, used by both theta (the
      next business day) and valuing a snapshot on a later date. A test checks
      that they reconcile exactly. It is built in four steps:
@@ -216,35 +267,16 @@ after item 6.
 
      Rolling several days uses the forward surface to that date directly.
 
-     **Built (2026-10-23):** `app.rolled_market.roll_context`, used by
-     `MarketSet.from_payloads` when a market's quotes are from an earlier date
-     than the valuation date.
-     - Its quotes come out as smile butterflies, converted with the market's
-       own settings.
-     - A last pillar that rolls past today's final quote holds the last
-       segment's forward rate per variance day.
-     - A pillar whose forward variance can't be formed keeps its tenor smile.
-     - A pair that can't roll is valued as before (its own dates, valued
-       later), with the reason in the note; `VV_ROLL_MARKET=0` turns rolling
-       off.
-
-     **Validated** by rolling the 22 Oct store market (48) to 23 Oct, for all
-     65 pairs:
-     - pillar expiries (510) and forward deliveries match the actual 23 Oct
-       market (50) exactly;
-     - each smile vol keeps today's forward variance exactly at every pillar
-       (tests);
-     - on a book of 260 ATM calls (1W, 1M, 3M and 1Y per pair), the rolled
-       day's P&L against 22 Oct theta is 0.98×, 1.00×, 0.86× and 1.00× (the
-       old way 0.69–0.76×);
-     - against the actual 23 Oct prices both ways are equally far, 2–18% of
-       MTM by tenor: the overnight market move.
-
-     The rest of the gap to theta is structural. An option on an old pillar's
-     expiry is interpolated across the old curve's bend between the new
-     pillars, while theta takes the exact forward variance at its expiry.
-     Next: theta priced on the rolled market, and the test that they
-     reconcile exactly (one 1M line at 612bp of value to look into).
+     **Built and validated (2026-10-23)**, theta included (see Done). The
+     fail-safes:
+     - a last pillar rolled past today's final quote extends the last
+       segment per variance day;
+     - a pillar whose forward variance can't be formed keeps its tenor smile;
+     - forward points without tenors move by the days rolled;
+     - a pair that can't roll is valued on its own dates, with the reason in
+       the note;
+     - `VV_ROLL_MARKET=0` turns rolling off, and `theta_vol_roll` = `forward`
+       or `tenor` gives the earlier thetas for comparison.
    - The conventions:
      - forward points are **sticky tenor** (spot and rates unchanged, so
        fixed-delivery forwards roll down the curve);
@@ -254,9 +286,9 @@ after item 6.
 
      Sticky-tenor vols remain available only as a comparison.
    - The trade date rolls at **17:00 New York**.
-   - Open: the USD intermediate-day rule for crosses' spot, T+1 pairs, expiry for
-     a delivery date, holiday-file gaps (some currencies use the USD calendar),
-     whether options use the SN point.
+   - Answered: the USD intermediate-day rule (and MXN/BRL, ILS), T+1 pairs and
+     crosses' lags, expiry for a delivery date, holiday-file gaps (Bloomberg's
+     calendars). Still open: whether options use the SN point.
    - **Live pillar dates, still to do:**
      - **Step 4:** disputes between the live dates and the solver
        (`store.pillar_date_disputes`, `pillar_expiry_mismatches`) go to
@@ -314,8 +346,63 @@ after item 6.
 
 ## Performance and models
 
-14. Performance after caching: spot-ladder market builds, repeated market builds
-    per line, spline rebuilds per vol lookup, smile calibration per pair.
+14. **Performance plan** (discussed 2026-10-23, to review when this item
+    starts). Accuracy now costs real time:
+    - rolling a pair took about 1.9 s, mostly smile preparation at each pillar;
+    - theta needs a second, next-day market for every pair priced;
+    - the rolled market's interpolation nodes double one rolled curve's rows;
+    - the 203-trade book prices in 26 s cold, 0.2 s per extra line on a
+      prepared pair, and 3.5 s on a cached rerun.
+
+    The steps, in order:
+    0. **Measure first.** A fixed benchmark: the 203-trade book, a 65-pair
+       roll, a spot ladder and theta. A profile (cProfile or py-spy), and
+       timing budgets as tests, so a change that makes the app stall fails a
+       test first.
+    1. **Avoid work.**
+       - Prepare a curve once per market: parse the vol table once, and keep
+         the converted curve and the prepared smiles.
+       - Theta, decays and extra Greeks only when shown.
+       - A per-line results cache keyed by (trade, market fingerprint,
+         settings).
+       - No pandas in hot loops.
+       - Batch by (pair, expiry): one smile for every strike, and Greek
+         bumps for all lines at once with numpy.
+       - The spot ladder across all spots at once.
+    2. **Pre-warm after the daily fetch.** A background job calibrates every
+       pair's surface and its next-day rolled surface into the disk cache, so
+       the app opens warm. Cache keys are content hashes, with a version bump
+       whenever a model changes (as `SURFACE_CACHE_VERSION`).
+    3. **Python 3.7 → 3.11/3.12.** 1.25–1.6× faster for pure Python, the same
+       version as Streamlit Cloud, and it unlocks current Numba, PyO3 and
+       rateslib. The golden files guard the numbers.
+    4. **Parallel, per pair.**
+       - A persistent process pool, since Windows starts processes slowly
+         and Python's lock stops threads speeding up pure-Python code.
+       - Each worker gets its market data passed in, grouped per pair.
+       - Threads become useful once the hot code releases that lock (numpy,
+         Numba with `nogil`, Rust).
+    5. **Lower-level kernels, only for profiled hot spots.**
+       - Numba first (already used: `black_scholes_numba`, `sabr_numba`): the
+         VV smile, the delta-to-strike solve, implied vol, variance
+         interpolation.
+       - Then Rust (PyO3 and maturin) where Numba isn't enough, ideally a
+         vectorised pricer over many strikes and expiries. It needs wheels
+         for Windows and Linux (Streamlit Cloud), built in CI.
+       - Every kernel keeps the Python implementation as its fallback and a
+         parity check, held to the golden files.
+    6. **Accuracy per use.**
+       - A fast mode for interaction, and a full mode for end of day and
+         reports, as the spot ladder's "optimized" mode already does.
+       - For example, interactive theta from today's calibrated smiles with
+         forward variance applied directly, and a full recalibration of the
+         rolled market at end of day.
+       - Every approximation is checked against the full version, with a
+         stated tolerance.
+       - Calibrations warm-start from the previous day's parameters.
+
+    Longer term: Hyperion as a service process with its own cache, worker
+    pool and pre-warming, and Streamlit as a thin client.
 
 14a. **Pure SABR pricing model:** price with SABR (Hagan) vols per strike, calibrated
   to the pillars, as a third pricing model next to vv and vv-sabr. The existing
