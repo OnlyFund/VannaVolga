@@ -5,11 +5,15 @@ Item numbers are stable references; the order of work is in **Priorities**.
 
 ## Design principles
 
-- **Streamlit stays the UI**, run locally or on a simple host. No large service
-  infrastructure; "services" means the engine is callable as plain Python functions.
-- **Computation lives outside the GUI.** Pricing, Greeks, ladders, risk grids,
-  portfolio valuation and caching are service modules without Streamlit; the UI
-  only calls them and shows the results.
+- **Streamlit stays the UI**, run locally or on a simple host. "Services" means
+  the engine is callable as plain Python functions first; an HTTP API over the
+  same functions comes later (item 22).
+- **No calculation in the app** (decided 2026-10-23). The app layer, not just
+  the UI widgets, only requests dataframes from Hyperion's services and shows
+  them: formatting, layout and column choice are the app's; aggregation, USD
+  conversion, totals, domain rules and deciding what to price are the
+  services'. Every service can be called by other users (strategy, backtest,
+  research) for their own needs (item 22).
 - **The UI validates pricing.** The services will later drive a strategy engine,
   a backtester and a portfolio optimizer.
 - **Stored data is append-only and versioned** (trades, event calendars).
@@ -52,8 +56,8 @@ apeiron/
   - lifecycle logic, ladders, grids and attribution;
   - the services entry point and the result cache.
 - **Athena**, **Delphi** and **Olympus** consume the levels below them; none
-  imports another. Whether they go only through Hyperion's services is decided
-  when they are built.
+  imports another. Decided (2026-10-23): they go only through Hyperion's
+  services (item 22), enforced by the boundary test.
 ### Migration approach
 
 1. **Step 0:** create the `apeiron/` skeleton and an import-boundary test that
@@ -187,26 +191,35 @@ apeiron/
    and a note in the app when today's live dates are missing. Live pillar
    dates exist only if the fetch runs; otherwise the solver is used silently.
 
-**P2, next: the gate to the strategy stages.**
-8. Continuous integration: the quick test tier on every push (GitHub
+**P2, next: the services, then the gate to the strategy stages.**
+8. Item 22, services step 1: the Portfolio pilot (portfolio summary and trade
+   greeks out of `app/ui/trades_block.py`), which creates the shared book
+   selector, market handle and Greek selection.
+9. Item 22, services step 2: the pricing service, for other users.
+10. Continuous integration: the quick test tier on every push (GitHub
     Actions); later the place to build Rust wheels.
-9. The date snapping back: with "Link to market data date" on, a future date
+11. The date snapping back: with "Link to market data date" on, a future date
     returns to the market's date; say so in one line.
-10. Item 4, the intraday cut (paused until item 6 is done).
-11. Item 5, Apeiron: Gaia's move (after item 6), then Hyperion's (before item 8).
-12. Item 8, the full option lifecycle: the gate for stages 4–6.
-13. The pricing review backlog (VV-02 … VV-10), taken alongside items 8 and 15;
-   VV-10 (reproducibility) goes with item 8.
-14. Item 7, market data deployment and cross forward points.
+12. Item 4, the intraday cut (paused until item 6 is done).
+13. Item 5, Apeiron: Gaia's move (after item 6), then Hyperion's (before item 8).
+14. Item 8, the full option lifecycle: the gate for stages 4–6.
+15. Item 23, the rest of that gate: run manifests and point-in-time inputs
+    (with item 22's provenance), fetch quality checks (with the scheduled
+    daily fetch), bid/ask.
+16. The pricing review backlog (VV-02 … VV-10), taken alongside items 8 and 15;
+   VV-10 (reproducibility) goes with item 8 and item 23's run manifests.
+17. Item 7, market data deployment and cross forward points.
 
 **P3, later: features, models and UI.**
-15. Items 9–13: vol compare, P&L attribution, surface analytics,
-    cross-consistent spot moves, term-currency notional.
-16. Item 14, performance steps 4–6: a process pool per pair; Numba and Rust
-    kernels; fast and full accuracy modes.
-17. Items 14a, 14b and 15: pure SABR, local vol (research), smile study.
-18. Items 16–21: UI.
-19. **Later**, as listed at the end.
+18. Items 9–13: vol compare, P&L attribution, surface analytics (built as
+    item 22's services), cross-consistent spot moves, term-currency notional.
+19. Item 14, performance steps 4–6: a process pool per pair; Numba and Rust
+    kernels; fast and full accuracy modes. With them, item 23's derived-data
+    store and the vectorised path through time (stage 3).
+20. Items 14a, 14b and 15: pure SABR, local vol (research), smile study.
+21. Items 16–21: UI; item 22's HTTP API (after Python 3.11).
+22. Item 23's research run log, before the first backtest (stage 4).
+23. **Later**, as listed at the end.
 
 ## Paused
 
@@ -490,6 +503,153 @@ Exercise and the resulting spot trade remain part of lifecycle item 8.
   across pricing changes; a manual cache version is not a full valuation
   audit record. Coordinate with the lifecycle and historical stages.
 
+## Services (Hyperion)
+
+22. **Hyperion services: the app only shows dataframes** (agreed 2026-10-23).
+    Every calculation the app does today moves into a service in Hyperion; the
+    app (Olympus) and other users (Athena's strategy and backtest, Delphi's
+    research) call the same services.
+    - **Two tiers over the same functions:** in-process Python services first
+      (a backtest prices thousands of times; no HTTP hop), then a thin HTTP
+      API (FastAPI) once requests and responses are plain data. FastAPI and
+      pydantic need Python 3.8 or later, so the HTTP tier follows Python 3.11.
+    - **Stateless requests:** everything a call depends on is in the request,
+      nothing in `st.session_state`; speed comes from the server-side caches
+      (the Hyperion result cache, the rolled-market cache).
+    - **Shared request objects, defined once:**
+      - the **book selector**: portfolio(s), pair, counterparty, trade ids,
+        status, as-of date. **A portfolio is a book** (decided): everything
+        booked under a book is that portfolio;
+      - the **market handle**: market id or snapshot, valuation date,
+        modifications (betas), what-if overrides (spots, spot path, vols); or
+        a market built from the caller's own quotes;
+      - the **Greek selection**: names, sticky or smile, currency (base, USD,
+        premium), and variants such as the 3M-normalised weighted Greeks. The
+        service works out which extras to price.
+    - **Responses:** a dataframe plus metadata: warnings and errors as data
+      (spot path notes, Greek problems, pairs with no USD spot), and
+      provenance (market id, USD spot snapshot, rolled or not, model and
+      betas, code version), so a request reprices identically. The long
+      table (row, Greek, variant, currency, value) is the contract; the app
+      pivots it to wide for display.
+    - **Column names are a contract:** a documented schema per service and a
+      version number; adding a field never breaks a caller.
+    - **Enforced:** Olympus may import only Hyperion's service API (not
+      `pricer`, `greek_catalog`, `usd_spots`); today's crossings go on the
+      known list, which shrinks tab by tab, as in the Atlas untangling.
+    - **Data sources:** Bloomberg is for personal use only. When the suite
+      runs commercially (under a fund), licensed sources are added or
+      switched in behind the market service; nothing else imports Bloomberg.
+
+    **The services** (each built on the ones above it):
+    - **Market:** market snapshots and their list, spots, forwards and
+      forward points, vol quotes, curves, live pillar dates. Today:
+      `market_service`, `store_markets`, `market_set`, `spot_forwards`.
+    - **Calendar:** event calendars and the dates: holidays, tenor to expiry
+      and delivery, expiry overrides, variance-day weights, the 17:00 New York
+      rollover. Today: `event_calendar`, `gaia.market_dates`.
+    - **Forward vol:** from the raw market, the 5-point surface (ATM, 25 and
+      10 delta risk reversals and butterflies) and the forward surface;
+      **rolls the surface forward in time** (decided: the roll belongs here,
+      holding forward variance, today's `app/rolled_market.py`); variance-day
+      weighted normalised vols and forward vols. Theta, vol compare and P&L
+      attribution all use its one rolled surface. Item 11 builds its outputs.
+    - **Pricing** (for other users): instruments given inline as plain data
+      (nothing booked), with strikes and expiries as quoted (`atm`, `25d`,
+      `1.0850`, `1M`, a date), resolved and returned. Batch first; one row
+      per instrument keyed by the caller's row id, each with its own errors
+      (a failed row never fails the batch). Also the inverse operations:
+      strike from delta, implied vol from premium, notional from premium.
+      The instrument schema leaves room for the other option types, forwards
+      and swaps.
+    - **Trade greeks:** per-trade Greeks for a book selector (portfolio,
+      pair, ...). The same engine as pricing, with the instruments read from
+      the trade store, so a trade priced either way gives the same numbers.
+    - **Portfolio summary:** for the selected portfolio(s), per pair, the
+      selected Greeks, MTM and P&L, in USD with a total row (directional
+      Greeks never summed). An aggregation of trade greeks on the same
+      pricing run and cache. Today: `pair_totals`, `usd_totals`,
+      `apply_spot_edits` in `app/ui/trades_block.py`.
+    - **Risk reports:** spot ladder, strike grid, Greek buckets (today
+      `app/reports/`), and cashflow and rho risk: the cash ladder and rolls
+      (item 8, to build; `helper_functions/cashflows.py` is the seed).
+    - **Vol compare** (item 9): vols between market snapshots, against the
+      earlier one's rolled surface, so a real vol move is told apart from
+      roll-down. Its vol leg is also P&L attribution's vol step.
+    - **P&L attribution** (item 10, to build): between two snapshots, by
+      spot, vol, rates and points, time and residual, on the rolled baseline.
+    - **Trade service:** book, amend, cancel, query, export and import, and
+      later the lifecycle (item 8). Today: `app/trades/service.py`; the store
+      location (`trade_store_path`) moves out of the UI.
+
+    **Steps** (each with the app unchanged on screen and the goldens identical):
+    1. **The Portfolio pilot:** `app/ui/trades_block.py` splits into the
+       trade service (store location to `app/trades`), a blotter block, the
+       portfolio summary and trade greeks services
+       (`summarise(...) -> PortfolioSummary`, the pricing cache key moved out
+       of session state) and a portfolio block that renders them. `risk_block`
+       stops importing private names from `trades_block`. One pricing path:
+       `service.price_trades` and `cached_pricing.price_trades` reconciled.
+       This creates the book selector, market handle and Greek selection.
+    2. **Pricing service**, reusing them; the Pricer tab (`portfolio_block.py`:
+       premium, vol and hedge modes) moves onto it.
+    3. Risk reports, then Market, Calendar and Forward vol behind one API.
+    4. The import rule for Olympus, with the crossings list shrinking to empty.
+    5. Vol compare and P&L attribution, built as services from the start.
+    6. The HTTP API (after Python 3.11).
+
+23. **Production research foundations** (agreed 2026-10-23). What the
+    services need around them so a strategy or backtest result can be trusted
+    and reproduced.
+    - **Run manifests and point-in-time inputs.** Every result carries a
+      manifest: snapshot id, event calendar version, holiday list and expiry
+      override versions, edge-case state, model and betas, code commit. A
+      backtest asks for every input **as known on date D**, not as corrected
+      since. Event calendar weights are the subtle case: a day re-weighted
+      after the event leaks the future into a backtest through its variance
+      days, so a calendar version records when it was in force, not just
+      when it was saved. Part of item 22's provenance; before the first
+      backtest.
+    - **Caching keyed by the manifest.** A cache key is the hash of the
+      manifest, so a changed input or code version can never serve an old
+      result; this replaces bumping `SURFACE_CACHE_VERSION` by hand.
+      - **Pickle stays the cache** (`app/calibration_cache.py`,
+        `apeiron/hyperion/cache/store.py`): exact Python objects for anything
+        recomputable (calibrated smiles, warm-up results); deleting it loses
+        nothing. Never unpickle a file from the API or another user (it can
+        run code), and expect old files to be dropped when classes move or
+        Python is upgraded.
+      - **Parquet (or DuckDB) is the derived-data store of record:**
+        calibrated parameters, the 5-point surface, forward vols and
+        normalised vols per snapshot, pair and model version, as plain
+        columns. Research reads one series across years without
+        recalibrating or unpickling; other users and languages can read it;
+        its schema is item 22's contract. Built in stage 3 with item 14.
+    - **A vectorised path through time** (stage 3): "this strategy, every
+      day, every pair" as one batch inside the service, on the stored derived
+      data, instead of a per-trade loop in the caller.
+    - **Fetch quality checks:** on every fetch, stale quotes, gaps, outliers
+      and arbitrage (negative butterflies, inverted forward variance) are
+      flagged and stored with the snapshot; reconciliation between sources
+      once there is more than one; lineage from every number to its source,
+      fetch and time. With the scheduled daily fetch.
+    - **Bid/ask and costs:** moved from "Not now" to the backtest gate; a vol
+      backtest at mid is optimistic.
+    - **A research run log:** each research or backtest run records its
+      parameters, manifest and results, so a changed answer can be explained
+      (a simple log first; MLflow or similar later). Research code is
+      prototyped in Delphi and promoted to Hyperion once reviewed.
+    - **Operations:** jobs that are safe to re-run, alerts (a failed fetch,
+      missing live dates), structured logs, CI (P2), dev and prod set apart.
+    - **Not now:** authentication, roles and an audit trail of changes;
+      licensed data. Built when the suite runs under a fund, and not
+      designed against.
+    - **Not at all:** microservices, message queues, a big data platform.
+      One package with in-process services, a thin HTTP layer, Parquet or
+      DuckDB for history and SQLite or Postgres for trades is enough;
+      production grade comes from reproducibility, point-in-time inputs and
+      validation.
+
 ## UI
 
 16. **Users and saved settings:** all users see all portfolios and trades; each
@@ -543,14 +703,15 @@ Exercise and the resulting spot trade remain part of lifecycle item 8.
   each market and valuation date used. Not high importance, but needs attention.
 - Market data: more forward points and divisors for a few currencies, an event
   source, scheduled daily fetches, saving and comparing markets.
-- Not now: discounting basis / CSA; bid/ask (arrives with the strategy engine's
-  cost structure).
+- Not now: discounting basis / CSA. (Bid/ask, with the strategy engine's cost
+  structure, moved to item 23: the backtest gate.)
 
 ## Stages
 
 1. Finish the engine and risk framework, validated in the UI.
-2. Service layer.
-3. History by date and batch speed.
+2. Service layer (item 22).
+3. History by date and batch speed (item 23: the derived-data store and the
+   vectorised path through time).
 4. Strategy engine.
 5. Backtest engine.
 6. Portfolio optimizer.
