@@ -834,6 +834,22 @@ Exercise and the resulting spot trade remain part of lifecycle item 8.
   treats a pair and day differently. Still to do: setting one from the app,
   with who, when and why recorded.
 - Rate-risk matrix by currency and tenor (where rho and phi aggregate across pairs).
+- **Term structure Greeks.** Vega, rega and sega sensitivity to a 10bp
+  steepening or flattening of the ATM, RR and BF term structures (each curve
+  pivoted, so the short and long ends move in opposite directions), by trade and
+  per pair. Before building, agree on:
+  - the pivot tenor and shape (a linear tilt in tenor or in sqrt(time), anchored
+    where);
+  - whether the curves move one at a time or together;
+  - how the smile is rebuilt after the bump, using the same path as the existing
+    rega and sega bumps.
+
+  These are not vega, rega or sega (those are parallel moves) and not a
+  variant of them, so they get their own Greeks and their own group in
+  `pricing/greek_catalog.py` (a "term structure" group, beside "rates").
+  Each has its own name, label and unit, and its own entry or non-entry in
+  `DIRECTIONAL`. The Greek picker, the totals and the exports then pick them up
+  like the others.
 - Event calendars by currency: first agree the scope and approach before building:
   - per currency, per pair, or both (currency events plus pair overrides);
   - how a pair's calendar is derived (same event counted once? weights per pair?);
