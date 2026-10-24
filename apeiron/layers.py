@@ -44,7 +44,7 @@ _ATLAS = [
     "pricing.fx_forward", "pricing.greek_catalog",
     "pricing_utils", "pricing_utils.BlackScholes", "pricing_utils.black_scholes_numba",
     "pricing_utils.breeden_litzenberger", "pricing_utils.sabr_numba",
-    "pricing_utils.sabr_price",
+    "pricing_utils.sabr_price", "pricing_utils.sabr_smile",
     "Greeks.cross_greeks", "Greeks.decay_greeks", "Greeks.fixed_greeks",
     "Greeks.smile_greeks", "Greeks.weighted_greeks",
     "surface_models.smile_extension",

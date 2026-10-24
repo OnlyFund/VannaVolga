@@ -33,10 +33,16 @@ def hagan_sabr_log_normal_vol_numba(alpha, beta, rho, nu, f, t, K_array):
             z = (nu / alpha) * FK_beta * log_fk
             sqrt_term = np.sqrt(1 - 2 * rho * z + z ** 2)
             x_z = np.log((sqrt_term + z - rho) / (1 - rho))
+            log_correction = (
+                1.0
+                + (1 - beta) ** 2 * log_fk ** 2 / 24.0
+                + (1 - beta) ** 4 * log_fk ** 4 / 1920.0
+            )
             if abs(x_z) <= 1e-14:
-                vols[i] = alpha / FK_beta
+                z_over_x_z = 1.0
             else:
-                vols[i] = (alpha / FK_beta) * (z / x_z) * (
+                z_over_x_z = z / x_z
+            vols[i] = (alpha / FK_beta) * (z_over_x_z / log_correction) * (
                 1
                 + t
                 * (

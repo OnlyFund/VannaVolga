@@ -129,7 +129,7 @@ def _cache_for(market):
 #: cache in the session, and Streamlit does not reload root modules such as
 #: ``wrapped_vol_resolver``, so objects built by an older build can outlive a
 #: code change; a new version starts a fresh cache instead of reusing them.
-SURFACE_CACHE_VERSION = 6   # 6: Bloomberg settlement calendars + spot rule move pillar dates
+SURFACE_CACHE_VERSION = 7   # 7: the pure SABR smile model ("sabr")
 
 
 def is_fallback(diagnostics):
@@ -200,13 +200,19 @@ class AppVolResolver:
             for reason in self.market.smile_reasons:
                 record(self.market, self.model, self.expiry_date, reason)
             kwargs = dict(self.kwargs)
+            legacy_model = self.model
+            if self.model == "sabr":
+                record(self.market, self.model, self.expiry_date,
+                       "standalone SABR unavailable on legacy path; using VV",
+                       status="fallback")
+                legacy_model = "vv"
             if (self.model == "vv-sabr" and kwargs.get("frozen_sabr_params") is None
                     and getattr(self.market, "frozen_sabr_params", None) is None):
                 params = legacy_sabr_parameters(self.market, self.expiry_date,
                                                 self.valuation_date, kwargs)
                 if params is not None:
                     kwargs["frozen_sabr_params"] = params
-            return get_model_map()[self.model](
+            return get_model_map()[legacy_model](
                 market=self.market, K=self.K, expiry_date=self.expiry_date,
                 valuation_date=self.valuation_date, CallPut=self.CallPut,
                 **kwargs).get_vol_for_strike()
@@ -243,3 +249,7 @@ def market_diagnostics(market, expiry=None):
 
 class AppSabrResolver(AppVolResolver):
     model = "vv-sabr"
+
+
+class AppPureSabrResolver(AppVolResolver):
+    model = "sabr"

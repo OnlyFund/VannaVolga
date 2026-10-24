@@ -156,7 +156,7 @@ def test_unknown_delivery_warns_and_preserves_legacy_divisor():
     assert collector.records()
 
 
-@pytest.mark.parametrize("model", ["vv", "vv-sabr"])
+@pytest.mark.parametrize("model", ["vv", "vv-sabr", "sabr"])
 @pytest.mark.parametrize("pair", ["EURUSD", "USDJPY", "USDMXN"])
 @pytest.mark.parametrize("cp", ["CALL", "PUT"])
 def test_alias_delta_verified_on_selected_model(model, pair, cp):
@@ -178,6 +178,24 @@ def test_alias_delta_verified_on_selected_model(model, pair, cp):
     assert resolve_strike(m, dict(row, strike="atm"), "spot", True) == prepared.pillars.strikes[2]
     assert resolve_strike(m, dict(row, strike="atmf"), "spot", True) == ctx.forward
     assert resolve_strike(m, dict(row, strike="atms"), "spot", True) == m.s
+
+
+def test_pure_sabr_is_priced_by_its_own_prepared_core():
+    build, _ = app_curve(model="sabr", broker=False)
+    market = build("2026-11-17")
+    resolver = get_model_map(market)["sabr"](
+        market=market, K=1.1, expiry_date="2026-11-17",
+        valuation_date="2026-10-02", CallPut="CALL")
+
+    vol = resolver.get_vol_for_strike()
+    assert np.isfinite(vol) and vol > 0
+    assert resolver.resolver.prepared.model == "sabr"
+    core = resolver.resolver.prepared._core
+    if type(core).__name__ == "VannaVolgaCore":
+        assert resolver.resolver.prepared.diagnostics.fallback
+        assert "sabr smile unavailable" in resolver.resolver.prepared.diagnostics.reason
+    else:
+        assert type(core).__name__ == "SABRCore"
 
 
 def test_cache_invalidates_all_perturbations_and_metadata_copies():

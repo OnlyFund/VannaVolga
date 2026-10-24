@@ -46,7 +46,7 @@ from app.market_store import validate_market
 from app.smile_service import DiagnosticsCollector, SurfaceCache, bind_cache, reuse_prepared
 from helper_functions.input_resolvers import resolve_expiry
 
-PRICING_MODELS = ("vv", "vv-sabr")
+PRICING_MODELS = ("vv", "vv-sabr", "sabr")
 DELTA_REPORTING = (None, "forward", "spot")
 VOL_COLUMNS = ("tenor", "expiry", "atm", "rr_25", "bf_25", "rr_10", "bf_10")
 FORWARD_COLUMNS = ("delivery_date", "fwd_pts", "term_discount")

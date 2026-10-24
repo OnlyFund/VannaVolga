@@ -242,4 +242,7 @@ def make_core(model, context, pillars, beta=0.5):
         return VannaVolgaCore(context, pillars)
     if model == "vv-sabr":
         return VannaVolgaSABRCore(context, pillars, beta=beta)
-    raise ValueError("model must be 'vv' or 'vv-sabr'")
+    if model == "sabr":
+        from pricing_utils.sabr_smile import SABRCore
+        return SABRCore(context, pillars, beta=beta)
+    raise ValueError("model must be 'vv', 'vv-sabr' or 'sabr'")

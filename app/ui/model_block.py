@@ -11,7 +11,7 @@ from math import isfinite
 
 import streamlit as st
 
-PRICING_MODELS = ("vv", "vv-sabr")
+PRICING_MODELS = ("vv", "vv-sabr", "sabr")
 #: Slider range and step per beta: (minimum, maximum, step).
 BETA_RANGES = {"beta_atm": (0.0, 5.0, 0.05), "beta_rr": (0.0, 2.0, 0.05),
                "beta_bf": (0.0, 2.0, 0.05)}
@@ -65,7 +65,8 @@ def render_model_tab(tab):
                        "Portfolio and the Risk reports.")
             st.markdown("**Pricing**")
             st.selectbox("Pricing model", list(PRICING_MODELS), key="pricing_model",
-                         help="vv: Vanna-Volga. vv-sabr: Vanna-Volga with a SABR smile.")
+                         help="vv: Vanna-Volga. vv-sabr: Vanna-Volga with a SABR smile. "
+                              "sabr: standalone Hagan-SABR smile.")
             st.markdown("**Smile dynamics**")
             st.caption("How the smile moves with spot for the smile Greeks and the spot "
                        "ladder. Betas 0/0/0 are sticky delta (the smile Greeks equal the "

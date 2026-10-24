@@ -11,6 +11,11 @@ def test_the_default_model_and_betas():
     assert model_settings({}) == DEFAULTS
 
 
+def test_pure_sabr_is_a_supported_model():
+    state = {"pricing_model": "sabr", "beta_atm": 0.8, "beta_rr": 1.0, "beta_bf": 0.25}
+    assert model_settings(state) == state
+
+
 def test_stored_values_are_used():
     state = {"pricing_model": "vv-sabr", "beta_atm": 0.8, "beta_rr": 1.0, "beta_bf": 0.25}
     assert model_settings(state) == state

@@ -113,7 +113,7 @@ def check_pillars_arbitrage_free(context, pillars):
 
 
 def _core_with_fallback(model, context, pillars, beta):
-    """Build ``model`` on ``pillars``; a SABR smile that fails falls back to VV."""
+    """Build ``model`` on ``pillars``; an unavailable SABR smile falls back to VV."""
     try:
         return make_core(model, context, pillars, beta), None
     except PreparationError as exc:
@@ -203,6 +203,20 @@ def prepare_core(raw, context, model, broker_strangle, beta=.5):
         # e.g. a premium-adjusted call delta with no strike at the common vol.
         raise PreparationError("broker strangle strikes: {}".format(exc)) from exc
     notes = []
+    if model == "sabr":
+        # A nested SABR calibration inside every two-vol solver step is both
+        # costly and unstable: the five quoted vols overdetermine its three
+        # parameters. Convert broker premiums once with VV, then fit SABR.
+        quotes, pillars, _, _ = _solve_joint(raw, context, targets, "vv", beta)
+        core, core_note = _core_with_fallback(model, context, pillars, beta)
+        matches = evaluate_matches(core, targets)
+        notes.append(
+            "sabr uses the VV two-vol butterflies for broker-strangle conversion; "
+            "SABR premium error 25D {:+.4%}, 10D {:+.4%}".format(*_relative(matches)))
+        if core_note:
+            notes.append(core_note)
+        _accept(context, quotes, pillars)
+        return quotes, pillars, core, matches, "; ".join(notes)
     try:
         quotes, pillars, core, matches = _solve_joint(raw, context, targets, model, beta)
     except PreparationError as exc:

@@ -83,6 +83,36 @@ def test_sabr_core_failure_falls_back_to_vv_on_the_same_pillars(monkeypatch):
         assert "using the VV smile on the same pillars" in note
 
 
+def test_pure_sabr_calibration_failure_falls_back_to_vv_visibly(monkeypatch):
+    import smile_preparation
+    original = smile_preparation.make_core
+
+    def no_sabr(model, *args, **kwargs):
+        if model == "sabr":
+            raise PreparationError("synthetic SABR fit failure")
+        return original(model, *args, **kwargs)
+
+    monkeypatch.setattr(smile_preparation, "make_core", no_sabr)
+    raw = MarketSnapshot.capture(market())
+    ctx = resolve_conventions(raw, "2026-12-02", "2026-10-02")
+    _, _, core, _, note = prepare_core(raw, ctx, "sabr", False)
+
+    assert type(core).__name__ == "VannaVolgaCore"
+    assert "sabr smile unavailable" in note
+    assert "using the VV smile on the same pillars" in note
+
+
+def test_pure_sabr_broker_conversion_uses_vv_butterflies_and_reports_error():
+    raw = MarketSnapshot.capture(market())
+    ctx = resolve_conventions(raw, "2026-12-02", "2026-10-02")
+    _, _, core, matches, note = prepare_core(raw, ctx, "sabr", True)
+
+    assert "VV two-vol butterflies" in note
+    assert len(matches) == 2
+    assert type(core).__name__ in ("SABRCore", "VannaVolgaCore")
+    assert "SABR premium error" in note
+
+
 def test_vv_conversion_failure_still_raises():
     """VV has no further fallback inside one pillar; the curve layer handles it."""
     m = market()

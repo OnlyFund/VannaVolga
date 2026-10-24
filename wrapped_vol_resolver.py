@@ -82,8 +82,8 @@ class PreparedSmile:
 
 
 def _validate_options(model, broker_strangle, beta, fallback):
-    if model not in ("vv", "vv-sabr"):
-        raise ValueError("model must be 'vv' or 'vv-sabr'")
+    if model not in ("vv", "vv-sabr", "sabr"):
+        raise ValueError("model must be 'vv', 'vv-sabr' or 'sabr'")
     if not isinstance(broker_strangle, bool) or not isinstance(fallback, bool):
         raise ValueError("broker_strangle and fallback must be bool")
     if isinstance(beta, bool) or not isinstance(beta, Real) or not math.isfinite(beta) or not 0 <= beta <= 1:
@@ -196,7 +196,7 @@ class WrappedVolResolver:
         strike = validate_strike(strike)
         from VannaVolga_ImpliedVol import VannaVolga
         from vanna_volga_sabr import VannaVolga_SABR
-        cls = VannaVolga if self.prepared.model == "vv" else VannaVolga_SABR
+        cls = VannaVolga_SABR if self.prepared.model == "vv-sabr" else VannaVolga
         options = _thaw(self._benchmark_options)
         if self.prepared.model == "vv-sabr":
             options["beta"] = self.prepared.beta

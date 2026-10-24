@@ -3,6 +3,7 @@ import logging
 import numpy as np
 from numba import njit
 from typing import Dict, Optional
+import warnings
 from helper_functions.model_constants import SQRT_TWO_PI
 from helper_functions.VannaVolga_function import (
     get_strike_from_delta,
@@ -17,11 +18,22 @@ from market_data import MarketData
 def get_model_map(market=None):
     """Return available model mapping."""
     if getattr(market, "wrapped_smile", False):
-        from app.smile_service import AppVolResolver, AppSabrResolver
-        return {"vv": AppVolResolver, "vv-sabr": AppSabrResolver}
+        from app.smile_service import AppVolResolver, AppSabrResolver, AppPureSabrResolver
+        return {"vv": AppVolResolver, "vv-sabr": AppSabrResolver,
+                "sabr": AppPureSabrResolver}
     from VannaVolga_ImpliedVol import VannaVolga
     from vanna_volga_sabr import VannaVolga_SABR
-    return {"vv": VannaVolga, "vv-sabr": VannaVolga_SABR}
+
+    class LegacySABRFallback(VannaVolga):
+        """Keep legacy callers working, but make unavailable pure SABR visible."""
+        def __init__(self, *args, **kwargs):
+            warnings.warn(
+                "Pure SABR needs resolved smile inputs; falling back to VV on the legacy path",
+                RuntimeWarning, stacklevel=2)
+            super().__init__(*args, **kwargs)
+
+    return {"vv": VannaVolga, "vv-sabr": VannaVolga_SABR,
+            "sabr": LegacySABRFallback}
 
 
 # ----------------- Numba-accelerated utility functions -----------------

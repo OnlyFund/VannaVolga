@@ -83,8 +83,8 @@ class MarketData:
         for name in ("wrapped_smile", "broker_strangle", "force_legacy_smile"):
             if not isinstance(getattr(self, name), bool):
                 raise ValueError("{} must be a bool".format(name))
-        if self.smile_model not in ("vv", "vv-sabr"):
-            raise ValueError("smile_model must be vv or vv-sabr")
+        if self.smile_model not in ("vv", "vv-sabr", "sabr"):
+            raise ValueError("smile_model must be vv, vv-sabr or sabr")
         if not isinstance(self.smile_reasons, tuple) or any(
                 not isinstance(reason, str) for reason in self.smile_reasons):
             raise ValueError("smile_reasons must be a tuple of strings")
