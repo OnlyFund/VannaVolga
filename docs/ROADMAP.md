@@ -169,10 +169,9 @@ apeiron/
 ## Priorities (2026-10-23)
 
 **P1, now: the performance foundation, then finish item 6 (dates).**
-1. Item 14, performance steps 0–2: a benchmark, profiling and timing budgets;
-   quick wins; pre-warming after the daily fetch. Accuracy (rolling,
-   calibration, theta on the rolled market) now costs real time, and the app
-   stalled once on it (2026-10-23). The first profile on 3.7 is the baseline.
+1. Item 14, performance steps 0–2: steps 0 and 1 done (2026-10-24: book cold
+   51 -> 9 s, roll 65 -> 15 s, ladder 74 -> 12 s, numbers unchanged); step 2,
+   pre-warming after the daily fetch, still to do.
 2. Item 14, performance step 3: Python 3.7 → 3.11, right after the baseline,
    so the optimising is done on the version that runs (and the same one as
    Streamlit Cloud).
@@ -195,31 +194,34 @@ apeiron/
 8. Item 22, services step 1: the Portfolio pilot (portfolio summary and trade
    greeks out of `app/ui/trades_block.py`), which creates the shared book
    selector, market handle and Greek selection.
-9. Item 22, services step 2: the pricing service, for other users.
-10. Continuous integration: the quick test tier on every push (GitHub
+9. VV-11, edge-case guards for the vol-for-strike resolver and pricing: not
+   the most urgent, but before the pricing service, the first API other
+   users call (an input the UI never sends will arrive through it).
+10. Item 22, services step 2: the pricing service, for other users.
+11. Continuous integration: the quick test tier on every push (GitHub
     Actions); later the place to build Rust wheels.
-11. The date snapping back: with "Link to market data date" on, a future date
+12. The date snapping back: with "Link to market data date" on, a future date
     returns to the market's date; say so in one line.
-12. Item 4, the intraday cut (paused until item 6 is done).
-13. Item 5, Apeiron: Gaia's move (after item 6), then Hyperion's (before item 8).
-14. Item 8, the full option lifecycle: the gate for stages 4–6.
-15. Item 23, the rest of that gate: run manifests and point-in-time inputs
+13. Item 4, the intraday cut (paused until item 6 is done).
+14. Item 5, Apeiron: Gaia's move (after item 6), then Hyperion's (before item 8).
+15. Item 8, the full option lifecycle: the gate for stages 4–6.
+16. Item 23, the rest of that gate: run manifests and point-in-time inputs
     (with item 22's provenance), fetch quality checks (with the scheduled
     daily fetch), bid/ask.
-16. The pricing review backlog (VV-02 … VV-10), taken alongside items 8 and 15;
+17. The pricing review backlog (VV-02 … VV-10; VV-11 is item 9 above), taken alongside items 8 and 15;
    VV-10 (reproducibility) goes with item 8 and item 23's run manifests.
-17. Item 7, market data deployment and cross forward points.
+18. Item 7, market data deployment and cross forward points.
 
 **P3, later: features, models and UI.**
-18. Items 9–13: vol compare, P&L attribution, surface analytics (built as
+19. Items 9–13: vol compare, P&L attribution, surface analytics (built as
     item 22's services), cross-consistent spot moves, term-currency notional.
-19. Item 14, performance steps 4–6: a process pool per pair; Numba and Rust
+20. Item 14, performance steps 4–6: a process pool per pair; Numba and Rust
     kernels; fast and full accuracy modes. With them, item 23's derived-data
     store and the vectorised path through time (stage 3).
-20. Items 14a, 14b and 15: pure SABR, local vol (research), smile study.
-21. Items 16–21: UI; item 22's HTTP API (after Python 3.11).
-22. Item 23's research run log, before the first backtest (stage 4).
-23. **Later**, as listed at the end.
+21. Items 14a, 14b and 15: pure SABR, local vol (research), smile study.
+22. Items 16–21: UI; item 22's HTTP API (after Python 3.11).
+23. Item 23's research run log, before the first backtest (stage 4).
+24. **Later**, as listed at the end.
 
 ## Paused
 
@@ -345,6 +347,24 @@ apeiron/
      recorded event, never deleted. Plain functions; the page only calls them.
    - **Cash ladder** of flows by currency and value date.
    - **Premium** paid at spot or deferred to delivery, each on its own value date.
+   - **Expired and exercised options leave the valuation, their premium stays**
+     (decided 2026-10-24). Once an option expires or is exercised it is no
+     longer valued (no MTM, no Greeks, not in the risk reports), but the
+     premium paid or received is a cashflow of the book and stays in its P&L,
+     so the P&L does not jump on the expiry date:
+     - lapsed: the option's P&L is its premium alone (realised);
+     - exercised: its premium plus the resulting spot trade (rate = strike,
+       value date = delivery), which is valued from then on;
+     - the premium settles on its own value date in the cash ladder, whether
+       the option is live or not; an unsettled premium is a cash position;
+     - the Portfolio and the P&L reports show these premiums in their own
+       line (realised premium), by pair and book, so the totals reconcile
+       with the trades booked.
+
+     Today `service.price_trades` skips an expired option with a note, so its
+     premium drops out of the P&L with it: a gap to close here, with a test
+     that the book's P&L is continuous across an expiry (lapsed and
+     exercised).
    - **Rolls:** every date settles into USD; amounts are rolled with T/N and S/N
      swaps, not delivered. USD term (EURUSD): roll the base amount. USD base
      (USDJPY): roll the term amount. Crosses (EURJPY): roll the base with the
@@ -366,8 +386,29 @@ apeiron/
 
 ## Performance and models
 
-14. **Performance plan** (discussed 2026-10-23, to review when this item
-    starts). Accuracy now costs real time:
+14. **Performance plan** (discussed 2026-10-23). **Steps 0 and 1 done
+    2026-10-24**, every number unchanged (the book, the 65-pair roll, the
+    spot ladder, the Bloomberg benchmark and the golden cases compared
+    exactly before and after):
+    - the benchmark (`tests/benchmark/performance.py`, history in
+      `performance_history.csv`) and work-budget tests (`test_work_budgets.py`);
+    - forward curves read once per curve date; markets built once per request;
+      converted pillar curves, vol tables and variance days kept per market;
+      the pillar spline built once per smile core; local skews once per
+      market; surface caches held (they were weakly bound and dropped);
+    - decay Greeks are no longer default columns: they are computed when
+      their column is added and kept, with the base Greeks, in the Greek memo
+      (`app.pricer.GreekMemo`); `VV_MARKET_CACHE=0` turns every cache off;
+    - book cold 51 -> 9 s, roll 65 -> 15 s, ladder 74 -> 12 s, a new line
+      0.3 -> 0.04 s; the test suite 10.5 -> 3.9 minutes.
+
+    Still open from step 1: warm-starting bumped-market calibrations from the
+    base smile and an analytic Jacobian (they move results within the solver
+    tolerance, so they need a stated tolerance first); showing the decay
+    columns after the main Greeks (with item 22's Portfolio pilot). Next:
+    step 2 (pre-warm), and step 3 (Python 3.11) as P1.
+
+    The plan as discussed. Accuracy costs real time:
     - rolling a pair took about 1.9 s, mostly smile preparation at each pillar;
     - theta needs a second, next-day market for every pair priced;
     - the rolled market's interpolation nodes double one rolled curve's rows;
@@ -502,6 +543,42 @@ Exercise and the resulting spot trade remain part of lifecycle item 8.
   calendar overrides and fallback provenance. Validate cache invalidation
   across pricing changes; a manual cache version is not a full valuation
   audit record. Coordinate with the lifecycle and historical stages.
+- **VV-11 - Edge-case guards for the vol-for-strike resolver and pricing**
+  (added 2026-10-24; before the pricing service, item 22 step 2). Every case
+  below either prices under a stated convention or is rejected with a clear
+  per-line reason; none may leak a NaN, an infinite value, a negative vol or
+  an exception from deep in the numerics, and a degraded result must say so
+  (``smile_status``, ``greek_problems``). Each case gets a test in both the
+  wrapped resolver (``smile_service.get_vol_for_strike``) and the line pricer
+  (``pricer.price_line`` / ``Pricable.price``), and the outcome is written
+  down as the input contract the pricing service will publish.
+  - **Time:** expired options (expiry before the valuation date: not
+    valued, but their premium stays in the P&L, item 8), expiring
+    today (before and after the cut, item 4), expiry on a non-business day,
+    sub-1-week and sub-1-day options (time near zero: Black-Scholes limits,
+    Greeks that blow up, theta across the expiry), a valuation date after
+    the market's date beyond what rolling covers.
+  - **Moneyness and delta:** extremely low delta (far wing beyond the 10D
+    pillar: the wing parabola, its 1% delta cap and the Lee bound), deep in
+    the money, strikes at zero, negative, NaN or absurdly large; strike from
+    delta where premium-included delta is not monotonic (two strikes for one
+    delta on the far side of the peak); delta strikes beyond what the smile
+    reaches (0.5D, 99D); ATM conventions near the boundaries.
+  - **Vols:** a smile whose wings go non-positive or non-finite after the
+    smile dynamics move them (large betas, large spot moves), very low and
+    very high vols, a degenerate pillar set (flat, inverted, risk reversal
+    larger than the butterfly allows), calibration that does not converge,
+    and the legacy fallback when the wrapped smile cannot be built (VV-05).
+  - **Forwards and rates:** forward points that make the forward non-positive,
+    extreme or missing rates, a delivery before spot, a broken date outside
+    the forward curve.
+  - **Lines:** zero notional, typed vols far from the market, an auto
+    premium on an option worth almost nothing, digitals with the strike at
+    spot near expiry, implied-vol bracket failures (VV-08).
+  - **How it is checked:** a parametrised edge-case suite, plus a property
+    test over random strikes, deltas and expiries on the stored markets
+    asserting finite, positive vols and prices, or a clean rejection. The
+    work budgets and the parity checks of 2026-10-24 stay green.
 
 ## Services (Hyperion)
 
@@ -591,7 +668,7 @@ Exercise and the resulting spot trade remain part of lifecycle item 8.
        stops importing private names from `trades_block`. One pricing path:
        `service.price_trades` and `cached_pricing.price_trades` reconciled.
        This creates the book selector, market handle and Greek selection.
-    2. **Pricing service**, reusing them; the Pricer tab (`portfolio_block.py`:
+    2. **Pricing service**, after the edge-case guards (VV-11), reusing them; the Pricer tab (`portfolio_block.py`:
        premium, vol and hedge modes) moves onto it.
     3. Risk reports, then Market, Calendar and Forward vol behind one API.
     4. The import rule for Olympus, with the crossings list shrinking to empty.
