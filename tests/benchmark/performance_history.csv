@@ -1,0 +1,39 @@
+run_at,commit,python,machine,workload,phase,seconds
+2026-10-24T06:04:49,acc7539,3.7.6,BDL-FHN0MLG,book,imports,1.998
+2026-10-24T06:04:49,acc7539,3.7.6,BDL-FHN0MLG,book,market load,1.272
+2026-10-24T06:04:49,acc7539,3.7.6,BDL-FHN0MLG,book,book cold,52.699
+2026-10-24T06:04:49,acc7539,3.7.6,BDL-FHN0MLG,book,"book prepared, no result cache",40.387
+2026-10-24T06:04:49,acc7539,3.7.6,BDL-FHN0MLG,book,book cached rerun,0.019
+2026-10-24T06:04:49,acc7539,3.7.6,BDL-FHN0MLG,book,one extra line,0.313
+2026-10-24T06:04:49,acc7539,3.7.6,BDL-FHN0MLG,book,process total,137.354
+2026-10-24T06:32:11,acc7539,3.7.6,BDL-FHN0MLG,book_theta_forward,imports,1.973
+2026-10-24T06:32:11,acc7539,3.7.6,BDL-FHN0MLG,book_theta_forward,market load,1.217
+2026-10-24T06:32:11,acc7539,3.7.6,BDL-FHN0MLG,book_theta_forward,book cold,57.221
+2026-10-24T06:32:11,acc7539,3.7.6,BDL-FHN0MLG,book_theta_forward,process total,60.722
+2026-10-24T06:32:11,acc7539,3.7.6,BDL-FHN0MLG,roll,imports,1.109
+2026-10-24T06:32:11,acc7539,3.7.6,BDL-FHN0MLG,roll,market load,1.180
+2026-10-24T06:32:11,acc7539,3.7.6,BDL-FHN0MLG,roll,roll every pair,64.576
+2026-10-24T06:32:11,acc7539,3.7.6,BDL-FHN0MLG,roll,process total,67.062
+2026-10-24T06:32:11,acc7539,3.7.6,BDL-FHN0MLG,ladder,imports,1.984
+2026-10-24T06:32:11,acc7539,3.7.6,BDL-FHN0MLG,ladder,market load,1.215
+2026-10-24T06:32:11,acc7539,3.7.6,BDL-FHN0MLG,ladder,spot ladder,74.059
+2026-10-24T06:32:11,acc7539,3.7.6,BDL-FHN0MLG,ladder,process total,77.587
+2026-10-24T06:35:36,acc7539+dirty,3.7.6,BDL-FHN0MLG,book,imports,2.131
+2026-10-24T06:35:36,acc7539+dirty,3.7.6,BDL-FHN0MLG,book,market load,1.232
+2026-10-24T06:35:36,acc7539+dirty,3.7.6,BDL-FHN0MLG,book,book cold,24.435
+2026-10-24T06:35:36,acc7539+dirty,3.7.6,BDL-FHN0MLG,book,"book prepared, no result cache",19.497
+2026-10-24T06:35:36,acc7539+dirty,3.7.6,BDL-FHN0MLG,book,book cached rerun,0.019
+2026-10-24T06:35:36,acc7539+dirty,3.7.6,BDL-FHN0MLG,book,one extra line,0.200
+2026-10-24T06:35:36,acc7539+dirty,3.7.6,BDL-FHN0MLG,book,process total,67.565
+2026-10-24T06:35:36,acc7539+dirty,3.7.6,BDL-FHN0MLG,book_theta_forward,imports,1.963
+2026-10-24T06:35:36,acc7539+dirty,3.7.6,BDL-FHN0MLG,book_theta_forward,market load,1.223
+2026-10-24T06:35:36,acc7539+dirty,3.7.6,BDL-FHN0MLG,book_theta_forward,book cold,28.120
+2026-10-24T06:35:36,acc7539+dirty,3.7.6,BDL-FHN0MLG,book_theta_forward,process total,31.617
+2026-10-24T06:35:36,acc7539+dirty,3.7.6,BDL-FHN0MLG,roll,imports,1.123
+2026-10-24T06:35:36,acc7539+dirty,3.7.6,BDL-FHN0MLG,roll,market load,1.238
+2026-10-24T06:35:36,acc7539+dirty,3.7.6,BDL-FHN0MLG,roll,roll every pair,26.153
+2026-10-24T06:35:36,acc7539+dirty,3.7.6,BDL-FHN0MLG,roll,process total,28.719
+2026-10-24T06:35:36,acc7539+dirty,3.7.6,BDL-FHN0MLG,ladder,imports,2.022
+2026-10-24T06:35:36,acc7539+dirty,3.7.6,BDL-FHN0MLG,ladder,market load,1.245
+2026-10-24T06:35:36,acc7539+dirty,3.7.6,BDL-FHN0MLG,ladder,spot ladder,29.746
+2026-10-24T06:35:36,acc7539+dirty,3.7.6,BDL-FHN0MLG,ladder,process total,33.308

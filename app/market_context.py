@@ -66,24 +66,47 @@ def naive_date(value):
     return timestamp.normalize()
 
 
+class DeliveryCurve:
+    """A curve read from ``rows`` once, then interpolated linearly at any date
+    within its supplied delivery range (``interpolate_delivery_curve``).
+
+    The rows are parsed on the first call, not here, so a curve that is never
+    used raises nothing; a bad curve raises on every call, as before.
+    """
+
+    def __init__(self, rows, date_column, value_column, name):
+        self.rows, self.date_column, self.value_column, self.name = (
+            rows, date_column, value_column, name)
+        self._prepared = None
+
+    def _prepare(self):
+        rows, name = self.rows, self.name
+        dates = pd.to_datetime(rows[self.date_column], errors="coerce")
+        values = pd.to_numeric(rows[self.value_column], errors="coerce")
+        valid = dates.notna() & values.notna() & np.isfinite(values)
+        curve = rows.loc[valid].copy()
+        if curve.empty:
+            raise ValueError(f"{name} rows must have valid delivery dates and finite values")
+        curve["_date"] = dates.loc[valid].map(pd.Timestamp.toordinal)
+        curve["_value"] = values.loc[valid]
+        curve.sort_values("_date", inplace=True)
+        if curve["_date"].duplicated().any():
+            raise ValueError("Forward delivery dates must be unique")
+        return curve["_date"].to_numpy(), curve["_value"].to_numpy()
+
+    def __call__(self, target_date):
+        if self._prepared is None:
+            self._prepared = self._prepare()
+        ordinals, values = self._prepared
+        target = pd.Timestamp(target_date).toordinal()
+        if target < ordinals[0] or target > ordinals[-1]:
+            raise ValueError(f"{self.name} delivery date is outside the quoted forward range")
+        return float(np.interp(target, ordinals, values))
+
+
 def interpolate_delivery_curve(rows, date_column, value_column, target_date, name):
     """Linearly interpolate a curve only within its supplied delivery range."""
-    dates = pd.to_datetime(rows[date_column], errors="coerce")
-    values = pd.to_numeric(rows[value_column], errors="coerce")
-    valid = dates.notna() & values.notna() & np.isfinite(values)
-    curve = rows.loc[valid].copy()
-    if curve.empty:
-        raise ValueError(f"{name} rows must have valid delivery dates and finite values")
-    curve["_date"] = dates.loc[valid].map(pd.Timestamp.toordinal)
-    curve["_value"] = values.loc[valid]
-    curve.sort_values("_date", inplace=True)
-    if curve["_date"].duplicated().any():
-        raise ValueError("Forward delivery dates must be unique")
-    target = pd.Timestamp(target_date).toordinal()
-    first, last = curve["_date"].iloc[0], curve["_date"].iloc[-1]
-    if target < first or target > last:
-        raise ValueError(f"{name} delivery date is outside the quoted forward range")
-    return float(np.interp(target, curve["_date"], curve["_value"]))
+    return DeliveryCurve(rows, date_column, value_column, name)(target_date)
 
 
 THETA_VOL_ROLLS = ("rolled", "forward", "tenor")
@@ -566,16 +589,31 @@ class MarketContext:
         # A rolled pillar (moved by trading days) keeps its tenor's
         # settlement: its delivery comes from the calendar-day roll.
         calendar_rolled = {}
+        # The forward curve for a curve date depends only on this market's
+        # tables, so it is built and read once per date and reused (shared
+        # with ``with_spot`` copies: it does not depend on spot).
+        curves = self.__dict__.setdefault("_delivery_curve_cache", {})
+        cached = curves.get(curve_date)
         if curve_date != naive_date(valuation_date):
-            forward_rows = self.forward_curve(valuation_date, forward_rows)
+            if cached is None:
+                forward_rows = self.forward_curve(valuation_date, forward_rows)
             unadjusted = rows["expiry"] + pd.Timedelta(days=roll_days)
             rows = roll_vol_rows(rows, pair, valuation_date, curve_date)
             calendar_rolled = {naive_date(a): naive_date(u)
                                for a, u in zip(rows["expiry"], unadjusted)}
-            forward_rows = roll_forward_rows(
-                forward_rows, rows, pair, valuation_date, curve_date, self.delivery,
-            )
-        curve_rows = forward_rows if roll_days else self.forward_curve(curve_date, forward_rows)
+            if cached is None:
+                forward_rows = roll_forward_rows(
+                    forward_rows, rows, pair, valuation_date, curve_date, self.delivery,
+                )
+        if cached is None:
+            curve_rows = (forward_rows if roll_days
+                          else self.forward_curve(curve_date, forward_rows))
+            cached = curves[curve_date] = (
+                curve_rows,
+                DeliveryCurve(curve_rows, "delivery_date", "fwd_pts", "Forward points"),
+                DeliveryCurve(curve_rows, "delivery_date", "term_discount",
+                              "Term discount rate"))
+        curve_rows, forward_points, discount_curve = cached
 
         def pillar_delivery(value):
             # Synthetic risk nodes retain their original settlement offsets.
@@ -584,16 +622,10 @@ class MarketContext:
             return self.delivery(original_expiry) + pd.Timedelta(days=roll_days)
 
         def pillar_forward_points(value):
-            return interpolate_delivery_curve(
-                curve_rows, "delivery_date", "fwd_pts", pillar_delivery(value),
-                "Forward points",
-            )
+            return forward_points(pillar_delivery(value))
 
         def pillar_term_discount(value):
-            return interpolate_delivery_curve(
-                curve_rows, "delivery_date", "term_discount", pillar_delivery(value),
-                "Term discount rate",
-            )
+            return discount_curve(pillar_delivery(value))
         if requested_date < curve_date or (requested_date == curve_date and not allow_short_end):
             raise ValueError("Expiry must be after the valuation date")
         target_date = requested_date
@@ -652,12 +684,12 @@ class MarketContext:
         bf10 = (interpolated["CALL_10"] + interpolated["PUT_10"]) / 2.0 - atm
         market_args = dict(
             s=spot if spot_value is None else spot_value,
-            fwd_pts=self.forward_points_for_expiry(requested_date, curve_rows),
+            fwd_pts=forward_points(self.delivery(requested_date)),
             v_atm=atm, rr_25=rr25, rr_10=rr10, bf_25=bf25, bf_10=bf10,
             forward_divisor=self.forward_divisor, atm_conv=settings.atm_type,
             deltaBase=settings.delta_base,
         )
-        term_discount = self.term_discount_for_expiry(requested_date, curve_rows)
+        term_discount = discount_curve(self.delivery(requested_date))
         try:
             market = MarketData(**market_args, term_discount=term_discount)
         except TypeError as exc:
