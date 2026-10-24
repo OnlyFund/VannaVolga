@@ -94,6 +94,9 @@ _HYPERION = [
 ]
 
 _OLYMPUS = [
+    # the pre-warm reproduces the app's opening state (its defaults live in
+    # the UI until item 22 moves them into the services)
+    "app.prewarm",
     "app.streamlit_app", "app.ui", "app.ui.app", "app.ui.event_calendar_block",
     "app.ui.greek_picker", "app.ui.market_block", "app.ui.market_picker",
     "app.ui.model_block", "app.ui.negatives", "app.ui.portfolio_block",

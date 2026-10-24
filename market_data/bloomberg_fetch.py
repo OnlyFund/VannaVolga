@@ -239,7 +239,29 @@ def store_live_dates(run=None):
     return code
 
 
-def main(argv=None, fetch=None, store_dates=None, today=None):
+def prewarm_app(run=None):
+    """Pre-warm the app's caches for the new market (``app.prewarm``).
+
+    Runs as its own process; returns its exit code (0: done, 1: failed).
+    Never raises: the market is already saved, and the app only starts colder.
+    """
+    import subprocess
+    import sys
+    from pathlib import Path
+    run = run or subprocess.run
+    try:
+        done = run([sys.executable, '-m', 'app.prewarm'],
+                   cwd=str(Path(__file__).resolve().parents[1]))
+        code = done.returncode
+    except Exception as error:                 # the market is saved; say so and go on
+        print(f'App not pre-warmed: {type(error).__name__}: {error}')
+        return 1
+    if code:
+        print('App not pre-warmed (see above); it prices on first use instead.')
+    return code
+
+
+def main(argv=None, fetch=None, store_dates=None, today=None, warm=None):
     import argparse
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('valuation_date', nargs='?', help='YYYY-MM-DD; default today')
@@ -247,15 +269,20 @@ def main(argv=None, fetch=None, store_dates=None, today=None):
                         help='skip the vol surfaces and forward points')
     parser.add_argument('--no-dates', action='store_true',
                         help="skip today's live pillar dates")
+    parser.add_argument('--no-prewarm', action='store_true',
+                        help="skip pre-warming the app's caches for the new market")
     args = parser.parse_args(argv)
     (fetch or fetch_and_store)(args.valuation_date, vols=not args.no_vols)
     today = today or datetime.now().strftime('%Y-%m-%d')
     if args.no_dates:
-        return 0
-    if args.valuation_date and args.valuation_date != today:
+        pass
+    elif args.valuation_date and args.valuation_date != today:
         print(f'No live pillar dates for {args.valuation_date}: Bloomberg has them for today only.')
-        return 0
-    (store_dates or store_live_dates)()
+    else:
+        (store_dates or store_live_dates)()
+    # Last, so the pre-warm sees the live dates the app will price with.
+    if not (args.no_prewarm or args.no_vols):
+        (warm or prewarm_app)()
     return 0
 
 

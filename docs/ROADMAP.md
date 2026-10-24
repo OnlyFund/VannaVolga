@@ -169,9 +169,9 @@ apeiron/
 ## Priorities (2026-10-23)
 
 **P1, now: the performance foundation, then finish item 6 (dates).**
-1. Item 14, performance steps 0–2: steps 0 and 1 done (2026-10-24: book cold
-   51 -> 9 s, roll 65 -> 15 s, ladder 74 -> 12 s, numbers unchanged); step 2,
-   pre-warming after the daily fetch, still to do.
+1. Item 14, performance steps 0–2: done (2026-10-24: book cold 51 -> 9 s,
+   roll 65 -> 15 s, ladder 74 -> 12 s, numbers unchanged; after the daily
+   fetch the app opens warm: the Portfolio's first pricing reads the cache).
 2. Item 14, performance step 3: Python 3.7 → 3.11, right after the baseline,
    so the optimising is done on the version that runs (and the same one as
    Streamlit Cloud).
@@ -405,8 +405,18 @@ apeiron/
     Still open from step 1: warm-starting bumped-market calibrations from the
     base smile and an analytic Jacobian (they move results within the solver
     tolerance, so they need a stated tolerance first); showing the decay
-    columns after the main Greeks (with item 22's Portfolio pilot). Next:
-    step 2 (pre-warm), and step 3 (Python 3.11) as P1.
+    columns after the main Greeks (with item 22's Portfolio pilot).
+
+    **Step 2 done 2026-10-24:** `app.prewarm` runs after the daily fetch
+    (`bloomberg_fetch`, its own process; `--no-prewarm` skips it, and
+    `python -m app.prewarm` runs it by hand). It reproduces the app's opening
+    state (latest usable snapshot and its FX date, default settings, betas
+    and columns), calibrates every pair into the disk calibration cache and
+    prices the live book into the disk result cache, then checks that a
+    fresh session finds every trade (209 of 209; 24 s). In the real app the
+    Portfolio's first pricing went from 12.8 s to the page-drawing floor.
+    It never fails the fetch; a lock keeps two from running at once. Next:
+    step 3 (Python 3.11) as P1.
 
     The plan as discussed. Accuracy costs real time:
     - rolling a pair took about 1.9 s, mostly smile preparation at each pillar;
