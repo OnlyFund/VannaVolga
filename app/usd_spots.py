@@ -34,14 +34,16 @@ def latest_snapshot(valuation_date=None, store=None, market_id=None):
     """The stored market ``market_id`` when given (the one the app prices on),
     else the latest with data on or before ``valuation_date`` (the latest of
     all without one), or ``None``. A ``market_id`` that is gone falls back to
-    the latest."""
+    the latest. The latest is one that can price (a weekend fetch with no vols
+    has no spots either), else the latest of all."""
     from market_data.store import open_market_data_store
     store = store or open_market_data_store()
     if market_id is not None:
         snapshot = store.load(market_id=market_id)
         if snapshot is not None:
             return snapshot
-    return store.load(on_or_before=valuation_date)
+    return (store.load(on_or_before=valuation_date, priceable=True)
+            or store.load(on_or_before=valuation_date))
 
 
 def usd_rate(ccy, spots):

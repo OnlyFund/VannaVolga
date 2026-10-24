@@ -105,7 +105,7 @@ def test_the_fetch_pins_the_event_set_current_at_the_fetch(store, tmp_path, monk
     monkeypatch.setattr(fetch, "fetch_spots", lambda date: {"EURUSD": 1.12})
     monkeypatch.setattr(fetch, "fetch_depo_curves", lambda date: {"USD": USD})
     monkeypatch.setattr(fetch, "fetch_vols", lambda date: {"EURUSD": SURFACE})
-    monkeypatch.setattr(fetch, "fetch_forward_points", lambda date: {})
+    monkeypatch.setattr(fetch, "fetch_forward_points", lambda date: {"EURUSD": {"1M": 14.0}})
     market_id = fetch.fetch_and_store(TODAY, store=store)
     assert store.load(market_id=market_id).event_set_id == event_set_id
 

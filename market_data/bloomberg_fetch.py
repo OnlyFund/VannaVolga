@@ -189,12 +189,27 @@ def fetch_forward_points(valuation_date, pairs=FX_UNIVERSE):
     return forwards
 
 
-def fetch_and_store(valuation_date=None, store=None, vols=True):
+def unusable_fetch(spots, surfaces, forwards, vols=True):
+    """Why a fetch must not be saved as a market, or ``None`` when it may be.
+
+    No spots, or (with ``vols``) no vol surfaces or no forward points: the
+    market could not price (a weekend or holiday fetch, Bloomberg not
+    returning data). Some pairs missing is fine; they are reported as fetched.
+    """
+    missing = [what for what, got in (('spots', spots), ('vol surfaces', surfaces),
+                                      ('forward points', forwards))
+               if not got and (vols or what == 'spots')]
+    return f"no {' and no '.join(missing)}" if missing else None
+
+
+def fetch_and_store(valuation_date=None, store=None, vols=True, force=False):
     """Fetch spots, depo curves and (with ``vols``) vol surfaces and forward
     points for ``valuation_date`` (default today) and save them as one market.
 
     Its ``date_time`` is the fetch time for today, else ``valuation_date``'s
-    close (``store.data_date_time``). Returns the ``market_id``.
+    close (``store.data_date_time``). Returns the ``market_id``, or ``None``
+    when the fetch cannot price (``unusable_fetch``) and is not saved;
+    ``force`` saves it anyway, noted on the market.
     """
     from market_data.store import data_date_time
     fetched_at = datetime.now()
@@ -203,14 +218,22 @@ def fetch_and_store(valuation_date=None, store=None, vols=True):
     curves = fetch_depo_curves(valuation_date)
     surfaces = fetch_vols(valuation_date) if vols else {}
     forwards = fetch_forward_points(valuation_date) if vols else {}
+    problem = unusable_fetch(spots, surfaces, forwards, vols)
+    if problem and not force:
+        print(f'Not saved: the fetch for {valuation_date} has {problem} '
+              f'({len(spots)} spots, {len(curves)} depo curves, {len(surfaces)} vol surfaces, '
+              f'{len(forwards)} forward curves), so it cannot price; a weekend or holiday, '
+              'or Bloomberg not returning data. --force saves it anyway.')
+        return None
     store = store or open_market_data_store()
     date_time = data_date_time(valuation_date, fetched_at)
     # Pin the event calendar current at the fetch, so the market always
     # prices with the same events.
     event_set_id = store.latest_event_set_id(at_or_before=fetched_at)
+    note = f'saved with --force: {problem}' if problem else ''
     market_id = store.save(date_time, 'bloomberg', spots=spots, depo_curves=curves,
                            vols=surfaces, forward_points=forwards, fetched_at=fetched_at,
-                           event_set_id=event_set_id)
+                           note=note, event_set_id=event_set_id)
     events = f'event set {event_set_id}' if event_set_id is not None else 'no event set'
     print(f'Saved market {market_id} (bloomberg, {date_time}): {len(spots)} spots, '
           f'{len(curves)} depo curves, {len(surfaces)} vol surfaces, '
@@ -275,8 +298,17 @@ def main(argv=None, fetch=None, store_dates=None, today=None, warm=None):
                         help="skip today's live pillar dates")
     parser.add_argument('--no-prewarm', action='store_true',
                         help="skip pre-warming the app's caches for the new market")
+    parser.add_argument('--force', action='store_true',
+                        help='save the market even when it cannot price (no spots, vols '
+                             'or forward points)')
     args = parser.parse_args(argv)
-    (fetch or fetch_and_store)(args.valuation_date, vols=not args.no_vols)
+    market_id = (fetch or fetch_and_store)(args.valuation_date, vols=not args.no_vols,
+                                           force=args.force)
+    if market_id is None:
+        # Nothing saved: the live dates and the pre-warm would describe the
+        # previous market, so they wait for the next good fetch.
+        print('No market saved: live pillar dates and the app pre-warm skipped.')
+        return 1
     today = today or datetime.now().strftime('%Y-%m-%d')
     if args.no_dates:
         pass
@@ -291,4 +323,4 @@ def main(argv=None, fetch=None, store_dates=None, today=None, warm=None):
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

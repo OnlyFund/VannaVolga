@@ -133,6 +133,28 @@ def fx_cutoff(valuation_date):
     return cutoff(valuation_date, STORE_TIMEZONE)
 
 
+def _latest_priceable(store, at_or_before):
+    """``(snapshot, note)``: the latest market taken ``at_or_before`` that can
+    price (vols and forward points), skipping newer ones that cannot (a
+    weekend fetch), with a note naming them. With no priceable market the
+    latest of all, as before, so its own problem is reported."""
+    newest = store.load(at_or_before=at_or_before)
+    if newest is None:
+        return None, None
+    best = store.load(at_or_before=at_or_before, priceable=True)
+    if best is None:
+        return newest, None
+    if best.market_id == newest.market_id:
+        return best, None
+    skipped = store.snapshots()
+    skipped = skipped[(skipped["date_time"] > best.date_time)
+                      & (skipped["date_time"] <= newest.date_time)]["market_id"].tolist()
+    ids = [str(int(i)) for i in skipped] or [str(newest.market_id)]
+    return best, (f"market{'s' if len(ids) > 1 else ''} {', '.join(ids)} skipped: no vol surfaces or forward points; "
+                  f"using the latest market that can price, market {best.market_id} "
+                  f"({best.market_source}, {best.date_time})")
+
+
 def load_store_markets(valuation_date, market_id=None, store=None, pairs=None):
     """The markets of one stored market snapshot for ``valuation_date``.
 
@@ -147,10 +169,11 @@ def load_store_markets(valuation_date, market_id=None, store=None, pairs=None):
     try:
         if store is None:
             store = app_market_store(valuation)
+        skipped_note = None
         if market_id is not None:
             snapshot = store.load(market_id=market_id)
         else:
-            snapshot = store.load(at_or_before=fx_cutoff(valuation))
+            snapshot, skipped_note = _latest_priceable(store, fx_cutoff(valuation))
     except Exception as exc:                 # unreadable, locked or corrupt store
         return _failed(f"market data store unavailable: {exc}")
     snapshot = with_fx_date(snapshot)
@@ -165,7 +188,7 @@ def load_store_markets(valuation_date, market_id=None, store=None, pairs=None):
     if snapshot_date > valuation:
         return _failed(f"{label} is from after the valuation date {valuation:%Y-%m-%d}; "
                        "future market data cannot be used", snapshot)
-    notes = []
+    notes = [skipped_note] if skipped_note else []
     if snapshot_date < valuation:
         too_old = snapshot_date < valuation - BDay(MAX_SNAPSHOT_AGE_BDAYS)
         if too_old and market_id is None:

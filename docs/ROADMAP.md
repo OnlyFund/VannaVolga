@@ -218,7 +218,8 @@ apeiron/
    and a note in the app when today's live dates are missing. Live pillar
    dates exist only if the fetch runs; otherwise the solver is used silently.
    With it, the fetch guard (brought forward from item 16's fetch quality
-   checks; it bit on 2026-10-24): a Saturday fetch saved markets 56 and 57
+   checks; it bit on 2026-10-24; guard and Latest skip DONE 2026-10-24, the
+   weekend skip comes with the scheduled task): a Saturday fetch saved markets 56 and 57
    with no spots, vols or forward points, and "Latest" for a later date now
    picks them. The fetch refuses to save a market without spots and vols
    (saying so); the scheduled task skips weekends and holidays; choosing the

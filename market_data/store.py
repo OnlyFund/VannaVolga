@@ -830,16 +830,24 @@ class MarketDataStore:
         with closing(self._connect()) as db:
             return pd.read_sql_query(query, db, params=args)
 
-    def load(self, market_id=None, date=None, on_or_before=None, at_or_before=None):
+    def load(self, market_id=None, date=None, on_or_before=None, at_or_before=None,
+             priceable=False):
         """One market with its quotes, or ``None``.
 
         ``market_id``: that market. Otherwise the latest market (by
         ``date_time``) with data of ``date``, or of ``on_or_before`` or
         earlier (a date: any time that day), or taken ``at_or_before`` a
-        date-time; with none of them, the latest market.
+        date-time; with none of them, the latest market. ``priceable`` keeps
+        only markets with vol quotes and forward points (a fetch that found
+        neither, such as a weekend's, cannot price an option).
         """
         query, args = ("SELECT market_id, market_source, date_time, fetched_at, note, "
                        "event_set_id, timezone FROM markets WHERE 1 = 1"), []
+        if priceable:
+            query += (f" AND EXISTS (SELECT 1 FROM quotes v WHERE v.market_id = markets.market_id"
+                      f" AND v.kind LIKE '{VOL_PREFIX}%')"
+                      f" AND EXISTS (SELECT 1 FROM quotes f WHERE f.market_id = markets.market_id"
+                      f" AND f.kind = '{FWD_PTS}')")
         if market_id is not None:
             query += " AND market_id = ?"
             args.append(int(market_id))

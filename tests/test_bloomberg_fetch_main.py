@@ -14,7 +14,10 @@ def fetch_module():
 
 def _run(module, argv):
     calls = []
-    module.main(argv, fetch=lambda day, vols: calls.append(("market", day, vols)),
+    def fetch(day, vols, force):
+        calls.append(("market", day, vols))
+        return 56
+    module.main(argv, fetch=fetch,
                 store_dates=lambda: calls.append(("dates",)), today="2026-10-23",
                 warm=lambda: calls.append(("warm",)))
     return calls
