@@ -1,5 +1,4 @@
 [
- "VannaVolga_ImpliedVol -> market_data.vol_data",
  "app.reports.spot_ladder -> app.ui.negatives",
  "app.trades.model -> pricing.fx_forward",
  "app.usd_spots -> helper_functions.premium_quotes",

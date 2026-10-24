@@ -329,6 +329,12 @@ class MarketContext:
         end = naive_date(end)
         if end < start:
             raise ValueError("End date must not precede start date")
+        # Kept per context and date pair (the events are fixed, so the answer
+        # is too); ``VV_MARKET_CACHE=0`` computes every time.
+        cache = self.__dict__.setdefault("_variance_between_cache", {})
+        use_cache = os.environ.get(MARKET_CACHE_ENV, "1").strip() != "0"
+        if use_cache and (start, end) in cache:
+            return cache[(start, end)]
         total = self._weighted_days(start, end)
         events = self.event_rows
         if not events.empty:
@@ -339,6 +345,8 @@ class MarketContext:
             if not np.isfinite(weights.to_numpy(dtype=float)).all():
                 raise ValueError("Event variance days must be finite")
             total += float(weights.loc[(event_dates > start) & (event_dates <= end)].sum())
+        if use_cache:
+            cache[(start, end)] = float(total)
         return float(total)
 
     def _weighted_days(self, start, end):
@@ -624,9 +632,32 @@ class MarketContext:
                                      f"theta on tenor-rolled quotes ({exc})"))
             return market
 
+    def _pillar_rows(self):
+        """The vol table by expiry, with the interpolation nodes: parsed once per
+        context (a market build used to parse it every time) and copied to each
+        caller, who may change its copy. A table that cannot be parsed raises
+        every time; ``VV_MARKET_CACHE=0`` parses on every call."""
+        cached = self.__dict__.get("_pillar_rows_cache")
+        if cached is None or os.environ.get(MARKET_CACHE_ENV, "1").strip() == "0":
+            rows = self.vol_rows.copy()
+            if rows.empty:
+                raise ValueError("Enter at least one volatility expiry")
+            rows["expiry"] = pd.to_datetime(
+                rows["expiry"], errors="coerce", utc=True
+            ).dt.tz_localize(None)
+            rows = rows.dropna(subset=["expiry"]).sort_values("expiry").reset_index(drop=True)
+            if rows.empty:
+                raise ValueError("Volatility expiries must be valid dates")
+            cached = self._pillar_rows_cache = self._with_interpolation_nodes(rows)
+        return cached.copy()
+
     def interpolation_rows(self):
         """The vol curve the surface interpolates: the tenor pillars and any
         extra nodes, by expiry (naive timestamps)."""
+        try:
+            return self._pillar_rows()          # parsed once per context
+        except ValueError:                      # an empty table: no error here
+            pass
         rows = self.vol_rows.copy()
         rows["expiry"] = pd.to_datetime(rows["expiry"], errors="coerce", utc=True).dt.tz_localize(None)
         rows = rows.dropna(subset=["expiry"]).sort_values("expiry").reset_index(drop=True)
@@ -713,16 +744,7 @@ class MarketContext:
         requested_date = naive_date(expiry)
         if requested_date == curve_date and allow_short_end and as_of is not None:
             return self._market_for_expiry(expiry, spot_value=spot_value)
-        rows = self.vol_rows.copy()
-        if rows.empty:
-            raise ValueError("Enter at least one volatility expiry")
-        rows["expiry"] = pd.to_datetime(
-            rows["expiry"], errors="coerce", utc=True
-        ).dt.tz_localize(None)
-        rows = rows.dropna(subset=["expiry"]).sort_values("expiry").reset_index(drop=True)
-        if rows.empty:
-            raise ValueError("Volatility expiries must be valid dates")
-        rows = self._with_interpolation_nodes(rows)
+        rows = self._pillar_rows()
         forward_rows = self.forward_rows
         roll_days = (curve_date - naive_date(valuation_date)).days
         # A rolled pillar (moved by trading days) keeps its tenor's

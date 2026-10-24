@@ -7,7 +7,6 @@ import numpy as np
 from scipy.optimize import brentq
 from pricing_utils.BlackScholes import BlackScholes, d1, ndtr
 from market_data import MarketData
-from market_data.vol_data import VolData
 from helper_functions.fx_strangle_converter import broker_to_twovol_bf
 from helper_functions.vanna_volga_helpers import (
     phi, calculate_strikes, get_vol_k, GetMainPillars, get_atm_strike,
