@@ -167,6 +167,54 @@ def price_option_with_vol(market, row, vol, atm_type, delta_base):
     return strike, float(vol), float(price)
 
 
+def _market_state(market):
+    """A market's full state for a memo key: every field but the session token
+    (``resolved`` restates the expiry and valuation, which the row carries)."""
+    if market is None:
+        return None
+    from dataclasses import fields
+    return tuple((f.name, repr(getattr(market, f.name))) for f in fields(market)
+                 if f.name not in ("diagnostics_token", "resolved"))
+
+
+def _memo_key(market, next_market, next_valuation, row, pricing_model, atm_type,
+              delta_base, mods):
+    """Every input the unit price and Greeks depend on."""
+    items = row.items() if hasattr(row, "items") else dict(row).items()
+    return ("pricable-v1", _market_state(market), _market_state(next_market),
+            str(next_valuation), tuple(sorted((str(k), repr(v)) for k, v in items)),
+            str(pricing_model), str(atm_type), bool(delta_base), repr(mods))
+
+
+def _memo_extras(memo, base_key, names, compute):
+    """``(values, problems)`` of the extra Greeks ``names``: each read from
+    ``memo`` when computed before, the others computed together by
+    ``compute(missing)`` and kept one by one. Each extra gives ``<name>`` and
+    ``fixed_<name>``; one whose outputs are not exactly those is not kept."""
+    from pricing.greek_catalog import extras as known_extras
+    wanted = list(known_extras(names))
+    kept = {name: memo.get((base_key, "extra", name)) for name in wanted}
+    missing = [name for name in wanted if kept[name] is None]
+    if missing:
+        values, problems = compute(missing)
+        for name in missing:
+            own = {key: value for key, value in values.items()   # the calculator's order
+                   if key in (name, "fixed_" + name)}
+            kept[name] = (own, {name: problems[name]} if name in problems else {})
+        claimed = {key for name in missing for key in (name, "fixed_" + name)}
+        if set(values) <= claimed and set(problems) <= set(missing):
+            for name in missing:
+                memo.put((base_key, "extra", name), kept[name])
+        else:                                 # outputs not split by name: keep none
+            return values, problems
+    values, problems = {}, {}
+    for name in wanted:
+        own, problem = kept[name]
+        values.update(own)
+        problems.update(problem)
+    return values, problems
+
+
 @dataclass
 class Pricable:
     """A single FX option line valued as one unit and scaled by its notional.
@@ -185,7 +233,7 @@ class Pricable:
 
     def price(
         self, market, pricing_model, atm_type, delta_base, mods=None,
-        next_market=None, next_valuation=None, extras=(), value_market=None,
+        next_market=None, next_valuation=None, extras=(), value_market=None, memo=None,
     ):
         """Return the line's MTM, P&L, implied vol, and complete Greek vector.
 
@@ -194,6 +242,12 @@ class Pricable:
         ``value_market`` (a line priced at its own vol): MTM and P&L are
         valued on it (the market), while the vol, Greeks and an auto premium
         come from ``market``; the result then carries ``value_at_vol``.
+
+        ``memo`` (``get(key)`` / ``put(key, value)``, owned by the caller)
+        keeps the unit strike, vol, value and Greeks under a key of every
+        input they depend on, and each extra Greek under that key and its
+        name: a line priced again with other extras computes only the extras
+        it has not computed before. Without a memo nothing is kept.
         """
         from pricing.greeks import calculate_extra_greeks, calculate_greeks, theta_currency
 
@@ -217,21 +271,41 @@ class Pricable:
         # Request unit values here so this API owns the one scaling step.
         row["notional"] = 1.0
         row["premium_ccy"] = premium_ccy
-        strike, vol, unit_mtm = price_option(
-            market, row, pricing_model, atm_type, delta_base
-        )
-        base_problems = {}
-        unit_greeks = calculate_greeks(
-            market, row, None, pricing_model, atm_type, delta_base, mods,
-            next_market=next_market, next_valuation=next_valuation,
-            option_value_term=unit_mtm, problems=base_problems,
-        )
+        base_key = None
+        if memo is not None:
+            try:
+                base_key = _memo_key(market, next_market, next_valuation, row,
+                                     pricing_model, atm_type, delta_base, mods)
+            except Exception:                 # no key: price without the memo
+                base_key = None
+        found = memo.get(base_key) if base_key is not None else None
+        if found is None:
+            strike, vol, unit_mtm = price_option(
+                market, row, pricing_model, atm_type, delta_base
+            )
+            base_problems = {}
+            unit_greeks = calculate_greeks(
+                market, row, None, pricing_model, atm_type, delta_base, mods,
+                next_market=next_market, next_valuation=next_valuation,
+                option_value_term=unit_mtm, problems=base_problems,
+            )
+            if base_key is not None:
+                memo.put(base_key, (strike, vol, unit_mtm, dict(unit_greeks), dict(base_problems)))
+        else:
+            strike, vol, unit_mtm, unit_greeks, base_problems = found
+            unit_greeks, base_problems = dict(unit_greeks), dict(base_problems)
         greek_problems = {}
-        if extras:
+        if extras and base_key is None:
             unit_extras, greek_problems = calculate_extra_greeks(
                 market, row, extras, unit_greeks, pricing_model, atm_type, delta_base, mods,
                 next_market=next_market, next_valuation=next_valuation,
             )
+            unit_greeks = {**unit_greeks, **unit_extras}
+        elif extras:
+            unit_extras, greek_problems = _memo_extras(
+                memo, base_key, extras, lambda names: calculate_extra_greeks(
+                    market, row, names, unit_greeks, pricing_model, atm_type, delta_base,
+                    mods, next_market=next_market, next_valuation=next_valuation))
             unit_greeks = {**unit_greeks, **unit_extras}
         conversion = 1.0 / float(market.s) if premium_ccy == base_ccy else 1.0
         value_at_vol = float(unit_mtm) * notional * conversion

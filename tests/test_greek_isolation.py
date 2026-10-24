@@ -31,6 +31,7 @@ def test_a_failing_sega_leaves_the_line_priced_and_says_why(markets, monkeypatch
     (normal,), _ = pricer.price_lines(markets, [ROW], MODS)
     assert "greek_problems" not in normal                 # unchanged when nothing fails
     monkeypatch.setattr(SmileGreeks, "sega", boom)
+    pricer._GREEK_MEMO.clear()     # the engine changed: nothing priced before applies
     (line,), errors = pricer.price_lines(markets, [ROW], MODS)
     assert errors == []
     assert line["sega"] is None and line["fixed_sega"] is None      # both families blank

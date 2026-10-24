@@ -7,7 +7,10 @@ these functions. Every function isolates failures per line (or per hedge
 group): a line that cannot be priced is returned as an error message naming
 its line number, and the rest of the book still prices.
 """
+import os
 import re
+import threading
+from collections import OrderedDict
 
 import numpy as np
 import pandas as pd
@@ -101,6 +104,79 @@ def market_for_pair(markets, pair, mismatch=None):
             mismatch or f"Market data is configured for {markets.currency_pair}, not {pair}"
         )
     return markets
+
+
+class GreekMemo:
+    """Unit prices and Greeks kept across pricings (``Pricable.price``'s
+    ``memo``): a line priced again with another set of extra Greeks computes
+    only the extras it has not computed before. Keys carry every input, so a
+    changed market, trade, model or beta never reads an old value. Bounded
+    and thread-safe; ``VV_MARKET_CACHE=0`` turns it off (``greek_memo``)."""
+
+    def __init__(self, maxsize=50_000):
+        self.maxsize, self.hits, self.misses = maxsize, 0, 0
+        self._entries = OrderedDict()
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _versioned(key):
+        # A model change bumps the surface cache version; it retires these too.
+        from app.smile_service import SURFACE_CACHE_VERSION
+        return (SURFACE_CACHE_VERSION, key)
+
+    def get(self, key):
+        key = self._versioned(key)
+        with self._lock:
+            found = self._entries.get(key)
+            if found is None:
+                self.misses += 1
+                return None
+            self._entries.move_to_end(key)
+            self.hits += 1
+            return found
+
+    def put(self, key, value):
+        key = self._versioned(key)
+        with self._lock:
+            self._entries[key] = value
+            self._entries.move_to_end(key)
+            while len(self._entries) > self.maxsize:
+                self._entries.popitem(last=False)
+
+    def clear(self):
+        with self._lock:
+            self._entries.clear()
+
+
+_GREEK_MEMO = GreekMemo()
+_BYPASS = threading.local()
+
+
+def greek_memo():
+    """The process's Greek memo, or ``None`` when caching is off or bypassed."""
+    if os.environ.get("VV_MARKET_CACHE", "1").strip() == "0" or getattr(_BYPASS, "on", False):
+        return None
+    return _GREEK_MEMO
+
+
+def _takes_memo(price):
+    import inspect
+    try:
+        return "memo" in inspect.signature(price).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+class bypass_greek_memo:
+    """``with bypass_greek_memo():`` prices without the memo on this thread,
+    so a check against fresh values (``cache.pricing.verify``) is fresh."""
+
+    def __enter__(self):
+        self.before = getattr(_BYPASS, "on", False)
+        _BYPASS.on = True
+
+    def __exit__(self, *exc):
+        _BYPASS.on = self.before
 
 
 #: How a line reprices at a spot moved away from the market data (the
@@ -226,6 +302,12 @@ def price_line(markets, line_number, source_row, mods, extras=(), spot_path=SMIL
             **({"extras": tuple(extras)} if extras else {}),
             # Only for a typed vol, as for extras.
             **value_args,
+            # Vanillas keep their unit Greeks, so another set of extras
+            # computes only the new ones (digitals price their legs afresh);
+            # never to an engine without the argument (a Streamlit session
+            # that reloaded app/ but not pricing/).
+            **({"memo": greek_memo()} if option_type != DIGITAL and greek_memo()
+               and _takes_memo(type(pricable).price) else {}),
         )
         spot_fields = {}
         if base_market is not None:

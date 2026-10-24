@@ -144,8 +144,9 @@ def verify(markets, trades, mods, extras=(), spot_path=None, cache=None, sample=
     picked = random.Random(seed).sample(cached, min(sample, len(cached)))
     differences = []
     for trade, (kind, value) in picked:
-        results, forwards, errors = service.price_trades(
-            markets, [trade], mods, extras=extras, spot_path=spot_path)
+        with pricer.bypass_greek_memo():        # fresh, not from the Greek memo
+            results, forwards, errors = service.price_trades(
+                markets, [trade], mods, extras=extras, spot_path=spot_path)
         fresh_kind, fresh = _outcomes([trade], results, forwards, errors)[0][trade.trade_id]
         if fresh_kind != kind:
             differences.append((trade.trade_id, "kind", kind, fresh_kind))

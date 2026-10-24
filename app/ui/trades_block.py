@@ -457,8 +457,11 @@ def portfolio_spots(market, overrides, snapshot_spots=None):
 #: By-pair columns always shown, and the optional ones shown until the user changes them.
 FIXED_COLUMNS = ("currency_pair", "spot")
 RATE_COLUMNS = ("currency_pair", "spot", "market_spot")
+#: Decay Greeks are not defaults: they reprice the Greeks on the next day's
+#: market (about a quarter of a cold pricing), so they are computed when their
+#: column is added, and kept (``app.pricer.GreekMemo``).
 DEFAULT_COLUMNS = ("pnl_usd", "delta", "fixed_delta", "gamma", "vega_usd",'weighted_vega_usd','theta_usd', "vanna_usd",
-                   "volga_usd", "rega_usd", "sega_usd",'rho','delta_decay','gamma_decay')
+                   "volga_usd", "rega_usd", "sega_usd",'rho')
 _PAIR_COLUMNS = "_portfolio_pair_columns_choice"
 
 
