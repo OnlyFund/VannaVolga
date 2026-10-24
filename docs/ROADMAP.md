@@ -681,6 +681,21 @@ Exercise and the resulting spot trade remain part of lifecycle item 8.
     - Stability: the same answer across solver versions and starting points
       (the vv-sabr scipy sensitivity of item 15).
     - A `sabr` golden case once it is stable.
+    - Found 2026-10-24: on EURCHF (market 55) `sabr` reports "conversion
+      fallback at 1W … 1Y", so the broker-strangle conversion fails at every
+      pillar. Find out why, and check other pairs for the same. TR-000120
+      (EURCHF 0.9025 put, Dec) prices 0.06 vol points below `vv`, which is
+      13.9k EUR on 200m. The MTM itself is consistent: it is Black-Scholes at
+      the vol the line reports.
+    - User, 2026-10-24: in general `sabr` looks right at ATM but its wings are
+      too low. Measure it per pair and tenor: the 25D and 10D vols against
+      `vv` and Bloomberg. Candidates to rule out:
+      - the strangle conversion fallback above, so the wings are fitted to the
+        wrong butterfly;
+      - the fit weighting ATM over the wings;
+      - nu (vol of vol) held down by its bounds or by the regularisation;
+      - beta fixed where it should be free;
+      - the multi-start or convexity rejection preferring a flatter fit.
   - **Done when:** the three parts pass, with the results written down, and
     the user decides whether `sabr` may become a default.
 
