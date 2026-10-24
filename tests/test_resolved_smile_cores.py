@@ -123,36 +123,42 @@ def test_wing_carries_the_25_10_curvature_and_widens_skew(expiry):
 
 @pytest.mark.parametrize("expiry", ["2026-11-02", "2027-04-02", "2027-10-04"])
 @pytest.mark.parametrize("model", ["vv", "vv-sabr"])
-def test_curvature_is_continuous_through_the_10_delta_pillars(expiry, model):
+def test_slope_is_continuous_through_the_10_delta_pillars(expiry, model):
     core, _, pillars = _skewed_core(expiry, model)
     for edge, outward in ((0, -1.0), (4, 1.0)):
         x = np.log(pillars.strikes[edge])
         h = 2e-3 * abs(x - np.log(pillars.strikes[2]))
-
-        def curvature(at):
-            v = [core.get_vol_for_strike(np.exp(at + s * h)) for s in (-1, 0, 1)]
-            return (v[0] - 2 * v[1] + v[2]) / h ** 2
-
-        def limit(side):
-            # Curvature at 2h and 4h from the pillar, extrapolated to it.
-            return 2 * curvature(x + side * 2 * h) - curvature(x + side * 4 * h)
-        inside, outside = limit(-outward), limit(outward)
-        assert outside == pytest.approx(inside, rel=1e-2, abs=0.5), (edge, inside, outside)
-        if model == "vv":
-            assert outside == pytest.approx(core.end_curvatures[0 if edge == 0 else 1],
-                                            rel=1e-2, abs=0.5)
+        at = core.get_vol_for_strike(np.exp(x))
+        inside = (at - core.get_vol_for_strike(np.exp(x - outward * h))) / h
+        outside = (core.get_vol_for_strike(np.exp(x + outward * h)) - at) / h
+        assert outside == pytest.approx(inside, rel=2e-2, abs=1e-3), (
+            edge, inside, outside)
 
 
-def test_wing_is_linear_beyond_min_delta_and_lee_bounded():
+def test_wing_slope_decays_and_extreme_strikes_remain_lee_bounded():
     core, context, pillars = _skewed_core("2027-10-04")
     for edge, outward in ((0, -1.0), (4, 1.0)):
         wing = core._wing(edge)
-        x = [wing["cap"] + s for s in (.1, .2, .3)]
-        vols = [core.get_vol_for_strike(np.exp(wing["log_edge"] + outward * d)) for d in x]
-        assert vols[2] - vols[1] == pytest.approx(vols[1] - vols[0], rel=1e-9, abs=1e-9)
+        scale = wing["decay_scale"]
+        vols = [core._decayed_wing_vol(wing, scale * d) for d in (0, 1, 2, 3)]
+        increments = np.diff(vols)
+        assert np.all(increments > 0)
+        assert np.all(np.diff(increments) < 0)
+        assert vols[-1] < wing["vol"] + wing["slope"] * scale
+        core.get_vol_for_strike(np.exp(wing["log_edge"] + outward * scale * .5))
+        assert core.wing_modes[edge] == "slope-decay"
     for strike in (context.forward * 1e-3, context.forward * 1e3):
         vol = core.get_vol_for_strike(strike)
         assert 0 < vol <= 100 * np.sqrt(2 * abs(np.log(strike / context.forward)) / context.time) + 1e-9
+
+
+def test_natural_cubic_is_used_when_primary_wing_fails_arbitrage_safeguard():
+    core, _, pillars = _skewed_core("2027-04-02")
+    core._decayed_wing_vol = lambda wing, distance: float("nan")
+    strike = pillars.strikes[4] * np.exp(.05)
+
+    assert np.isfinite(core.get_vol_for_strike(strike))
+    assert core.wing_modes[4] == "natural-cubic"
 
 
 def test_wing_parameters_are_built_once_per_side():

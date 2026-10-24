@@ -21,18 +21,13 @@ def validate_strike(strike):
 
 
 class VannaVolgaCore:
-    """Cubic five-pillar smile with curvature-extended wings.
+    """Cubic five-pillar smile with controlled, arbitrage-checked wings.
 
-    Each side's curvature is the mean curvature of the natural pillar spline
-    between its 25- and 10-delta pillars. The interior cubic spline ends with
-    exactly that second derivative, and beyond each 10-delta pillar the wing
-    keeps the spline's vol and slope and carries the same curvature. The smile
-    is then continuous in level, slope and curvature through the pillar (a
-    natural spline's zero end curvature against a curved wing made a kink in
-    the Greeks of options struck near 10D), and skew and convexity extend into
-    the wings instead of flattening out. Past ``wing_min_delta`` the wing
-    continues linearly, and Lee's moment bound caps total variance at
-    ``2|log(K/F)|``.
+    Outside each 10-delta pillar, the wing starts with the spline's level and
+    slope, then decays exponentially toward a finite asymptote on the 10-to-1
+    delta log-strike scale. A sampled Black-price check rejects extrapolations
+    that violate monotonicity or convexity; a natural cubic extrapolation is
+    tried next, followed by the former Lee-bounded wing as a last resort.
     """
 
     wing_min_delta = 0.01
@@ -56,6 +51,9 @@ class VannaVolgaCore:
         if not all(math.isfinite(c) for c in self.end_curvatures):
             raise PreparationError("VV wing curvature is not finite")
         self._wings = {}
+        self._wing_modes = {}
+        self._wing_validation = {}
+        self._natural_spline = None
 
     def _interior_vol(self, strike):
         try:
@@ -84,14 +82,25 @@ class VannaVolgaCore:
         log_edge = math.log(self.strikes[edge])
         vol = float(self.vols[edge])
         slope = self._outward_slope(log_edge, inward)
-        # The spline ends with this second derivative, so curvature is continuous.
+        # Retain the end curvature for the last-resort legacy wing.
         curvature = self.end_curvatures[0 if edge == 0 else 1]
         if not all(math.isfinite(x) for x in (slope, curvature)):
             raise PreparationError("VV wing slope or curvature is not finite")
         wing = {"log_edge": log_edge, "vol": vol, "slope": slope,
-                "curvature": curvature, "cap": math.inf}
+                "curvature": curvature, "cap": math.inf, "decay_scale": math.nan}
         self._wings[edge] = wing
         wing["cap"] = self._min_delta_distance(edge, wing)
+        try:
+            ctx = self.context
+            phi = -1 if edge == 0 else 1
+            one_delta_strike = _strike_from_delta(
+                ctx.forward, vol / 100.0, ctx.time, ctx.delta_factor,
+                phi * 0.01, phi, ctx.premium_adjusted)
+            scale = abs(math.log(one_delta_strike) - log_edge)
+            if math.isfinite(scale) and scale > 0:
+                wing["decay_scale"] = scale
+        except (TypeError, ValueError, RuntimeError, OverflowError):
+            pass
         return wing
 
     def _min_delta_distance(self, edge, wing):
@@ -121,10 +130,81 @@ class VannaVolgaCore:
     def _parabola(wing, distance):
         return wing["vol"] + wing["slope"] * distance + 0.5 * wing["curvature"] * distance ** 2
 
+    @staticmethod
+    def _decayed_wing_vol(wing, distance):
+        scale = wing["decay_scale"]
+        if not math.isfinite(scale) or scale <= 0:
+            return math.nan
+        return wing["vol"] + wing["slope"] * scale * (-math.expm1(-distance / scale))
+
+    def _cubic_wing_vol(self, strike):
+        if self._natural_spline is None:
+            from scipy.interpolate import CubicSpline
+            self._natural_spline = CubicSpline(
+                np.log(self.strikes), self.vols, bc_type="natural", extrapolate=True)
+        return float(self._natural_spline(math.log(strike)))
+
+    def _wing_candidate_is_valid(self, edge, target_distance, candidate):
+        """Check the extrapolated wing's sampled Black prices for convexity."""
+        if not math.isfinite(target_distance) or target_distance <= 0:
+            return False
+        inward = 1.0 if edge == 0 else -1.0
+        segment = abs(math.log(self.strikes[1]) - math.log(self.strikes[0])) \
+            if edge == 0 else abs(math.log(self.strikes[4]) - math.log(self.strikes[3]))
+        start = -segment
+        distances = np.linspace(start, target_distance, 129)
+        strikes = np.exp(self._wings[edge]["log_edge"] + inward * distances)
+        vols = np.asarray([
+            self._interior_vol(strike) if distance <= 0 else candidate(strike, distance)
+            for strike, distance in zip(strikes, distances)
+        ], dtype=float)
+        if (not np.all(np.isfinite(vols)) or np.any(vols <= 0)
+                or np.any(vols > 500)):
+            return False
+        forward, time = self.context.forward, self.context.time
+        prices = []
+        for strike, vol in zip(strikes, vols):
+            stdev = vol / 100.0 * math.sqrt(time)
+            d1 = (math.log(forward / strike) + 0.5 * stdev ** 2) / stdev
+            prices.append(forward * float(ndtr(d1)) - strike * float(ndtr(d1 - stdev)))
+        order = np.argsort(strikes)
+        prices = np.asarray(prices)[order]
+        strikes = strikes[order]
+        slopes = np.diff(prices) / np.diff(strikes)
+        return bool(np.all(np.isfinite(slopes))
+                    and np.all(slopes <= 1e-10)
+                    and np.all(np.diff(slopes) >= -1e-8))
+
     def _wing_vol(self, strike):
         edge = 0 if strike < self.strikes[0] else 4
         wing = self._wing(edge)
         distance = abs(math.log(strike) - wing["log_edge"])
+        validated = self._wing_validation.get(edge)
+        if (validated is not None and distance <= validated[0]
+                and validated[1] != "legacy-lee"):
+            self._wing_modes[edge] = validated[1]
+            candidate = (self._decayed_wing_vol(wing, distance)
+                         if validated[1] == "slope-decay"
+                         else self._cubic_wing_vol(strike))
+            return float(candidate)
+
+        coverage = max(distance, wing["decay_scale"] * 5.0
+                       if math.isfinite(wing["decay_scale"]) else distance)
+        coverage = min(coverage, 20.0)
+        candidates = (
+            ("slope-decay", self._decayed_wing_vol),
+            ("natural-cubic", lambda _strike, _distance: self._cubic_wing_vol(_strike)),
+        )
+        for name, candidate_fn in candidates:
+            candidate = lambda k, d: candidate_fn(wing, d) if name == "slope-decay" \
+                else candidate_fn(k, d)
+            if self._wing_candidate_is_valid(edge, coverage, candidate):
+                self._wing_modes[edge] = name
+                self._wing_validation[edge] = (coverage, name)
+                return float(candidate(strike, distance))
+
+        # Preserve the former Lee-bounded wing as a last-resort valid-vol
+        # fallback if both the controlled tail and cubic extrapolation fail.
         cap = wing["cap"]
         if distance <= cap:
             vol = self._parabola(wing, distance)
@@ -133,6 +213,8 @@ class VannaVolgaCore:
             vol = self._parabola(wing, cap) + cap_slope * (distance - cap)
         moneyness = abs(math.log(strike / self.context.forward))
         lee_bound = 100.0 * math.sqrt(2.0 * moneyness / self.context.time)
+        self._wing_modes[edge] = "legacy-lee"
+        self._wing_validation[edge] = (coverage, "legacy-lee")
         return min(vol, lee_bound)
 
     def get_vol_for_strike(self, strike):
@@ -147,6 +229,11 @@ class VannaVolgaCore:
 
     def get_vol_for_strikes(self, strikes):
         return np.array([self.get_vol_for_strike(k) for k in strikes])
+
+    @property
+    def wing_modes(self):
+        """Methods currently selected for the put and call extrapolation wings."""
+        return dict(self._wing_modes)
 
     def _target_delta(self, strike):
         ctx = self.context

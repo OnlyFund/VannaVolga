@@ -29,6 +29,32 @@ Running `python tests/benchmark/bloomberg_vols.py` again re-prices the trades,
 for example after a model change, and keeps the `bbg_` columns already filled
 in.
 
+## VV vs standalone SABR
+
+`vv_sabr_comparison.csv` uses 30 deterministic options and market 55
+(Bloomberg snapshot `2026-10-23T20:03:23`, FX valuation date `2026-10-23`) to
+compare `vv` with standalone Hagan `sabr` at **the same resolved strike and
+expiry**. The sample includes 12 paired 5-delta puts and calls (strictly below
+10 delta) in EURUSD, USDJPY and GBPUSD at 6M (mid-curve) and 1Y (the longest
+quoted pillar in market 55).
+`sabr_status` records a visible VV fallback if a SABR fit is rejected. Existing
+values in the `bbg vols` column are retained when that option is unchanged;
+replaced cases have the Bloomberg value cleared.
+
+Outside the 10-delta pillars, VV and standalone SABR decay the wing slope
+smoothly on the 10-to-1-delta log-strike scale (using their own slope at the
+pillar). Sampled Black prices must remain decreasing and convex; otherwise the
+resolver tries natural-cubic extrapolation, then its native/previous tail as a
+last resort. The selected wing method is available on each core as
+`wing_modes`.
+
+Generate or refresh the comparison with:
+
+    python tests/benchmark/vv_sabr_comparison.py
+
+The default sample is reproducible; `--seed` and `--count` select a different
+deterministic set, and `--output` changes the destination file.
+
 Dates are YYYY-MM-DD. Excel rewrites them when it saves the file, so re-save
 them in that format.
 

@@ -129,7 +129,7 @@ def _cache_for(market):
 #: cache in the session, and Streamlit does not reload root modules such as
 #: ``wrapped_vol_resolver``, so objects built by an older build can outlive a
 #: code change; a new version starts a fresh cache instead of reusing them.
-SURFACE_CACHE_VERSION = 7   # 7: the pure SABR smile model ("sabr")
+SURFACE_CACHE_VERSION = 9   # 9: controlled VV and standalone SABR wing extrapolation
 
 
 def is_fallback(diagnostics):
