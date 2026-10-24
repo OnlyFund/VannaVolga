@@ -191,6 +191,8 @@ def ignored_overrides(rows):
 def run(pairs=PAIRS, dates=tuple(REFERENCE_DATES), out=None, bdp=None, log=print):
     """Fetch every pair on every reference date; write and return the rows."""
     if bdp is None:
+        from market_data.xbbg_compat import patch_xbbg
+        patch_xbbg()
         from xbbg.blp import bdp
     if out is None:
         stamp = datetime.now().strftime("%Y%m%d_%H%M")

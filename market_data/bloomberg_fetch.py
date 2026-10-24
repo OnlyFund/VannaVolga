@@ -13,6 +13,8 @@ from datetime import datetime
 import pandas as pd
 from xbbg.blp import bdh
 
+from market_data.xbbg_compat import patch_xbbg
+
 from market_data.depo_tickers import TENORS, depo_tickers
 from market_data.fwd_tickers import SHORT_TENORS, TENORS as FWD_TENORS, fwd_ticker
 from market_data.store import open_market_data_store
@@ -22,6 +24,8 @@ from market_data.universe import (  # noqa: F401  (re-exported for callers)
 )
 from market_data.vol_tickers import FIELDS as VOL_FIELDS, PARAMS as VOL_PARAMS
 from market_data.vol_tickers import TENORS as VOL_TENORS, vol_ticker
+
+patch_xbbg()
 
 tickers = [f'{ccy} Curncy' for ccy in CCY_LIST]
 

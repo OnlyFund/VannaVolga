@@ -68,6 +68,8 @@ def fetch(ccys=CURRENCIES, start_year=FIRST_YEAR, end_year=None, bdp=None, bds=N
     """``[row]`` for every currency; a currency that fails is reported and left out."""
     end_year = end_year or default_end_year()
     if bdp is None or bds is None:
+        from market_data.xbbg_compat import patch_xbbg
+        patch_xbbg()
         from xbbg import blp
         bdp, bds = bdp or blp.bdp, bds or blp.bds
     rows, failed = [], []

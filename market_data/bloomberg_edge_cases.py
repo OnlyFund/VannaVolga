@@ -65,6 +65,8 @@ def surface_expiries(wanted):
 
 def spot_dates(wanted):
     """``{(pair, day): spot date as of day}``; one request per day."""
+    from market_data.xbbg_compat import patch_xbbg
+    patch_xbbg()
     from xbbg.blp import bdp
     groups = defaultdict(set)
     for pair, day in wanted:

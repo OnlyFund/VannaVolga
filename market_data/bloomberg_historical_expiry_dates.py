@@ -55,6 +55,8 @@ def fetch_historical_expiry_dates(reference_dates, pairs, tenors=DEFAULT_TENORS)
             raise ValueError("Invalid option tenor: {!r}".format(tenor))
 
     # Keep Bloomberg dependencies out of imports used by the Cloud app.
+    from market_data.xbbg_compat import patch_xbbg
+    patch_xbbg()
     from xbbg.blp import bdp
 
     tickers = ["{} BGN Curncy".format(pair) for pair in pairs]

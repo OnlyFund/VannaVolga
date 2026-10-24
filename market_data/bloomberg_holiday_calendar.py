@@ -1,5 +1,9 @@
 from xbbg import blp
 
+from market_data.xbbg_compat import patch_xbbg
+
+patch_xbbg()
+
 holidays = blp.bds(
     "USD Curncy",
     "CALENDAR_NON_SETTLEMENT_DATES",

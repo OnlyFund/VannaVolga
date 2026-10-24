@@ -248,6 +248,8 @@ def live_dates(pairs=None, timezone=None, bdp=None, settlement_of=None, clock=da
     if pairs is None:
         from market_data.universe import FX_UNIVERSE as pairs
     if bdp is None:
+        from market_data.xbbg_compat import patch_xbbg
+        patch_xbbg()
         from xbbg.blp import bdp
     result = check(fetch_raw(bdp, list(pairs)), today, settlement_of, now, timezone)
     result.fetched = True
