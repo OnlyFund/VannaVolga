@@ -137,44 +137,68 @@ def interpolate_pillar_vols(strikes, vols, targets, end_curvatures=None):
     ``strikes`` must be sorted, strictly increasing and positive. Returns a
     float for a scalar ``targets`` and an array otherwise.
     """
-    strikes_arr = np.asarray(strikes, dtype=float)
-    vols_arr = np.asarray(vols, dtype=float)
-    target_arr = np.asarray(targets, dtype=float)
-    scalar = target_arr.ndim == 0
-    query = np.atleast_1d(target_arr)
+    return PillarSpline(strikes, vols, end_curvatures)(targets)
 
-    linear = np.interp(query, strikes_arr, vols_arr)
-    if _CubicSpline is None or strikes_arr.size < 3 or np.any(strikes_arr <= 0.0):
-        return float(linear[0]) if scalar else linear
 
-    try:
-        bc_type = ("natural" if end_curvatures is None else
-                   ((2, float(end_curvatures[0])), (2, float(end_curvatures[1]))))
-        spline = _CubicSpline(np.log(strikes_arr), vols_arr, bc_type=bc_type)
-        with np.errstate(invalid="ignore", divide="ignore"):
-            smooth = np.asarray(spline(np.log(np.clip(query, 1e-12, None))),
-                                dtype=float)
-    except Exception:
-        logger.warning("Cubic pillar interpolation failed; using linear.",
-                       exc_info=True)
-        return float(linear[0]) if scalar else linear
+class PillarSpline:
+    """``interpolate_pillar_vols`` for one fixed pillar set: the spline is built
+    once and evaluated at any strikes, with the same fallbacks.
 
-    # Outside the pillar range a cubic diverges rapidly, and a spline that
-    # overshoots the quoted band is not a usable volatility. Both are handled
-    # by reverting to the clamped linear value for those points only.
-    lo, hi = float(vols_arr.min()), float(vols_arr.max())
-    span = hi - lo
-    tolerance = max(0.25 * span, 0.10)
-    inside = (query >= strikes_arr[0]) & (query <= strikes_arr[-1])
-    usable = (
-        inside
-        & np.isfinite(smooth)
-        & (smooth > lo - tolerance)
-        & (smooth < hi + tolerance)
-        & (smooth > 0.0)
-    )
-    result = np.where(usable, smooth, linear)
-    return float(result[0]) if scalar else result
+    A smile core evaluates its pillars thousands of times (every strike, every
+    Greek bump); rebuilding the identical spline each time was most of the
+    cost. Evaluating the one spline gives the same numbers. A spline that
+    cannot be built makes every call fall back to linear, as before.
+    """
+
+    def __init__(self, strikes, vols, end_curvatures=None):
+        self.strikes = np.asarray(strikes, dtype=float)
+        self.vols = np.asarray(vols, dtype=float)
+        self.spline, self.failed = None, False
+        if _CubicSpline is None or self.strikes.size < 3 or np.any(self.strikes <= 0.0):
+            return
+        try:
+            bc_type = ("natural" if end_curvatures is None else
+                       ((2, float(end_curvatures[0])), (2, float(end_curvatures[1]))))
+            self.spline = _CubicSpline(np.log(self.strikes), self.vols, bc_type=bc_type)
+        except Exception:
+            self.failed = True
+        lo, hi = float(self.vols.min()), float(self.vols.max())
+        self.lo, self.hi, self.tolerance = lo, hi, max(0.25 * (hi - lo), 0.10)
+
+    def __call__(self, targets):
+        strikes_arr, vols_arr = self.strikes, self.vols
+        target_arr = np.asarray(targets, dtype=float)
+        scalar = target_arr.ndim == 0
+        query = np.atleast_1d(target_arr)
+
+        linear = np.interp(query, strikes_arr, vols_arr)
+        if self.spline is None and not self.failed:
+            return float(linear[0]) if scalar else linear
+        try:
+            if self.failed:
+                raise ValueError("the pillar spline could not be built")
+            with np.errstate(invalid="ignore", divide="ignore"):
+                smooth = np.asarray(self.spline(np.log(np.clip(query, 1e-12, None))),
+                                    dtype=float)
+        except Exception:
+            logger.warning("Cubic pillar interpolation failed; using linear.",
+                           exc_info=True)
+            return float(linear[0]) if scalar else linear
+
+        # Outside the pillar range a cubic diverges rapidly, and a spline that
+        # overshoots the quoted band is not a usable volatility. Both are handled
+        # by reverting to the clamped linear value for those points only.
+        lo, hi, tolerance = self.lo, self.hi, self.tolerance
+        inside = (query >= strikes_arr[0]) & (query <= strikes_arr[-1])
+        usable = (
+            inside
+            & np.isfinite(smooth)
+            & (smooth > lo - tolerance)
+            & (smooth < hi + tolerance)
+            & (smooth > 0.0)
+        )
+        result = np.where(usable, smooth, linear)
+        return float(result[0]) if scalar else result
 
 
 def safe_interpolate_five_pillar_vols(strikes, vols, target_strike, *,

@@ -126,6 +126,46 @@ class SmileExtension:
     # ---------------------------
     # Local skew estimation
     # ---------------------------
+    def _cached_local_skews(self, prepared, eps):
+        """The wrapped smile's local skews: they depend on the market, expiry
+        and model, not on this strike, so they are computed once per market
+        (in its surface cache, keyed like its prepared smile) instead of at
+        every strike and Greek bump. A failure is not kept; each caller gets
+        its own arrays; ``VV_MARKET_CACHE=0`` turns the cache off."""
+        import os
+        from app.smile_service import _cache_for, cache_key
+
+        def compute():
+            return self._wrapped_local_skews(prepared, eps)
+        if os.environ.get("VV_MARKET_CACHE", "1").strip() == "0":
+            return compute()
+        key = (cache_key(self.market, self.expiry_date, self.valuation_date,
+                         self.pricing_model, None, None),
+               self.model_cls.__module__ + "." + self.model_cls.__qualname__,
+               self.CallPut, self.atm_conv, self.deltaBase, eps)
+        found = _cache_for(self.market).get("local_skews", key, compute)
+        return {name: (value.copy() if isinstance(value, np.ndarray) else value)
+                for name, value in found.items()}
+
+    def _wrapped_local_skews(self, prepared, eps):
+        strikes = np.array(prepared.pillars.strikes[1:4])
+        vols = np.array(prepared.pillars.vols[1:4])
+        k_up, k_dn = strikes * np.exp(eps), strikes * np.exp(-eps)
+        vols_up = np.array([self._compute_vol(k) for k in k_up])
+        vols_dn = np.array([self._compute_vol(k) for k in k_dn])
+        self._validate_vols(np.concatenate((vols, vols_up, vols_dn)))
+        local_skews = (vols_up - vols_dn) / (2 * eps)
+        return {
+            "local_skew": tuple(local_skews),
+            "rr_skew": local_skews[2] - local_skews[0],
+            "bf_skew": (local_skews[2] + local_skews[0]) / 2 - local_skews[1],
+            "main_vols": vols,
+            "rr_ratio": self.market.rr_10 / self.market.rr_25
+            if not np.isclose(self.market.rr_25, 0) else 1.0,
+            "bf_ratio": self.market.bf_10 / self.market.bf_25
+            if not np.isclose(self.market.bf_25, 0) else 1.0,
+        }
+
     def get_local_skews(self) -> dict:
         """Estimate local ATM, RR, and BF smile slopes by finite differences."""
         eps = 1e-4
@@ -134,23 +174,7 @@ class SmileExtension:
             prepared = prepared_smile(self.market, self.expiry_date,
                                       self.valuation_date, self.pricing_model)
             if prepared.pillars is not None:
-                strikes = np.array(prepared.pillars.strikes[1:4])
-                vols = np.array(prepared.pillars.vols[1:4])
-                k_up, k_dn = strikes * np.exp(eps), strikes * np.exp(-eps)
-                vols_up = np.array([self._compute_vol(k) for k in k_up])
-                vols_dn = np.array([self._compute_vol(k) for k in k_dn])
-                self._validate_vols(np.concatenate((vols, vols_up, vols_dn)))
-                local_skews = (vols_up - vols_dn) / (2 * eps)
-                return {
-                    "local_skew": tuple(local_skews),
-                    "rr_skew": local_skews[2] - local_skews[0],
-                    "bf_skew": (local_skews[2] + local_skews[0]) / 2 - local_skews[1],
-                    "main_vols": vols,
-                    "rr_ratio": self.market.rr_10 / self.market.rr_25
-                    if not np.isclose(self.market.rr_25, 0) else 1.0,
-                    "bf_ratio": self.market.bf_10 / self.market.bf_25
-                    if not np.isclose(self.market.bf_25, 0) else 1.0,
-                }
+                return self._cached_local_skews(prepared, eps)
 
         pillars = GetMainPillars(
             k=self.K,

@@ -7,7 +7,7 @@ from scipy.special import ndtr
 
 from helper_functions.fx_strangle_converter import _strike_from_delta
 from helper_functions.vanna_volga_helpers import (
-    _validate_pillar_strikes, end_segment_curvatures, interpolate_pillar_vols,
+    PillarSpline, _validate_pillar_strikes, end_segment_curvatures, interpolate_pillar_vols,
 )
 from resolved_smile_inputs import PreparationError
 
@@ -59,8 +59,13 @@ class VannaVolgaCore:
 
     def _interior_vol(self, strike):
         try:
-            return float(interpolate_pillar_vols(self.strikes, self.vols, strike,
-                                                 self.end_curvatures))
+            # Built once per core (``PillarSpline``); lazily, so a core pickled
+            # before it existed (the disk calibration cache) still loads.
+            spline = self.__dict__.get("_pillar_spline")
+            if spline is None:
+                spline = self._pillar_spline = PillarSpline(self.strikes, self.vols,
+                                                            self.end_curvatures)
+            return float(spline(strike))
         except (TypeError, ValueError, RuntimeError, FloatingPointError) as exc:
             raise PreparationError("VV pillar interpolation failed") from exc
 

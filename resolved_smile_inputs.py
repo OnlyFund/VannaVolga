@@ -21,7 +21,13 @@ class PreparationError(RuntimeError):
     """Convention resolution or numerical smile preparation failed."""
 
 
+#: Values ``copy.deepcopy`` returns unchanged: passed through without the call.
+_ATOMIC = (int, float, str, bool, bytes, complex, type(None))
+
+
 def _freeze(value):
+    if type(value) in _ATOMIC:
+        return value
     if isinstance(value, dict):
         return MappingProxyType({key: _freeze(item) for key, item in value.items()})
     if isinstance(value, (list, tuple)):
@@ -34,6 +40,8 @@ def _freeze(value):
 
 
 def _thaw(value):
+    if type(value) in _ATOMIC:
+        return value
     if isinstance(value, MappingProxyType):
         return {key: _thaw(item) for key, item in value.items()}
     if isinstance(value, tuple):
