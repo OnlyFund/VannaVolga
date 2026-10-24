@@ -108,7 +108,9 @@ def parse_expiry(value, valuation_date, pillar_tenors=None):
             raise ValueError(f"Invalid expiry date: {value}") from exc
 
     try:
-        return pd.to_datetime(text, format="%m/%d/%Y", errors="raise").date()
+        parsed = pd.to_datetime(text, format="%m/%d/%Y", errors="raise")
+        if not pd.isna(parsed):              # pandas 2 gives NaT for "", not an error
+            return parsed.date()
     except (TypeError, ValueError):
         pass
 

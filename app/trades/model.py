@@ -71,7 +71,12 @@ def as_date(value):
         return value
     if value is None or (not isinstance(value, str) and pd.isna(value)):
         raise ValueError("date is missing")
-    return pd.Timestamp(str(value).strip()).date()
+    parsed = pd.Timestamp(str(value).strip())
+    # pandas 2 reads some non-dates as dates (``"1M"`` is year 1, minute 1;
+    # ``""`` is NaT): neither is a date a trade can carry.
+    if pd.isna(parsed) or parsed.year < 1900:
+        raise ValueError(f"not a date: {value!r}")
+    return parsed.date()
 
 
 @dataclass(frozen=True)

@@ -113,3 +113,22 @@ run_at,commit,python,machine,workload,phase,seconds
 2026-10-24T08:36:23,ac790af+dirty,3.7.6,BDL-FHN0MLG,ladder,market load,1.266
 2026-10-24T08:36:23,ac790af+dirty,3.7.6,BDL-FHN0MLG,ladder,spot ladder,11.785
 2026-10-24T08:36:23,ac790af+dirty,3.7.6,BDL-FHN0MLG,ladder,process total,15.413
+2026-10-24T09:30:08,5f62f3e+dirty,3.11.9,BDL-FHN0MLG,book,imports,1.966
+2026-10-24T09:30:08,5f62f3e+dirty,3.11.9,BDL-FHN0MLG,book,market load,0.975
+2026-10-24T09:30:08,5f62f3e+dirty,3.11.9,BDL-FHN0MLG,book,book cold,7.130
+2026-10-24T09:30:08,5f62f3e+dirty,3.11.9,BDL-FHN0MLG,book,"book prepared, no result cache",0.466
+2026-10-24T09:30:08,5f62f3e+dirty,3.11.9,BDL-FHN0MLG,book,book cached rerun,0.015
+2026-10-24T09:30:08,5f62f3e+dirty,3.11.9,BDL-FHN0MLG,book,one extra line,0.032
+2026-10-24T09:30:08,5f62f3e+dirty,3.11.9,BDL-FHN0MLG,book,process total,11.439
+2026-10-24T09:30:08,5f62f3e+dirty,3.11.9,BDL-FHN0MLG,book_theta_forward,imports,1.945
+2026-10-24T09:30:08,5f62f3e+dirty,3.11.9,BDL-FHN0MLG,book_theta_forward,market load,0.966
+2026-10-24T09:30:08,5f62f3e+dirty,3.11.9,BDL-FHN0MLG,book_theta_forward,book cold,6.980
+2026-10-24T09:30:08,5f62f3e+dirty,3.11.9,BDL-FHN0MLG,book_theta_forward,process total,10.275
+2026-10-24T09:30:08,5f62f3e+dirty,3.11.9,BDL-FHN0MLG,roll,imports,1.244
+2026-10-24T09:30:08,5f62f3e+dirty,3.11.9,BDL-FHN0MLG,roll,market load,0.988
+2026-10-24T09:30:08,5f62f3e+dirty,3.11.9,BDL-FHN0MLG,roll,roll every pair,11.705
+2026-10-24T09:30:08,5f62f3e+dirty,3.11.9,BDL-FHN0MLG,roll,process total,14.192
+2026-10-24T09:30:08,5f62f3e+dirty,3.11.9,BDL-FHN0MLG,ladder,imports,1.943
+2026-10-24T09:30:08,5f62f3e+dirty,3.11.9,BDL-FHN0MLG,ladder,market load,0.986
+2026-10-24T09:30:08,5f62f3e+dirty,3.11.9,BDL-FHN0MLG,ladder,spot ladder,9.295
+2026-10-24T09:30:08,5f62f3e+dirty,3.11.9,BDL-FHN0MLG,ladder,process total,12.733

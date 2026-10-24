@@ -172,9 +172,15 @@ apeiron/
 1. Item 14, performance steps 0–2: done (2026-10-24: book cold 51 -> 9 s,
    roll 65 -> 15 s, ladder 74 -> 12 s, numbers unchanged; after the daily
    fetch the app opens warm: the Portfolio's first pricing reads the cache).
-2. Item 14, performance step 3: Python 3.7 → 3.11, right after the baseline,
-   so the optimising is done on the version that runs (and the same one as
-   Streamlit Cloud).
+2. Item 14, performance step 3: Python 3.7 → 3.11: done 2026-10-24. The
+   project environment `.venv` (Python 3.11.9, the cloud's pinned libraries;
+   `requirements-dev.txt` rebuilds it) prices the book, the Bloomberg
+   benchmark and the roll identically to 3.7, and the vv golden cases within
+   3.4e-9; about 1.28x faster. vv-sabr's Greeks differ (its fallback
+   calibration follows the scipy version): its golden file is now the 3.11
+   one, and the study is item 15. Python 3.7 stays installed as a fallback
+   (its vv-sabr golden case now fails, by design). The switch: PyCharm's
+   interpreter and Streamlit run from `.venv`.
 3. Test-suite speed: tests run in parallel (`pytest-xdist`), a quick tier per
    change and the full suite before commits, calibrated fixtures shared. The
    full run takes 9–11 minutes.
@@ -486,7 +492,15 @@ apeiron/
   so it starts as research in Delphi and moves to Atlas only if it proves out.
 
 15. Smile study: a smoother wing, butterfly negatives on steep smiles (HKD, CNH,
-    TRY), vv-sabr gamma noise. The Bloomberg benchmark (`tests/benchmark`,
+    TRY), vv-sabr gamma noise. **vv-sabr's solver sensitivity** (found with
+    the Python 3.11 upgrade, 2026-10-24): in the EURUSD golden market every
+    vv-sabr pillar takes the conversion fallback, and that calibration lands
+    differently under scipy 1.3 and 1.13; the bump Greeks amplify it (book
+    gamma -18.9m on 3.7, +3.4m on 3.11, MTM within 3e-7). Study why the
+    pillars fall back, make the fallback calibration converge to the same
+    answer independently of the solver version (tolerances, starting point,
+    bounds), and check vv-sabr's Greeks against finite differences of its
+    prices before it is relied on. The Bloomberg benchmark (`tests/benchmark`,
     2026-10-23) agrees to 0.02 vol points (median) at ATM and delta strikes,
     and its deltas match. The far wing is where it parts:
     - USDCHF 1W, 4.6% out of the money: +1.55 vol points against Bloomberg;

@@ -1,0 +1,13 @@
+# The local development environment (Python 3.11, the same as Streamlit Cloud):
+#   py -3.11 -m venv .venv
+#   .venv\Scripts\python -m pip install -r requirements-dev.txt
+#   .venv\Scripts\python -m pip install --index-url=https://blpapi.bloomberg.com/repository/releases/python/simple/ blpapi
+# Behind a TLS-inspecting proxy, pip reads the Windows certificate store via
+# truststore (install it first, then add --use-feature=truststore on older pip).
+-r requirements.txt
+pytest
+# The fetch is written against xbbg 0.7 (1.x changed the API).
+xbbg==0.7.7
+matplotlib
+playwright
+truststore

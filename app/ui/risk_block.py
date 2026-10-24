@@ -31,7 +31,9 @@ def _formatted(frame, decimals=0):
         if abs(number) < 0.5 * 10 ** -decimals:
             number = 0.0
         return f"{number:,.{decimals}f}"
-    return frame.applymap(cell)
+    # DataFrame.map replaced applymap in pandas 2.1 (as in ``negatives``).
+    apply_cells = getattr(frame, "map", None) or frame.applymap
+    return apply_cells(cell)
 
 
 def _selection(store, valuation_date):

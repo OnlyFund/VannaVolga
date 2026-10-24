@@ -5,5 +5,7 @@ numpy==1.26.4
 pandas==2.2.3
 scipy==1.13.1
 numba==0.60.0
+# Streamlit needs pyarrow; newer pyarrow requires NumPy 2 (the app pins 1.26).
+pyarrow==17.0.0
 typing_extensions==4.12.2
 QuantLib==1.32

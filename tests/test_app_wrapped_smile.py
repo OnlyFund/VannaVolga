@@ -251,7 +251,7 @@ def test_save_load_defaults_and_removed_controls():
         __setattr__ = dict.__setitem__
     state = State()
     namespace = dict(vars(ui), st=SimpleNamespace(session_state=state))
-    exec(compile(ast.Module(body=[load]), ui.__file__, "exec"), namespace)
+    exec(compile(ast.Module(body=[load], type_ignores=[]), ui.__file__, "exec"), namespace)
     payload = dict(currency_pair="eur / usd", valuation_date="2026-10-02",
                    spot=1.1, event_calendar=[], vol_data=[dict(
                        tenor="1M", expiry="2026-11-02", atm=10, rr_25=-.5,
