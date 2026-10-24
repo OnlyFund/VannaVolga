@@ -198,7 +198,14 @@ apeiron/
    golden re-check. Acceptance (user): rolling to 30-Oct gives 1W = 30-Oct + 7,
    2W = + 14, months from spot, per the pair calendar, and the forward
    deliveries move with them, for every pair, the open one included. The
-   pricing service's market contract (VV-11) takes this over.
+   pricing service's market contract (VV-11) takes this over. With it, the
+   date snapping back (was P2 item 12): with "Link to market data date" on,
+   a future date returns to the market's date; say so in one line (the same
+   date-to-market link in the UI, touched once).
+3b. Continuous integration (moved up from P2, 2026-10-24): the quick test
+   tier on every push (GitHub Actions); later the place to build Rust wheels.
+   The quick tier takes under a minute and needs no Bloomberg; it would have
+   caught a49e9d3's architecture failure at once.
 4. Item 6, live pillar dates step 4: disputes with the solver go to
    `tests/edge_cases` for review, with a command. Small; it keeps the
    market-confirmed date practice going.
@@ -210,6 +217,13 @@ apeiron/
 7. A scheduled daily fetch (a Windows scheduled task before 17:00 New York),
    and a note in the app when today's live dates are missing. Live pillar
    dates exist only if the fetch runs; otherwise the solver is used silently.
+   With it, the fetch guard (brought forward from item 16's fetch quality
+   checks; it bit on 2026-10-24): a Saturday fetch saved markets 56 and 57
+   with no spots, vols or forward points, and "Latest" for a later date now
+   picks them. The fetch refuses to save a market without spots and vols
+   (saying so); the scheduled task skips weekends and holidays; choosing the
+   latest market skips one that cannot price (no vols or forward points), so
+   56 and 57 stay in the append-only store but are never picked by default.
 
 **P2, next: the services, then the gate to the strategy stages.**
 8. Item 22, services step 1: the Portfolio pilot (portfolio summary and trade
@@ -219,10 +233,8 @@ apeiron/
    the most urgent, but before the pricing service, the first API other
    users call (an input the UI never sends will arrive through it).
 10. Item 22, services step 2: the pricing service, for other users.
-11. Continuous integration: the quick test tier on every push (GitHub
-    Actions); later the place to build Rust wheels.
-12. The date snapping back: with "Link to market data date" on, a future date
-    returns to the market's date; say so in one line.
+11. (moved to P1 item 3b: continuous integration)
+12. (moved into P1 item 3a: the date snapping back)
 13. Item 4, the intraday cut (paused until item 6 is done).
 14. Item 5, Apeiron: Gaia's move (after item 6), then Hyperion's (before item 8).
 15. Item 8, the full option lifecycle: the gate for stages 4–6.
@@ -803,6 +815,11 @@ Exercise and the resulting spot trade remain part of lifecycle item 8.
 
 ## Later
 
+- **xbbg 1.x.** The fetch is written against xbbg 0.7.7, which on blpapi
+  3.2x needs `market_data/xbbg_compat.patch_xbbg()` (a49e9d3: xbbg read a
+  private blpapi field that is gone, so every call opened a new session).
+  Moving to 1.x (its API changed) retires the patch and its four known
+  crossings in `apeiron/known_crossings.json`. Not urgent while the patch holds.
 - Low priority: **add non-settlement holidays on the fly** when our calendar and
   the market disagree (a dispute, a holiday announced late). A user override
   layered on the Bloomberg list (`settlement_holidays.csv`): add or remove a
