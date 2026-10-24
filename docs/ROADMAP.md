@@ -181,9 +181,24 @@ apeiron/
    one, and the study is item 15. Python 3.7 stays installed as a fallback
    (its vv-sabr golden case now fails, by design). The switch: PyCharm's
    interpreter and Streamlit run from `.venv`.
-3. Test-suite speed: tests run in parallel (`pytest-xdist`), a quick tier per
-   change and the full suite before commits, calibrated fixtures shared. The
-   full run takes 9–11 minutes.
+3. Test-suite speed: done 2026-10-24 (fd64a46): `python -m pytest -n auto
+   --dist loadfile` runs the full suite in 66 s (4m14s serially), the quick
+   tier (`-m "not golden"`) in 52 s; the golden file alone (39 s) is the floor.
+3a. Market date integrity (found 2026-10-24, next). A market's date is the
+   date its tables belong to, never the pricing date: the Markets tab
+   re-stamps the open pair with the valuation date (`app/ui/market_block.py`),
+   `MarketSet.from_payloads` trusts the stamp and skips the roll, and the
+   edited pair is never rolled. Expired pillars fail every trade of the pair
+   ("expiry must be after valuation"); stale ones not yet expired would price
+   silently with the wrong pillar dates. Fix in the service: (1) the market
+   keeps its own date, the valuation date is a request parameter; (2) a
+   consistency guard when a market is built (every pillar expiry after the
+   market's date) refuses the pair with one clear reason; (3) the edited pair
+   rolls like a stored one; (4) tests, one shaped as an API call, and the
+   golden re-check. Acceptance (user): rolling to 30-Oct gives 1W = 30-Oct + 7,
+   2W = + 14, months from spot, per the pair calendar, and the forward
+   deliveries move with them, for every pair, the open one included. The
+   pricing service's market contract (VV-11) takes this over.
 4. Item 6, live pillar dates step 4: disputes with the solver go to
    `tests/edge_cases` for review, with a command. Small; it keeps the
    market-confirmed date practice going.
@@ -576,6 +591,12 @@ Exercise and the resulting spot trade remain part of lifecycle item 8.
   wrapped resolver (``smile_service.get_vol_for_strike``) and the line pricer
   (``pricer.price_line`` / ``Pricable.price``), and the outcome is written
   down as the input contract the pricing service will publish.
+  - **Market date (from P1 item 3a):** a caller may send its own market; its
+    date means the date its tables belong to, and the valuation date is a
+    separate parameter. A market dated before the valuation date is rolled,
+    one dated after it is refused, and one whose pillar expiries are not all
+    after its own date (tables from another day under a new date) is refused
+    for that pair with one clear reason, never priced with stale pillars.
   - **Time:** expired options (expiry before the valuation date: not
     valued, but their premium stays in the P&L, item 8), expiring
     today (before and after the cut, item 4), expiry on a non-business day,
@@ -693,7 +714,9 @@ Exercise and the resulting spot trade remain part of lifecycle item 8.
        `service.price_trades` and `cached_pricing.price_trades` reconciled.
        This creates the book selector, market handle and Greek selection.
     2. **Pricing service**, after the edge-case guards (VV-11), reusing them; the Pricer tab (`portfolio_block.py`:
-       premium, vol and hedge modes) moves onto it.
+       premium, vol and hedge modes) moves onto it. Its request takes a market
+       (stored id or the caller's own) and a valuation date separately, under
+       VV-11's market date contract.
     3. Risk reports, then Market, Calendar and Forward vol behind one API.
     4. The import rule for Olympus, with the crossings list shrinking to empty.
     5. Vol compare and P&L attribution, built as services from the start.
