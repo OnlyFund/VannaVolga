@@ -66,6 +66,8 @@ _GAIA_MARKET_DATES = [
     "helper_functions.fx_discounting",
     # Bloomberg checks of the date rules (edge cases, historical expiries)
     "market_data.bloomberg_edge_cases", "market_data.bloomberg_historical_expiry_dates",
+    # xbbg's session kept on newer blpapi (every Bloomberg module above uses it)
+    "market_data.xbbg_compat",
 ]
 
 _GAIA_MARKET = [

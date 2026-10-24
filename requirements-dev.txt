@@ -6,6 +6,8 @@
 # truststore (install it first, then add --use-feature=truststore on older pip).
 -r requirements.txt
 pytest
+# Parallel tests: python -m pytest -n auto --dist loadfile (see pytest.ini).
+pytest-xdist
 # The fetch is written against xbbg 0.7 (1.x changed the API).
 xbbg==0.7.7
 matplotlib
