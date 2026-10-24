@@ -106,13 +106,17 @@ def _market_set(valuation_date, theta_vol_roll="rolled"):
     from app.smile_service import DiagnosticsCollector, SurfaceCache, bind_cache
     from app.store_markets import load_store_markets
     diagnostics = DiagnosticsCollector()
-    bind_cache(diagnostics.token, SurfaceCache())
+    # Held, as the app holds it in session state (the binding is weak).
+    surface_cache = SurfaceCache()
+    bind_cache(diagnostics.token, surface_cache)
     service = MarketService(diagnostics)
     settings = PricingSettings(theta_vol_roll=theta_vol_roll)
     loaded = load_store_markets(FX_DATE, market_id=MARKET_ID)
     # A date, as the sidebar's date input gives the app.
-    return MarketSet.from_payloads(loaded.payloads, date.fromisoformat(valuation_date), settings,
-                                   market_service=service, diagnostics=diagnostics)
+    markets = MarketSet.from_payloads(loaded.payloads, date.fromisoformat(valuation_date),
+                                      settings, market_service=service, diagnostics=diagnostics)
+    markets.surface_cache = surface_cache
+    return markets
 
 
 def _mods():

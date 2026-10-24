@@ -24,7 +24,10 @@ report that error per line instead of failing as a whole.
 """
 import copy
 import math
+import os
 import re
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Optional
 
@@ -107,6 +110,29 @@ class DeliveryCurve:
 def interpolate_delivery_curve(rows, date_column, value_column, target_date, name):
     """Linearly interpolate a curve only within its supplied delivery range."""
     return DeliveryCurve(rows, date_column, value_column, name)(target_date)
+
+
+#: ``market_for_expiry``'s cache: off with ``VV_MARKET_CACHE=0``; with
+#: ``VV_MARKET_CACHE_CHECK=1`` every reuse is checked against a fresh build.
+MARKET_CACHE_ENV, MARKET_CACHE_CHECK_ENV = "VV_MARKET_CACHE", "VV_MARKET_CACHE_CHECK"
+#: Markets kept per context (the spot ladder adds one per spot and expiry).
+MARKET_CACHE_SIZE = 1024
+
+
+def market_difference(cached, fresh):
+    """The first field (or resolved input) on which two markets differ, or ``""``."""
+    for name in sorted(set(vars(cached)) | set(vars(fresh))):
+        if name == "diagnostics_token":
+            continue
+        a, b = getattr(cached, name, None), getattr(fresh, name, None)
+        try:
+            same = bool(a == b) or (isinstance(a, float) and isinstance(b, float)
+                                    and math.isnan(a) and math.isnan(b))
+        except Exception:                  # arrays and the like: compare their text
+            same = repr(a) == repr(b)
+        if not same:
+            return f"{name}: {a!r} vs {b!r}"[:200]
+    return ""
 
 
 THETA_VOL_ROLLS = ("rolled", "forward", "tenor")
@@ -245,7 +271,10 @@ class MarketContext:
         self.settings = settings
         if diagnostics is None:
             diagnostics = DiagnosticsCollector()
-            bind_cache(diagnostics.token, SurfaceCache())
+            # Held here: the binding is a weak reference, so an unheld cache
+            # is dropped at once and smiles fall back to a small shared one.
+            self._surface_cache = SurfaceCache()
+            bind_cache(diagnostics.token, self._surface_cache)
         self.diagnostics = diagnostics
         self.market_service = market_service or MarketService(diagnostics)
 
@@ -468,7 +497,116 @@ class MarketContext:
         almost no variance on the variance-day clock. If that cannot be formed
         (non-positive remaining variance, or a failure), the sticky-tenor quotes
         are kept and the reason is recorded in the diagnostics.
+
+        Each market is built once per (expiry, ``as_of``, short end, spot) and
+        reused (``_cached_market``); every caller gets its own copy.
         """
+        return self._cached_market(expiry, as_of, allow_short_end, spot_value)
+
+    def _cached_market(self, expiry, as_of, allow_short_end, spot_value):
+        """``_build_market_for_expiry``, built once per request and reused.
+
+        Fail-safes: the key carries the effective spot (``with_spot`` copies
+        share this cache); a failed build is not cached, so it fails the same
+        way again; the diagnostics a build recorded are recorded again on each
+        reuse; each caller gets its own shallow copy, so no caller sees
+        another's changes; the cache is bounded per context.
+        ``VV_MARKET_CACHE=0`` turns it off, and ``VV_MARKET_CACHE_CHECK=1``
+        rebuilds on every reuse and uses the fresh market (recording the
+        difference) if they disagree.
+        """
+        if os.environ.get(MARKET_CACHE_ENV, "1").strip() == "0":
+            return self._build_market_for_expiry(expiry, as_of, allow_short_end, spot_value)
+        try:
+            key = (naive_date(expiry), None if as_of is None else naive_date(as_of),
+                   bool(allow_short_end), float(self.spot if spot_value is None else spot_value))
+        except (TypeError, ValueError):
+            return self._build_market_for_expiry(expiry, as_of, allow_short_end, spot_value)
+        lock = self.__dict__.setdefault("_market_cache_lock", threading.RLock())
+        with lock:
+            cache = self.__dict__.setdefault("_market_cache", OrderedDict())
+            found = cache.get(key)
+            if found is not None:
+                cache.move_to_end(key)
+        collectors = self._collectors()
+        if found is not None:
+            market, records = found
+            for collector in collectors:
+                for record in records:
+                    collector.append(record)
+            if os.environ.get(MARKET_CACHE_CHECK_ENV) == "1":
+                fresh = self._build_market_for_expiry(expiry, as_of, allow_short_end, spot_value)
+                difference = market_difference(market, fresh)
+                if difference:
+                    self.diagnostics.append((self.settings.pricing_model, "market cache",
+                                             f"{self.currency_pair} {key[0]:%Y-%m-%d}: cached "
+                                             f"market differs ({difference}); rebuilt"))
+                    with lock:
+                        cache.pop(key, None)
+                    return fresh
+            reused = copy.copy(market)
+            # The build registered its pillar smile for reuse; so does a reuse,
+            # so smiles never depend on what the surface cache has dropped.
+            prepared = getattr(market, "_prepared_reuse", None)
+            if prepared is not None:
+                reuse_prepared(reused, prepared)
+            return reused
+        before = [len(collector.records()) for collector in collectors]
+        market = self._build_market_for_expiry(expiry, as_of, allow_short_end, spot_value)
+        records = tuple(record for collector, start in zip(collectors, before)
+                        for record in collector.records()[start:])
+        with lock:
+            cache[key] = (market, records)
+            while len(cache) > MARKET_CACHE_SIZE:
+                cache.popitem(last=False)
+        return copy.copy(market)
+
+    def _converted_curve(self, curve_date, rows, forward_points, term_discount):
+        """``market_service.convert_curve`` for ``curve_date``'s pillar rows, kept
+        per curve date and spot: its inputs depend on nothing else, so later
+        expiries skip rebuilding every pillar's market just to find its cache.
+        A reuse records the build's diagnostics again (as ``convert_curve``'s
+        own cache does) and returns a copy of the rows; a failure is not kept;
+        ``VV_MARKET_CACHE=0`` turns it off."""
+        def convert():
+            return self.market_service.convert_curve(
+                rows, curve_date.date(), self.spot, self.currency_pair, self.forward_divisor,
+                self.settings.pricing_model, self.broker_strangle, forward_points,
+                term_discount)
+        if os.environ.get(MARKET_CACHE_ENV, "1").strip() == "0":
+            return convert()
+        key = (curve_date, float(self.spot))
+        lock = self.__dict__.setdefault("_market_cache_lock", threading.RLock())
+        with lock:
+            found = self.__dict__.setdefault("_curve_cache", {}).get(key)
+        collectors = self._collectors()
+        if found is None:
+            before = [len(collector.records()) for collector in collectors]
+            converted, reasons, prepared = convert()
+            records = tuple(record for collector, start in zip(collectors, before)
+                            for record in collector.records()[start:])
+            found = (converted.copy(), reasons, prepared, records)
+            with lock:
+                self._curve_cache[key] = found
+            return converted, reasons, prepared
+        converted, reasons, prepared, records = found
+        for collector in collectors:
+            for record in records:
+                collector.append(record)
+        return converted.copy(), reasons, prepared
+
+    def _collectors(self):
+        """The diagnostics collectors a build records into: this market's and
+        its market service's (often the same one)."""
+        found = [self.diagnostics]
+        service = getattr(getattr(self, "market_service", None), "collector", None)
+        if service is not None and service is not self.diagnostics:
+            found.append(service)
+        return [collector for collector in found if hasattr(collector, "records")]
+
+    def _build_market_for_expiry(self, expiry, as_of=None, allow_short_end=False,
+                                 spot_value=None):
+        """``market_for_expiry`` without the cache."""
         rolled = self._rolled_for(expiry, as_of)
         if rolled is not None:
             return rolled.market_for_expiry(
@@ -537,9 +675,10 @@ class MarketContext:
     def _forward_vol_quotes(self, expiry, as_of, spot_value=None):
         """Quotes at ``expiry`` seen from ``as_of`` with today's forward vols held."""
         valuation = naive_date(self.valuation_date)
-        whole = wing_vols(self._market_for_expiry(expiry, spot_value=spot_value))
-        passed = wing_vols(self._market_for_expiry(as_of, allow_short_end=True,
-                                                   spot_value=spot_value))
+        # Today's markets at the expiry and at ``as_of``: the same requests
+        # pricing makes, so they come from the cache.
+        whole = wing_vols(self._cached_market(expiry, None, False, spot_value))
+        passed = wing_vols(self._cached_market(as_of, None, True, spot_value))
         total_days = (naive_date(expiry) - valuation).days
         passed_days = (naive_date(as_of) - valuation).days
         remaining = total_days - passed_days
@@ -636,11 +775,8 @@ class MarketContext:
             raise ValueError("Expiry is outside the quoted volatility range")
         for column in ("atm", "rr_25", "bf_25", "rr_10", "bf_10"):
             rows[column] = pd.to_numeric(rows[column], errors="coerce")
-        rows, curve_reasons, curve_prepared = self.market_service.convert_curve(
-            rows, curve_date.date(), spot, pair, self.forward_divisor,
-            settings.pricing_model, self.broker_strangle,
-            pillar_forward_points, pillar_term_discount,
-        )
+        rows, curve_reasons, curve_prepared = self._converted_curve(
+            curve_date, rows, pillar_forward_points, pillar_term_discount)
 
         quotes = pd.DataFrame({
             "PUT_10": rows["atm"] + rows["bf_10"] - rows["rr_10"] / 2,
@@ -729,6 +865,8 @@ class MarketContext:
                         curve_date == naive_date(valuation_date) and
                         not prepared.diagnostics.degraded):
                     reuse_prepared(market, prepared)
+                    # Replayed when the market is reused (``_cached_market``).
+                    market._prepared_reuse = prepared
                     break
         return market
 
